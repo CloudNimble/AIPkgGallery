@@ -1,0 +1,110 @@
+---
+title: Validation.ContentScan.Core
+sidebarTitle: ContentScan.Core
+description: Shared contracts and Service Bus messaging infrastructure for the NuGet content scanning validation pipeline.
+icon: shield-check
+---
+
+# Validation.ContentScan.Core
+
+## Overview
+
+`Validation.ContentScan.Core` is a small, focused shared library that provides the **messaging contracts and Service Bus enqueuer** for the NuGet content scanning validation pipeline. It does not perform any scanning itself — instead, it defines the message types, serialization logic, and the enqueuer abstraction that other services use to trigger and poll content scans.
+
+The library lives in the `NuGet.Jobs.Validation.ContentScan` namespace and targets `net472`. It is versioned alongside other NuGet Jobs packages via the `$(JobsPackageVersion)` MSBuild property.
+
+## Role in the System
+
+Within the NuGet Gallery validation ecosystem, package validation is orchestrated by `NuGet.Services.Validation.Orchestrator`. When the orchestrator needs to verify that a package's content is safe, it delegates to `ContentScanValidator`, which uses `IContentScanEnqueuer` (defined here) to send work to an external content-scanning service over Azure Service Bus.
+
+```
+Orchestrator (ContentScanValidator)
+        │
+        │  EnqueueContentScanAsync(validationStepId, contentUri)
+        ▼
+Validation.ContentScan.Core (ContentScanEnqueuer)
+        │
+        │  Serialized brokered message → Azure Service Bus Topic
+        ▼
+External Content-Scanning Worker (reads & processes)
+        │
+        │  Worker updates validation state in DB
+        ▼
+Orchestrator polls via EnqueueContentScanStatusCheckAsync(validationStepId)
+```
+
+<Note>
+This library is consumed exclusively by `NuGet.Services.Validation.Orchestrator`. There is no worker-side code in this library — the consumer of the Service Bus messages is a separate service outside this repository.
+</Note>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `IContentScanEnqueuer.cs` | `IContentScanEnqueuer` | Primary interface: enqueue a scan start or a status-check message, with optional delivery delay override |
+| `ContentScanEnqueuer.cs` | `ContentScanEnqueuer` | Concrete implementation — serializes a `ContentScanData` message, applies scheduled delivery time, and sends via `ITopicClient` |
+| `ContentScanData.cs` | `ContentScanData` | Discriminated-union-style message envelope; constructed only via static factory methods `NewStartContentScanData` / `NewCheckContentScanStatus` |
+| `ContentScanOperationType.cs` | `ContentScanOperationType` | Enum with two values: `StartScan` and `CheckStatus` |
+| `StartContentScanData.cs` | `StartContentScanData` | Payload for scan-start messages; carries `ValidationStepId`, `BlobUri`, and optional `ContentType` |
+| `ContentScanStatusMessage.cs` | `CheckContentScanStatusData` | Payload for status-poll messages; carries only `ValidationStepId` |
+| `ContentScanMessageSerializer.cs` | `ContentScanMessageSerializer` | `IBrokeredMessageSerializer<ContentScanData>` implementation; routes on schema name `StartContentScanData` (v1) or `CheckContentScanStatusData` (v1) |
+| `ContentScanEnqueuerConfiguration.cs` | `ContentScanEnqueuerConfiguration` | Single-property config POCO: `MessageDelay` (`TimeSpan?`) — the default visibility delay for outbound Service Bus messages |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `NuGet.Services.ServiceBus` | Supplies `ITopicClient`, `IBrokeredMessageSerializer<T>`, `BrokeredMessageSerializer<T>`, `IReceivedBrokeredMessage`, and the `[Schema]` attribute used by the serializer |
+
+### Implicit Framework / Transitive Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.Extensions.Logging.Abstractions` | `ILogger<T>` for structured logging in `ContentScanEnqueuer` |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<ContentScanEnqueuerConfiguration>` for live configuration reload |
+
+<Tip>
+There are no direct NuGet package `<PackageReference>` entries in the `.csproj` — all external dependencies (logging, options, Service Bus abstractions) are pulled in transitively through `NuGet.Services.ServiceBus`.
+</Tip>
+
+## Notable Patterns and Implementation Details
+
+<CardGroup cols={2}>
+  <Card title="Discriminated Union Message" icon="layers">
+    `ContentScanData` acts as a tagged union: the `Type` property (`ContentScanOperationType`) determines which payload property is non-null. The constructor enforces exactly one non-null payload and throws `ArgumentException` if both or neither are provided.
+  </Card>
+  <Card title="Versioned Schema Serialization" icon="tag">
+    `ContentScanMessageSerializer` uses private inner classes annotated with `[Schema(Name = ..., Version = 1)]`. Deserialization dispatches on the schema name read from the brokered message header, enabling future schema versions without breaking existing messages in flight.
+  </Card>
+  <Card title="Scheduled Delivery" icon="clock">
+    Every outbound message is sent with a `ScheduledEnqueueTimeUtc`. The delay resolves as: per-call `messageDeliveryDelayOverride` → configured `MessageDelay` → `TimeSpan.Zero`. Negative delay overrides are rejected with `ArgumentOutOfRangeException`.
+  </Card>
+  <Card title="URL Redaction in Logs" icon="eye-off">
+    Before logging the blob URL, `ContentScanEnqueuer` rebuilds the URI with the query string replaced by `"REDACTED"` to prevent SAS token leakage into log streams.
+  </Card>
+</CardGroup>
+
+<Warning>
+`ContentScanData`'s constructor is `internal`, not `public`. External callers must use the static factory methods `ContentScanData.NewStartContentScanData(...)` and `ContentScanData.NewCheckContentScanStatus(...)`. Direct construction from a referencing project will not compile.
+</Warning>
+
+<Warning>
+`StartContentScanData` has two constructors — one omitting `ContentType` and one including it. However, the `StartContentScanData1` wire schema (version 1) does declare a `ContentType` field. The deserializer currently uses the two-argument constructor, so any `ContentType` value received from Service Bus is silently discarded on inbound messages.
+</Warning>
+
+## Message Flow Summary
+
+```csharp
+// Trigger a new content scan
+await enqueuer.EnqueueContentScanAsync(validationStepId, new Uri("https://...blob..."));
+
+// Poll for completion (typically re-queued by the orchestrator on a timer loop)
+await enqueuer.EnqueueContentScanStatusCheckAsync(validationStepId);
+
+// Both calls resolve to:
+//   ContentScanMessageSerializer.Serialize(ContentScanData)
+//   → IBrokeredMessage with ScheduledEnqueueTimeUtc applied
+//   → ITopicClient.SendAsync(message)
+```

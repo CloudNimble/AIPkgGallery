@@ -1,0 +1,148 @@
+﻿---
+title: Stats.AzureCdnLogs.Common
+sidebarTitle: AzureCdnLogs.Common
+description: Shared library for parsing, collecting, and routing Azure CDN access logs that drive NuGet download statistics.
+icon: chart-bar
+---
+
+## Overview
+
+`Stats.AzureCdnLogs.Common` is the foundational shared library for NuGet's CDN-log statistics pipeline. It provides everything a consumer needs to:
+
+1. **Parse** raw W3C-format CDN access logs produced by Azure CDN edge servers.
+2. **Collect** those log blobs from an Azure Storage source container.
+3. **Transform** each log line — stripping PII (client IP), filtering non-200 responses, and re-emitting sanitised lines.
+4. **Deliver** the processed blobs to a destination Azure Storage container, with GZip compression support.
+5. **Lease-manage** blobs during processing so that competing worker instances cannot double-process the same file.
+
+The library targets **net472** and is consumed by multiple stats worker jobs (e.g., `Stats.CollectAzureCdnLogs`, `Stats.ImportAzureCdnStatistics`) that form the download-count pipeline feeding nuget.org's public statistics.
+
+---
+
+## Role in the NuGet Gallery Ecosystem
+
+```
+Azure CDN Edge Servers
+       │  (raw W3C log blobs, gzip or plain text)
+       ▼
+ Azure Blob Storage  ──source container──►  Stats.AzureCdnLogs.Common
+                                                │  ILogSource / Collector
+                                                │  parse + sanitise + transform
+                                                ▼
+                                        destination container
+                                                │
+                                                ▼
+                                  Stats.ImportAzureCdnStatistics
+                                  (loads into SQL / warehouse)
+```
+
+This library sits between raw CDN output and all downstream statistics consumers. It owns the wire format contract (W3C columns → `CdnLogEntry`) and the blob-lifecycle contract (acquire lease → read → write → archive/deadletter → release).
+
+---
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `CdnLogEntry.cs` | `CdnLogEntry` | POCO mapping every W3C column from a CDN log line (timestamps, IPs, byte counts, user-agent, custom field). |
+| `CdnLogEntryParser.cs` | `CdnLogEntryParser` | Static parser: splits a space-delimited W3C line, populates a `CdnLogEntry`, filters 404s and non-2xx status codes, converts Unix epoch timestamps. |
+| `CdnLogCustomFieldParser.cs` | `CdnLogCustomFieldParser` | Regex-based parser for the `x-ec_custom-1` column which carries NuGet-specific request/response headers. |
+| `W3CParseUtils.cs` | `W3CParseUtils` | Low-level tokeniser: splits a log line on spaces while respecting double-quoted fields; treats `-` and `"-"` as null sentinels. |
+| `PackageStatistics.cs` | `PackageStatistics` | Domain model for a single package download event, produced after enriching a `CdnLogEntry` with custom-field data. |
+| `ToolStatistics.cs` | `ToolStatistics` | Parallel model tracking which NuGet client tool/version was used in a download. |
+| `Collect/Collector.cs` | `Collector` (abstract) | Orchestrates the full collect loop: enumerate unlocked blobs, lock each, stream-transform, write output, then archive or deadletter. Subclasses implement `TransformRawLogLine` and `VerifyStreamAsync`. |
+| `Collect/ILogSource.cs` | `ILogSource` | Interface: `GetFilesAsync`, `TakeLockAsync`, `OpenReadAsync`, `TryCleanAsync`, `TryReleaseLockAsync`. |
+| `Collect/ILogDestination.cs` | `ILogDestination` | Interface: single `TryWriteAsync` method; takes an input stream and a transform `Action<Stream,Stream>`. |
+| `Collect/AzureStatsLogSource.cs` | `AzureStatsLogSource` | `ILogSource` over Azure Blob Storage; auto-creates `-archive` and `-deadletter` sibling containers for post-processing cleanup. |
+| `Collect/AzureStatsLogDestination.cs` | `AzureStatsLogDestination` | `ILogDestination` over Azure Blob Storage; skips write if destination blob already exists; supports plain-text and GZip output. |
+| `AzureHelpers/AzureBlobLeaseManager.cs` | `AzureBlobLeaseManager` | Acquires a 60-second renewable blob lease and spawns a background Task that renews it every 40 seconds until cancelled or released. |
+| `AzureHelpers/AzureBlobLockResult.cs` | `AzureBlobLockResult` | Disposable result container: holds the `BlobClient`, lease ID, `BlobProperties`, and a linked `CancellationTokenSource` that fires if the renewal task fails. |
+| `AzureCdnPlatform.cs` | `AzureCdnPlatform` (enum) | CDN platform variants: `HttpLargeObject`, `HttpSmallObject`, `ApplicationDeliveryNetwork`, `FlashMediaStreaming`. |
+| `NuGetCustomHeaders.cs` | `NuGetCustomHeaders` | Constants for `NuGet-Operation` and `NuGet-DependentPackage` HTTP headers captured in the CDN custom field. |
+| `LogEvents.cs` | `LogEvents` | Structured logging event IDs (`FailedBlobDelete`, `FailedBlobCopy`, `FailedBlobUpload`, `FailedBlobReleaseLease`). |
+
+---
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Azure.Storage.Blobs` | Azure Blob Storage SDK v12 — `BlobServiceClient`, `BlobClient`, lease operations. |
+| `SharpZipLib` (+ local hint-path DLL) | GZip stream decompression (`GZipInputStream`) and compression (`GZipOutputStream`) for log blobs. |
+| `Microsoft.Extensions.Logging.Abstractions` | `ILogger<T>` used throughout; no concrete logging framework coupled at this layer. |
+| `Newtonsoft.Json` | Available to consumers of the library. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Storage` | Storage abstractions re-used by `AzureBlobLeaseManager`. |
+
+<Note>
+`ICSharpCode.SharpZipLib` is referenced **twice**: once as a local hint-path DLL from `external/ICSharpCode.SharpZipLib.0.86.0/` and once as a NuGet `PackageReference` to `SharpZipLib`. This dual-reference can cause version conflicts during builds if the hint-path and package versions diverge.
+</Note>
+
+---
+
+## Notable Patterns and Implementation Details
+
+<CardGroup cols={2}>
+  <Card title="Lease-based distributed locking" icon="lock">
+    `AzureBlobLeaseManager` acquires a 60-second Azure blob lease and keeps it alive via a fire-and-forget background `Task` that renews every 40 seconds. If renewal fails, the linked `CancellationTokenSource` on `AzureBlobLockResult` is cancelled, propagating cancellation to the active read/write operation automatically.
+  </Card>
+  <Card title="Archive / deadletter pattern" icon="inbox">
+    After processing, `AzureStatsLogSource.TryCleanAsync` moves the source blob to either a `-archive` container (success) or a `-deadletter` container (failure), then deletes the original. Both sibling containers are created on demand.
+  </Card>
+  <Card title="PII scrubbing in Collector" icon="shield">
+    `Collector.GetParsedModifiedLogEntry` replaces the client IP (`c-ip`) column with a literal dash before writing the output line. This is enforced in the base class and cannot be bypassed by subclasses.
+  </Card>
+  <Card title="Abstract transform pipeline" icon="arrow-right-arrow-left">
+    `Collector` is abstract. Subclasses implement `TransformRawLogLine(string) : OutputLogLine` and `VerifyStreamAsync(Stream) : Task&lt;bool&gt;`, letting different jobs share blob-collection infrastructure with custom per-line logic.
+  </Card>
+</CardGroup>
+
+<Warning>
+`AzureStatsLogSource` skips blobs whose lease status is not `Unlocked` but does **not** retry them in the same batch. A blob locked by a crashed worker will remain unavailable until Azure auto-expires the lease (up to 60 seconds). Design consumers to run on a recurring schedule to recover such blobs.
+</Warning>
+
+<Note>
+`CdnLogEntryParser` handles two historical CDN status-code formats:
+
+- **Global CDN**: `TCP_MISS/200` (cache status + slash + HTTP code)
+- **China CDN** (legacy): bare HTTP code such as `200`
+
+Both formats are filtered to exclude non-2xx responses. If the format is unrecognised the entry is passed through rather than dropped, preserving statistics flow at the cost of a small error margin.
+</Note>
+
+<Tip>
+The `x-ec_custom-1` custom field is parsed by `CdnLogCustomFieldParser` using a single compiled regex that extracts key-value pairs. Duplicate keys in the CDN configuration are silently overwritten (last value wins) to avoid crashing the statistics job.
+</Tip>
+
+---
+
+## Log Line Lifecycle
+
+```
+Raw W3C line (17 space-delimited columns)
+  │
+  ├─ Skip: blank, starts with '#', contains 'TCP_MISS/404'
+  │
+  ▼
+CdnLogEntryParser.ParseLogEntryFromLine()
+  │  Unix epoch → DateTime, optional int/long fields, null-sentinel handling
+  │  Filter: non-2xx HTTP status codes (both Global and China CDN formats)
+  ▼
+CdnLogEntry (typed POCO)
+  │
+  ▼
+Collector.TransformRawLogLine()  [subclass]
+  │  Enriches entry with custom-field data → OutputLogLine
+  ▼
+Collector.GetParsedModifiedLogEntry()
+  │  Re-serialises to space-delimited string; c-ip replaced with '-'
+  │  Optionally appends source filename column
+  ▼
+ILogDestination.TryWriteAsync()  →  destination Azure blob (text or gzip)
+```

@@ -1,0 +1,123 @@
+﻿---
+title: Stats.CollectAzureChinaCDNLogs
+sidebarTitle: CollectAzureChinaCDNLogs
+description: A scheduled job that collects Azure Front Door (AFD) CDN access logs from Azure China storage and transforms them into the standard NuGet stats log format, writing gzip-compressed output to a global Azure Blob destination.
+icon: globe
+---
+
+## Overview
+
+`Stats.CollectAzureChinaCDNLogs` is a .NET Framework 4.7.2 console application that runs as a scheduled NuGet job. Its sole purpose is to bridge the gap between the China-region Azure Front Door CDN log format (newline-delimited JSON) and the tab-separated `OutputLogLine` format consumed by the rest of the NuGet download-statistics pipeline.
+
+Each execution leases up to **4 blob files** from a China Azure Blob Storage container, parses each line as an `AfdLogLine` JSON object, maps the AFD-specific fields to canonical stats columns, and writes gzip-compressed output blobs to a global (non-China) Azure Blob destination.
+
+<Note>
+The job defaults to a **4-hour execution timeout** (`14400` seconds). A secondary "force-stop" cancellation fires 60 seconds after the primary timeout to ensure the process terminates even if `StreamReader`/`StreamWriter` calls do not honour the cancellation token (a known limitation of .NET Framework—fixable on .NET 6+).
+</Note>
+
+---
+
+## Role in the NuGetGallery System
+
+<CardGroup cols={2}>
+  <Card title="Stats Pipeline Ingestion" icon="chart-bar">
+    Feeds China CDN download events into the global stats pipeline so that NuGet.org package download counts include traffic served through the Azure China sovereign cloud.
+  </Card>
+  <Card title="Cross-Cloud Bridge" icon="arrow-right-left">
+    Authenticates to China storage via **SAS token** and to global destination storage via **Managed Identity**, acting as a secure cross-cloud data relay.
+  </Card>
+  <Card title="Format Normalisation" icon="file-text">
+    Converts AFD JSON log lines into the standard W3C-style TSV `OutputLogLine` format shared by all other CDN log collectors in the stats subsystem.
+  </Card>
+  <Card title="Windows Service Deployment" icon="server">
+    Packaged as a NuGet `.nuspec` and installed as a Windows service via **NSSM** (Non-Sucking Service Manager) using PowerShell pre/post-deploy scripts.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; creates a `Job` instance and hands it to the shared `JobRunner`. |
+| `Job.cs` | `Job` | Extends `JsonConfigurationJob`; wires up DI, creates `AzureStatsLogSource` and `AzureStatsLogDestination`, and runs `ChinaStatsCollector.TryProcessAsync`. |
+| `ChinaStatsCollector.cs` | `ChinaStatsCollector` | Extends the shared `Collector` base; overrides `TransformRawLogLine` (JSON → `OutputLogLine`) and `VerifyStreamAsync` (validates the first 10 lines of a blob). |
+| `AfdLogLine.cs` | `AfdLogLine` | Minimal POCO wrapping `DateTime Time` and `AfdProperties Properties`, deserialized from each JSON log line. |
+| `AfdProperties.cs` | `AfdProperties` | Flat POCO with ~35 string properties representing all fields emitted by Azure Front Door access logs (HTTP method, status code, cache status, TLS details, client/origin IPs, etc.). |
+| `Configuration/CollectAzureChinaCdnLogsConfiguration.cs` | `CollectAzureChinaCdnLogsConfiguration` | Settings POCO bound via `IOptionsSnapshot<T>`; controls source/destination connection strings, container names, file prefix, timeout, and output formatting flags. |
+| `Scripts/Functions.ps1` | — | PowerShell helpers `Install-NuGetService` / `Uninstall-NuGetService` that wrap NSSM to register or remove the Windows service. |
+| `Stats.CollectAzureChinaCDNLogs.nuspec` | — | Packaging manifest that bundles the `net472` binary output alongside the four deployment scripts. |
+
+---
+
+## Dependencies
+
+### NuGet Packages (resolved transitively via project references)
+
+| Package | Role |
+|---------|------|
+| `Azure.Storage.Blobs` | Blob source/destination clients (`BlobServiceClient`). |
+| `Azure.Identity` | `ManagedIdentityCredential` and `DefaultAzureCredential` for passwordless auth to global storage. |
+| `Autofac` | IoC container wired up inside the `NuGet.Jobs` host framework. |
+| `Microsoft.Extensions.Configuration` | JSON configuration loading via `JsonConfigurationJob`. |
+| `Microsoft.Extensions.DependencyInjection` | Service registration in `ConfigureJobServices`. |
+| `Microsoft.Extensions.Logging` | Structured logging throughout all classes. |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<T>` configuration binding. |
+
+### External Assembly Reference (not on NuGet)
+
+| Assembly | Location | Role |
+|----------|----------|------|
+| `ICSharpCode.SharpZipLib 0.86.0` | `external/ICSharpCode.SharpZipLib.0.86.0/` | GZip compression for output blobs (used inside the shared `Collector` base). Referenced via `HintPath`. |
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `NuGet.Jobs.Common` | Provides `JsonConfigurationJob`, `JobRunner`, `StorageMsiConfiguration`, and the `ConfigureStorageMsi` extension. |
+| `Stats.AzureCdnLogs.Common` | Provides the `Collector` base class, `ILogSource`, `ILogDestination`, `AzureStatsLogSource`, `AzureStatsLogDestination`, `OutputLogLine`, `ContentType`, and `AzureBlobLeaseManager`. |
+
+---
+
+## Configuration Reference
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `AzureAccountConnectionStringSource` | `string` | _(required)_ | SAS-authenticated connection string to China Blob Storage. |
+| `AzureAccountConnectionStringDestination` | `string` | _(required)_ | Connection string (or blob endpoint URI) for the global destination storage. |
+| `AzureContainerNameSource` | `string` | _(required)_ | Source blob container holding raw AFD JSON log files. |
+| `AzureContainerNameDestination` | `string` | _(required)_ | Destination blob container for processed gzip output. |
+| `DestinationFilePrefix` | `string` | _(required)_ | Prefix prepended to every output filename. |
+| `ExecutionTimeoutInSeconds` | `int?` | `14400` (4 h) | Primary cancellation deadline; process is force-killed 60 s later. |
+| `WriteOutputHeader` | `bool` | `true` | Whether to write a TSV column-header line at the top of each output blob. |
+| `AddSourceFilenameColumn` | `bool` | `false` | Appends the source blob filename as an extra column in the output. |
+| `RenameOutputFile` | `bool` | `false` | When `true`, embeds the blob's `LastModified` timestamp in the output filename. |
+
+---
+
+## Notable Patterns and Quirks
+
+<Warning>
+**Azure SDK SAS token bug workaround.** Both `Job.cs` and `ValidateAzureBlobServiceClient` contain an explicit string replacement of `SharedAccessSignature=?` → `SharedAccessSignature=` to work around [Azure SDK issue #44373](https://github.com/Azure/azure-sdk-for-net/issues/44373). The fix appears in two places in the same method scope.
+</Warning>
+
+<Note>
+**Dual authentication strategy.** The source (China) always uses a SAS token connection string because Managed Identity is not available in the Azure China sovereign cloud. The destination (global) uses Managed Identity when `UseManagedIdentity = true`, falling back to SAS tokens otherwise. In `DEBUG` builds, `DefaultAzureCredential` is substituted to support developer workstations without a full MSI setup.
+</Note>
+
+<Note>
+**Status code format difference.** Global CDN logs emit `cacheStatus/httpStatusCode` as a single combined field. China AFD logs provide these separately, so `ChinaStatsCollector` constructs the combined string manually: `CacheStatus + "/" + HttpStatusCode`. Several downstream stats fields (filesize, sport, rsbytes, timetaken) have no AFD equivalent and are hard-coded to `"0"` or `"na"`.
+</Note>
+
+<Tip>
+**Stream verification before processing.** Before consuming a blob, `ChinaStatsCollector.VerifyStreamAsync` reads up to the first 10 non-empty lines and attempts JSON deserialization. If none parse successfully the blob is rejected, preventing corrupt or misrouted files from polluting the output pipeline.
+</Tip>
+
+<Note>
+**TLS metadata packed into `xeccustom1`.** SSL protocol, cipher, and elliptic curve are concatenated into the `xeccustom1` output column as `"SSL-Protocol: ... SSL-Cipher: ... SSL-Curves: ..."`, mirroring the convention used by the global CDN collectors in `Stats.AzureCdnLogs.Common`.
+</Note>
+
+<Warning>
+**CancellationToken propagation limitation.** The `Run()` method documents that `StreamReader.ReadLineAsync` and `StreamWriter.WriteLineAsync` in .NET Framework 4.x do not accept a `CancellationToken`, making graceful mid-stream cancellation unreliable. The force-stop CTS (+60 s) exists as a safety net. This is acknowledged tech debt that would be resolved by migrating to .NET 6+.
+</Warning>

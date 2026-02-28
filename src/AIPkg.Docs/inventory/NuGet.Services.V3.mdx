@@ -1,0 +1,132 @@
+﻿---
+title: NuGet.Services.V3
+sidebarTitle: NuGet.Services.V3
+description: Common infrastructure library for V3 back-end jobs — catalog commit collection, registration API client models, telemetry, and dependency injection bootstrapping.
+icon: layers
+---
+
+## Overview
+
+`NuGet.Services.V3` is a shared infrastructure library that provides the foundational plumbing used by all NuGet V3 back-end processing jobs. Its primary responsibilities are:
+
+- **Catalog commit collection** — abstractions and a host class that bridge NuGet.Jobs-style DI with the legacy `CommitCollector` base class from `NuGet.Services.Metadata.Catalog`.
+- **Registration API client** — typed HTTP client and JSON-LD models for reading the NuGet V3 Registration resource (index, pages, and leaves).
+- **Telemetry** — `IV3TelemetryService` / `V3TelemetryService` covering catalog leaf download batches and feature-flag staleness metrics.
+- **DI bootstrapping** — `DependencyInjectionExtensions` wires up all services (HTTP client pipeline, catalog client, registration client, telemetry, feature flags) in a single `AddV3()` call.
+
+<Note>
+  The library targets both `net472` and `netstandard2.1`, allowing it to be consumed by both full-framework Azure WebJobs and modern .NET workers.
+</Note>
+
+---
+
+## Role in the System
+
+<CardGroup cols={2}>
+  <Card title="Catalog Ingestion" icon="arrow-right-to-bracket">
+    Every job that reacts to catalog commits (search indexer, vulnerability updater, etc.) depends on this library's `ICollector` / `ICommitCollectorLogic` pattern to drive its processing loop.
+  </Card>
+  <Card title="Registration Reading" icon="book-open">
+    Services that need to read the V3 Registration hive (index → pages → leaves) use `IRegistrationClient` and the typed models rather than hand-rolling JSON deserialization.
+  </Card>
+  <Card title="Telemetry Pipeline" icon="chart-line">
+    `V3TelemetryService` emits Application Insights metrics prefixed `V3.` and doubles as `IFeatureFlagTelemetryService`, keeping feature-flag staleness observable.
+  </Card>
+  <Card title="DI Composition Root" icon="puzzle-piece">
+    `DependencyInjectionExtensions.AddV3()` provides a one-call setup for the full HTTP + catalog + registration + telemetry stack, used by consuming jobs in their `ConfigureServices`.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|------|------------------|---------|
+| `ICollector.cs` | `ICollector` | Minimal interface (`RunAsync`) that jobs invoke to process catalog commits against cursor positions. |
+| `CommitCollectorHost.cs` | `CommitCollectorHost` | Bridges `ICommitCollectorLogic` into the legacy `CommitCollector` base class; delegates batching and batch processing to the injected logic object. |
+| `ICommitCollectorLogic.cs` | `ICommitCollectorLogic` | Strategy interface implemented by each job; defines `CreateBatchesAsync` and `OnProcessBatchAsync`. |
+| `CommitCollectorConfiguration.cs` | `CommitCollectorConfiguration` | Options class: catalog source URL, HTTP timeout (default 1 min), max concurrent leaf downloads (default 64). |
+| `CommitCollectorUtility.cs` | `CommitCollectorUtility` | Stateless helpers for batching — single-batch creation, deduplication to latest-per-identity, grouping by ID, and concurrent `PackageDetails` leaf downloading. |
+| `V3TelemetryService.cs` | `V3TelemetryService` | Emits `V3.CatalogLeafDownloadBatchSeconds` (duration + count) and `V3.FeatureFlagStalenessSeconds` metrics. |
+| `IV3TelemetryService.cs` | `IV3TelemetryService` | Contract for V3-specific telemetry; `TrackCatalogLeafDownloadBatch(int count)` returns an `IDisposable` duration scope. |
+| `DependencyInjectionExtensions.cs` | `DependencyInjectionExtensions` | Static extension methods on `IServiceCollection` and `ContainerBuilder` (Autofac) to register all V3 services. |
+| `DefaultBlobRequestOptions.cs` | `DefaultBlobRequestOptions` | Shared Azure Blob `BlobRequestOptions`: 2-min server timeout, 10-min max execution, exponential retry, primary-then-secondary location mode. |
+| `Registration/RegistrationClient.cs` | `RegistrationClient` | HTTP client for the V3 Registration resource; returns `null` on 404 for `GetIndexOrNullAsync`, throws on other errors. |
+| `Registration/RegistrationUrlBuilder.cs` | `RegistrationUrlBuilder` | Builds canonical index (`{base}/{lowerId}/index.json`) and leaf (`{base}/{lowerId}/{lowerVersion}.json`) URLs per the NuGet API spec. |
+| `Registration/Models/RegistrationIndex.cs` | `RegistrationIndex` | JSON-LD model for a registration index document; implements `ICommitted` to expose `CommitId` / `CommitTimestamp`. |
+| `Registration/Models/RegistrationLeaf.cs` | `RegistrationLeaf` | Per-version leaf document including `Listed`, `PackageContent`, `Published`, and a back-link to the catalog entry URL. |
+| `Support/Guard.cs` | `Guard` | Runtime assertion helper (`Assert` / `Fail`) that throws `InvalidOperationException` in both Debug and Release builds. |
+| `Support/IdAndValue.cs` | `IdAndValue<T>` | Generic pair of a string ID and typed value; used to carry package ID + work item lists through concurrent queues. |
+
+---
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `WindowsAzure.Storage` | Azure Blob Storage client; used by `DefaultBlobRequestOptions` for retry / timeout configuration. |
+
+### Internal Project References
+
+| Project | Key Contributions Used |
+|---------|----------------------|
+| `NuGet.Services.Metadata.Catalog` | `CommitCollector`, `CatalogCommitItem`, `CatalogCommitItemBatch`, `ReadWriteCursor`, `ITelemetryService`, `ICatalogClient` |
+| `Validation.Common.Job` | `JsonConfigurationJob` (feature-flag service registration), `NuGet.Jobs` namespace DI helpers |
+
+<Note>
+  `DependencyInjectionExtensions` also references several types from NuGet Protocol packages (`NuGet.Protocol.Catalog`, `NuGet.Protocol.Registration`) and `NuGetGallery.Diagnostics` — these come transitively through the project references above.
+</Note>
+
+---
+
+## Notable Patterns and Implementation Details
+
+### Collector Host / Logic Split
+
+`CommitCollectorHost` exists purely as a **thin adapter**. Its own XML doc comment describes it as _"a minimal integration class between the core of the collectors based on NuGet.Jobs infrastructure and the overly complex collector infrastructure that we have today."_ Job-specific logic lives entirely in `ICommitCollectorLogic` implementations; the host provides only wiring.
+
+```csharp
+// Consuming job registers its own logic:
+services.AddTransient<ICommitCollectorLogic, MyJobCollectorLogic>();
+// The host is already registered by AddV3():
+services.AddTransient<ICollector, CommitCollectorHost>();
+```
+
+### Concurrent Leaf Download Pattern
+
+`CommitCollectorUtility.GetEntryToDetailsLeafAsync` uses a `ConcurrentBag<CatalogCommitItem>` as a work queue and spins up exactly `MaxConcurrentCatalogLeafDownloads` (default 64) `Task.Yield()`-seeded tasks via `Task.WhenAll`. This avoids `SemaphoreSlim` ceremony while bounding concurrency precisely.
+
+```csharp
+var tasks = Enumerable
+    .Range(0, _options.Value.MaxConcurrentCatalogLeafDownloads)
+    .Select(async _ =>
+    {
+        await Task.Yield();
+        while (allWork.TryTake(out var work))
+            // download leaf ...
+    }).ToList();
+await Task.WhenAll(tasks);
+```
+
+<Warning>
+  `GetLatestPerIdentity` throws `InvalidOperationException` if two catalog entries share the same package identity **and** the same commit timestamp. This is considered a data-integrity violation and is intentionally fatal rather than silently skipped.
+</Warning>
+
+### Telemetry as `IDisposable` Duration Scope
+
+`IV3TelemetryService.TrackCatalogLeafDownloadBatch` returns an `IDisposable`. The caller wraps the entire concurrent download loop in a `using` block, so elapsed time plus batch size are captured atomically.
+
+### Registration URL Canonicalization
+
+`RegistrationUrlBuilder` always lowercases both the package ID and the NuGet-normalized version string before building URLs. This matches the NuGet.org Registration hive's actual file layout and avoids case-sensitivity mismatches on case-sensitive storage back-ends.
+
+<Tip>
+  When reading a registration index that does not exist yet (e.g., for a package being published for the first time), `IRegistrationClient.GetIndexOrNullAsync` returns `null` rather than throwing. Callers should treat `null` as "package not yet registered" and handle it gracefully.
+</Tip>
+
+### Azure Blob Retry Policy
+
+`DefaultBlobRequestOptions.Create()` configures `LocationMode.PrimaryThenSecondary` with `ExponentialRetry`, giving Azure Storage operations automatic geo-redundant fallback. The 10-minute `MaximumExecutionTime` cap prevents indefinite hangs on large blob writes.

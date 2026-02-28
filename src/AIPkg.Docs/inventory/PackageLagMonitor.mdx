@@ -1,0 +1,113 @@
+﻿---
+title: PackageLagMonitor
+sidebarTitle: PackageLagMonitor
+description: A background job that measures and reports how long it takes for newly published or modified NuGet packages to become visible in the NuGet search service, emitting telemetry to Application Insights.
+icon: timer
+---
+
+## Overview
+
+PackageLagMonitor is a .NET console job (`Monitoring.PackageLag`) that measures **search index lag** — the elapsed time between when a package event (create, update, or delete) is recorded in the NuGet V3 catalog and when the change becomes visible in the NuGet search service. It runs as a periodic job, processes catalog leaves, polls search endpoints until the expected state appears, then records the measured delay as Application Insights metrics.
+
+Two distinct lag values are tracked per package event:
+
+- **Package Creation Lag** (`PackageCreationLagInSeconds`) — time from a package's `Created` timestamp to when it appears in search (skipped for list/unlist operations).
+- **V3 Lag** (`V3LagInSeconds`) — time from the `LastEdited` (or `Created` if never edited) timestamp to when the change is reflected in search.
+
+## Role in System
+
+<CardGroup cols={2}>
+  <Card title="Catalog Consumer" icon="rss">
+    Reads NuGet V3 catalog leaves via `NuGet.Protocol.Catalog` to discover new and changed packages in near-real-time.
+  </Card>
+  <Card title="Search Prober" icon="magnifying-glass">
+    Actively queries configured AzureSearch endpoints with `ignorefilter=true&semverlevel=2.0.0` to detect when a package version becomes visible.
+  </Card>
+  <Card title="Telemetry Emitter" icon="chart-line">
+    Pushes `PackageCreationLagInSeconds` and `V3LagInSeconds` metrics to Application Insights, tagged by region, instance index, package id, and version.
+  </Card>
+  <Card title="Ops Health Signal" icon="heart-pulse">
+    Provides the data behind SLA dashboards and alerts that track search pipeline health across deployment regions.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File Path | Class / Type | Purpose |
+|---|---|---|
+| `Program.cs` | `Program` | Entry point; delegates immediately to `JobRunner.Run`. |
+| `Job.cs` | `Job` | Extends `JsonConfigurationJob`; wires DI, bootstraps the catalog processor loop, and drives the main run cycle. |
+| `PackageLagCatalogLeafProcessor.cs` | `PackageLagCatalogLeafProcessor` | `ICatalogLeafProcessor` implementation; fans out lag-computation tasks per leaf across all search instances. |
+| `SearchServiceClient.cs` | `SearchServiceClient` | HTTP client for the search `/query` and `/diag` endpoints; normalises AzureSearch diagnostic responses into a common shape. |
+| `ISearchServiceClient.cs` | `ISearchServiceClient` | Interface contract for the search client (enables testing). |
+| `PackageLagMonitorConfiguration.cs` | `PackageLagMonitorConfiguration` | Config POCO bound from `MonitorConfiguration` section: service index URL, retry settings, and per-region info. |
+| `RegionInformation.cs` | `RegionInformation` | Per-region config: resource group, service name, base URL, and `ServiceType`. |
+| `Instance.cs` | `Instance` | Immutable runtime descriptor for a single search endpoint (slot, index, diag URL, query URL, region, service type). |
+| `ServiceType.cs` | `ServiceType` | Enum; currently only `AzureSearch` is defined (legacy `LuceneSearch` was removed). |
+| `SearchResultResponse.cs` | `SearchResultResponse` / `SearchResult` | DTOs for deserialising search query responses. |
+| `SearchDiagnosticResponse.cs` | `SearchDiagnosticResponse` / `CommitUserData` | Normalised diagnostic DTO holding last index reload time and commit timestamp. |
+| `AzureSearchDiagnosticResponse.cs` | `AzureSearchDiagnosticResponse` / `IndexInformation` | Raw DTO for the AzureSearch `/diag` JSON shape. |
+| `Telemetry/IPackageLagTelemetryService.cs` | `IPackageLagTelemetryService` | Interface for the two telemetry track methods. |
+| `Telemetry/PackageLagTelemetryService.cs` | `PackageLagTelemetryService` | Calls `ITelemetryClient.TrackMetric` with structured property bags for both lag metric names. |
+| `HttpWrappers/IHttpClientWrapper.cs` | `IHttpClientWrapper` | Thin testable wrapper around `HttpClient.GetAsync`. |
+| `HttpResponseException.cs` | `HttpResponseException` | Custom exception that carries HTTP status code and reason phrase for failed search/diag requests. |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Role |
+|---|---|
+| `NuGet.Jobs.Common` | Provides `JsonConfigurationJob`, `JobRunner`, `FileCursor`, logging infrastructure, and `ITelemetryClient` / `TelemetryClientWrapper`. |
+| `NuGet.Protocol.Catalog` | Provides `ICatalogClient`, `CatalogProcessor`, `ICatalogLeafProcessor`, `PackageDetailsCatalogLeaf`, `PackageDeleteCatalogLeaf`, and `CatalogProcessorSettings`. |
+
+### NuGet Packages (resolved transitively via project refs)
+
+| Package | Usage |
+|---|---|
+| `Autofac` | DI container used by the `JsonConfigurationJob` base class. |
+| `Microsoft.ApplicationInsights` | `TelemetryClient` and Application Insights pipeline. |
+| `Microsoft.Extensions.Configuration` | Configuration binding from JSON. |
+| `Microsoft.Extensions.DependencyInjection` | `IServiceCollection` service registration. |
+| `Microsoft.Extensions.Logging` | Structured logging throughout. |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<T>` binding for the configuration POCO. |
+| `Newtonsoft.Json` | JSON deserialisation of search and diagnostic responses. |
+
+### Deployment Artifacts (nuspec)
+
+| Artifact | Description |
+|---|---|
+| `Scripts/Functions.ps1` | Shared PowerShell helpers used by pre/post deploy scripts. |
+| `Scripts/PreDeploy.ps1` | Pre-deployment step (service stop/uninstall via NSSM). |
+| `Scripts/PostDeploy.ps1` | Post-deployment step (service install/start via NSSM). |
+| `Scripts/nssm.exe` | Non-Sucking Service Manager binary; registers the job as a Windows service. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Catalog cursor bootstrap**: Rather than reading a persisted cursor from a prior run, `Job.Run` first queries every configured search instance for its current commit timestamp, takes the maximum, and sets the `FileCursor` to `maxCommit + 1 tick`. This means each job invocation only processes catalog leaves that post-date the most advanced search instance, avoiding duplicate lag measurements across restarts.
+</Note>
+
+<Note>
+**Fan-out lag computation**: `PackageLagCatalogLeafProcessor` immediately returns `true` from `ProcessPackageDetailsAsync` / `ProcessPackageDeleteAsync` without awaiting; the actual work is queued into `_packageProcessTasks`. `WaitForProcessing()` drains all tasks with `Task.WhenAll` before the job run completes. This allows the catalog processor to batch-read leaves without blocking on per-package polling loops.
+</Note>
+
+<Warning>
+**`AzureSearch` reload time approximation**: The AzureSearch `/diag` endpoint does not expose a true "last index reload" timestamp. `SearchServiceClient.ConvertAzureSearchResponse` substitutes `DateTimeOffset.UtcNow` for `LastIndexReloadTime`. As a result, reported lag values include the wall-clock time between the package becoming visible and the moment the job first observes it — slightly overstating true lag. See the linked engineering issue (NuGet/Engineering#2651) in the source comment.
+</Warning>
+
+<Warning>
+**Retry semantics differ for delete vs. create**: During the polling loop in `ComputeLagForQueries`, a delete is considered "pending" as long as `TotalHits > 0` (package still visible), while a create/edit is "pending" when `TotalHits == 0` OR when `Data[0].LastEdited < lastEdited`. The retry logic is asymmetric and is easy to misread when modifying the polling loop.
+</Warning>
+
+<Tip>
+**List vs. create distinction**: If a package is already present in search at the first poll attempt (`retryCount == 0` and `resultCount > 0`), the job infers this is a list/unlist operation rather than a first-time publish and sets `isListOperation = true`. Creation lag is then suppressed for that leaf and only V3 lag is emitted, preventing inflated creation lag metrics for edits.
+</Tip>
+
+<Note>
+**`ServiceType` enum is forward-looking but currently single-valued**: The enum and all switch statements are structured to support multiple service types, but only `AzureSearch` is implemented. The old `LuceneSearch` path has been removed. Any `RegionInformation` with an unknown `ServiceType` will throw `NotImplementedException` from `GetSearchEndpoints`.
+</Note>
+
+<Note>
+**Target framework**: The project targets `net472` (full .NET Framework 4.7.2), not .NET Core or .NET 5+. This is consistent with other jobs in the NuGetGallery monorepo that are deployed as Windows services via NSSM.
+</Note>

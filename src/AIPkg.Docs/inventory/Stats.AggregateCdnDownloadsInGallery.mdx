@@ -1,0 +1,134 @@
+---
+title: "Stats.AggregateCdnDownloadsInGallery"
+sidebarTitle: "AggregateCdnDownloads"
+description: "Background job that reads CDN download statistics from the Synapse pipeline and writes aggregated download counts back to the Gallery SQL database."
+icon: "chart-bar"
+---
+
+## Overview
+
+`Stats.AggregateCdnDownloadsInGallery` is a .NET Framework 4.7.2 console application that runs as a scheduled background job. Its sole responsibility is to keep the Gallery SQL database's download-count columns (`Packages.DownloadCount` and `PackageRegistrations.DownloadCount`) synchronized with the authoritative download statistics produced by the CDN analytics pipeline.
+
+The source of truth for download numbers is a JSON feed (`downloads.v1.json`) published by an Azure Synapse pipeline. This job fetches that feed, compares each package's new count against the value already stored in the Gallery database, and writes an update only when the new count is strictly greater than the current one — preventing accidental regressions.
+
+<Note>
+  Download counts are **never decreased** by this job. If the incoming count is lower than what is stored, a warning is logged (event ID 901) but no SQL update is issued. This guards against data-pipeline anomalies overwriting legitimate historical totals.
+</Note>
+
+## Role in the System
+
+```
+Azure Synapse Pipeline
+        │
+        ▼
+  downloads.v1.json  (SynapsePipelineUrl)
+        │
+        ▼
+Stats.AggregateCdnDownloadsInGallery
+        │
+        ▼
+  Gallery SQL Database
+  ├── dbo.Packages.DownloadCount          (per-version)
+  └── dbo.PackageRegistrations.DownloadCount  (per-ID aggregate)
+```
+
+This job sits at the boundary between the statistics pipeline and the Gallery web application. The Gallery website reads `PackageRegistrations.DownloadCount` to display the download badges visible on every package page. Without this job running regularly, those counts would become stale.
+
+Other jobs that consume the same `downloads.v1.json` feed (`Auxiliary2AzureSearch`, `Db2AzureSearch`) use it to keep Azure Search indexes current, but they do **not** write to the Gallery SQL database — that is the exclusive responsibility of this job.
+
+<CardGroup cols={2}>
+  <Card title="Reads from" icon="download">
+    Azure Synapse `downloads.v1.json` feed via `IDownloadsV1JsonClient`
+  </Card>
+  <Card title="Writes to" icon="database">
+    Gallery SQL — `dbo.Packages` and `dbo.PackageRegistrations` download count columns
+  </Card>
+  <Card title="Deployed as" icon="server">
+    Windows Service via NSSM, installed through Octopus Deploy scripts
+  </Card>
+  <Card title="Feature flags" icon="flag">
+    Integrates `IFeatureFlagRefresher` from `NuGet.Services.FeatureFlags` for runtime flag polling
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; constructs `AggregateCdnDownloadsJob` and delegates to `JobRunner.Run()` |
+| `AggregateCdnDownloadsJob.cs` | `AggregateCdnDownloadsJob` | Core job logic: reads download JSON, batches updates, performs SQL bulk-copy and update |
+| `Configuration/AggregateCdnDownloadsConfiguration.cs` | `AggregateCdnDownloadsConfiguration` | Configures `BatchSize`, `BatchSleepSeconds`, and optional `CommandTimeoutSeconds` |
+| `Configuration/DownloadsV1JsonConfiguration.cs` | `DownloadsV1JsonConfiguration` | Holds `SynapsePipelineUrl` — the URL of the Synapse-published downloads JSON feed |
+| `DownloadCountData.cs` | `DownloadCountData` | Simple DTO: `PackageId`, `PackageVersion`, `TotalDownloadCount` — one record per package version from the feed |
+| `PackageRegistrationData.cs` | `PackageRegistrationData` | Maps a Gallery DB row: `Key`, `LowercasedId`, `OriginalId`, `DownloadCount` |
+| `LogEvents.cs` | `LogEvents` | Defines structured log event IDs: `IncorrectIdsInGroupBatch` (900) and `DownloadCountDecreaseDetected` (901) |
+| `Scripts/PostDeploy.ps1` | — | Octopus Deploy post-deployment script that installs the job as a Windows service using NSSM |
+| `Scripts/Functions.ps1` | — | Shared PowerShell helpers (`Install-NuGetService`) used by deploy scripts |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | Base `JsonConfigurationJob`, `JobRunner`, `GalleryDbConfiguration`, SQL retry helpers (`QueryWithRetryAsync`) |
+| `NuGet.Services.Metadata.Catalog` | `IDownloadsV1JsonClient` / `DownloadsV1JsonClient`, `AddDownloadCount` delegate, `ServiceCollectionExtensions.AddDownloadsV1JsonClient` |
+| `NuGet.Services.AzureSearch` | Feature flag infrastructure (`IFeatureFlagRefresher`, `ConfigureFeatureFlagServices`) |
+
+### Implicit NuGet Package Dependencies (via project refs)
+
+| Package | Used for |
+|---------|---------|
+| `Autofac.Extensions.DependencyInjection` | DI container (Autofac + Microsoft DI bridge) |
+| `Dapper.StrongName` | `QueryWithRetryAsync` extension on `SqlConnection` |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<T>` configuration binding |
+| `System.Data.SqlClient` | `SqlBulkCopy`, `SqlConnection`, `SqlCommand` |
+| `Microsoft.Extensions.Logging` | Structured logging throughout the job |
+
+## Processing Pipeline
+
+The job executes the following steps on each run:
+
+```
+1. Start IFeatureFlagRefresher
+2. Read downloads.v1.json → List<DownloadCountData>
+3. Query Gallery DB: SELECT Key, LOWER(Id), Id, DownloadCount
+   FROM dbo.PackageRegistrations (NOLOCK)
+4. Group download data by PackageId
+5. Filter out IDs not present in Gallery DB
+6. Loop in batches:
+   a. CREATE TEMP TABLE #AggregateCdnDownloadsInGallery
+   b. Populate DataTable in memory (only if newCount > currentCount)
+   c. SqlBulkCopy DataTable → temp table (30-min timeout)
+   d. UPDATE dbo.Packages JOIN temp table (per-version counts)
+   e. UPDATE dbo.PackageRegistrations JOIN aggregated temp table (per-ID totals)
+   f. DROP TEMP TABLE
+   g. Sleep BatchSleepSeconds before next batch
+7. Stop IFeatureFlagRefresher
+```
+
+## Notable Patterns and Quirks
+
+<Note>
+  **Batch sizing is count-based, not record-count-based.** `PopGroupBatch` accumulates groups until the estimated SQL update row count — `(number of package IDs) + (total number of versions across those IDs)` — would exceed `BatchSize`. This accounts for the fact that each batch issues one UPDATE per version row plus one UPDATE per package ID row.
+</Note>
+
+<Warning>
+  **Turkish-I collision handling.** The Gallery database uses a case-insensitive collation, but lowercasing IDs in C# can produce collisions for locales using the Turkish dotless-i (`ı`). The job explicitly detects duplicate lowercase keys during the `PackageRegistrations` load and skips the conflicting entry, logging a warning rather than throwing.
+</Warning>
+
+<Note>
+  **One-way ratchet for download counts.** The job will never write a lower count than what is already stored. If the statistics pipeline produces a lower number (e.g., due to a reprocessing artifact), the discrepancy is logged at `Warning` level with event ID 901 and no SQL write occurs.
+</Note>
+
+<Tip>
+  **Temp table pattern avoids long-held locks.** Rather than updating the Gallery DB row-by-row, the job bulk-copies all changes into a session-scoped SQL temp table (`#AggregateCdnDownloadsInGallery`) and then issues two set-based UPDATE statements. This minimizes lock duration on the heavily-read `Packages` and `PackageRegistrations` tables.
+</Tip>
+
+<Warning>
+  **Default SQL command timeout is 30 minutes.** The `UpdateFromTempTable` statement joins across potentially millions of rows. The 1800-second timeout is intentional. Operators can override it via `CommandTimeoutSeconds` in configuration, but reducing it too aggressively risks mid-run failures on large datasets.
+</Warning>
+
+<Note>
+  **No NuGet package references in the `.csproj`.** All NuGet dependencies are pulled in transitively through the three internal project references. There are no direct `<PackageReference>` entries in `Stats.AggregateCdnDownloadsInGallery.csproj`.
+</Note>

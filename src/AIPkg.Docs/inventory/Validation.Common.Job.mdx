@@ -1,0 +1,127 @@
+﻿---
+title: "Validation.Common.Job"
+sidebarTitle: "Validation.Common.Job"
+description: "Shared job infrastructure for all NuGet package validation workers — base classes, interfaces, storage helpers, leasing, telemetry, and Service Bus subscription processing."
+icon: "shield-check"
+---
+
+## Overview
+
+`Validation.Common.Job` is the shared foundation library consumed by every individual validation worker job (Scan & Sign, Package Certificates, Symbols Validator, Content Scanner, etc.). It provides:
+
+- Abstract base job classes (`ValidationJobBase`, `SubscriptionProcessorJob<T>`) that handle dependency injection wiring, Service Bus setup, and database registration.
+- A canonical interface hierarchy for validators (`IValidator` / `IProcessor`, `INuGetValidator` / `INuGetProcessor`) that the orchestrator relies on to drive validation pipelines.
+- Infrastructure helpers: file downloading, temporary file management, Azure Blob lease management, SAS token retrieval, and telemetry tracking.
+- State persistence for validators through `ValidatorStateService`, backed by the `IValidationEntitiesContext` (Entity Framework).
+
+The library targets both `net472` (full .NET Framework, for Azure WebJobs) and `netstandard2.1` (for shared consumption). Some types — including the job base classes and EF-backed storage — are compiled only for `net472`.
+
+---
+
+## Role in System
+
+<CardGroup cols={2}>
+  <Card title="Validation Orchestrator Contract" icon="git-branch">
+    Defines `IValidator`, `IProcessor`, `INuGetValidator`, and `INuGetProcessor` — the interfaces the NuGet Validation Orchestrator uses to invoke, poll, and clean up individual validation steps.
+  </Card>
+  <Card title="Job Bootstrap" icon="play">
+    `ValidationJobBase` and `SubscriptionProcessorJob<T>` are the abstract entry points that all validation Azure WebJob executables extend. They wire up DI, Service Bus clients, database contexts, and feature flags in one place.
+  </Card>
+  <Card title="State Management" icon="database">
+    `ValidatorStateService` persists per-validator status rows to the validation SQL database, handling optimistic concurrency (`StaleStatus`) and duplicate-insert races (`StatusAlreadyExists`) gracefully.
+  </Card>
+  <Card title="Processor File Staging" icon="folder-open">
+    `ProcessorPackageFileService` manages the staging blob for read-write validators (processors): saving a mutated `.nupkg` and issuing a scoped SAS URL back to the orchestrator.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|------|-------------------|---------|
+| `ValidationJobBase.cs` | `ValidationJobBase` | Abstract `net472` base job; wires DI for Service Bus, blob storage, HTTP client, telemetry, feature flags, and both SQL database contexts. |
+| `SubscriptionProcessorJob.cs` | `SubscriptionProcessorJob<T>` | Extends `ValidationJobBase`; drives a `ISubscriptionProcessor<T>` loop with configurable concurrency, process duration, and graceful shutdown (1-minute max). |
+| `Validation/IValidator.cs` | `IValidator` | Core orchestrator contract: `StartAsync`, `GetResponseAsync`, `CleanUpAsync`. |
+| `Validation/IProcessor.cs` | `IProcessor : IValidator` | Marker interface indicating a validator mutates the package; the orchestrator enforces serial execution for processors. |
+| `Validation/INuGetValidator.cs` | `INuGetValidator` | NuGet-specific variant of `IValidator` (uses `INuGetValidationRequest` / `INuGetValidationResponse`). |
+| `Validation/INuGetProcessor.cs` | `INuGetProcessor : INuGetValidator` | NuGet-specific processor marker. |
+| `Validation/ValidatorName.cs` | `ValidatorName` | Central registry of well-known validator name string constants used across jobs and the orchestrator. |
+| `Storage/ValidatorStateService.cs` | `ValidatorStateService` | EF-backed CRUD for `ValidatorStatus` rows; resolves concurrency races on add and update. |
+| `Storage/ProcessorPackageFileService.cs` | `ProcessorPackageFileService` | Saves/retrieves staged `.nupkg` blobs for processors; generates 7-day SAS URLs or managed-account SAS tokens. |
+| `Leases/CloudBlobLeaseService.cs` | `CloudBlobLeaseService` | Distributed mutex via Azure Blob Storage leases (15–60 s); auto-creates the lease blob if absent. |
+| `FileDownloader.cs` | `FileDownloader` | HTTP-based file downloader to temp stream; emits `FileDownloadedSeconds` and `FileDownloadSpeedBytesPerSec` telemetry; strips SAS query strings before logging URIs. |
+| `FeatureFlags/FeatureFlagService.cs` | `FeatureFlagService` | Wraps `IFeatureFlagClient` to expose `Validation.*`-prefixed flags: `QueueBack`, `OrchestratorLease`, `ExtraValidation`. |
+| `SharedAccessSignatureService.cs` | `SharedAccessSignatureService` | Retrieves SAS tokens from Azure Key Vault via `ISecretReader` (managed storage account SAS definitions). |
+| `TempFiles/TempFileFactory.cs` | `TempFileFactory` | Creates and opens delete-on-close temp files; used by processors to stage package content locally. |
+| `CommonTelemetryService.cs` | `CommonTelemetryService` | Application Insights wrapper; strips query strings from file URIs before recording download metrics. |
+| `Configuration/SubscriptionProcessorConfiguration.cs` | `SubscriptionProcessorConfiguration` | `MaxConcurrentCalls` + `ProcessDuration` (default: 1 day) for a Service Bus processor loop. |
+
+---
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Autofac` | IoC container used alongside Microsoft DI for keyed/named registrations |
+| `Autofac.Extensions.DependencyInjection` | Bridges Autofac with `IServiceCollection` |
+| `Azure.Storage.Blobs` | Azure Blob Storage SDK v12 — used by `CloudBlobLeaseService` and blob client registration |
+| `Microsoft.Extensions.DependencyInjection` | Core DI abstractions |
+| `Microsoft.Extensions.Options.ConfigurationExtensions` | `IOptions<T>` / `IOptionsSnapshot<T>` configuration binding |
+| `NuGet.Packaging` | NuGet package parsing support |
+| `System.Formats.Asn1` | ASN.1 parsing (used indirectly by certificate validation paths) |
+
+### Internal Project References
+
+| Project | Condition | Purpose |
+|---------|-----------|---------|
+| `NuGet.Jobs.Common` | All targets | Base `JsonConfigurationJob`, feature flag infrastructure, logging |
+| `NuGet.Services.ServiceBus` | `net472` only | `ISubscriptionClient`, `ITopicClient`, `SubscriptionProcessor<T>`, message serialization |
+| `NuGet.Services.Storage` | `net472` only | `ICloudBlobClient`, `ICoreFileStorageService`, `CloudBlobCoreFileStorageService` |
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Dual-target compilation with selective exclusion.** The `.csproj` uses `<Compile Remove="...">` under a `netstandard2.1` condition to drop all types that depend on `net472`-only APIs (Entity Framework 6, NuGetGallery's `IEntitiesContext`, the Azure WebJob job-base classes, and Service Bus abstractions). This keeps the `netstandard2.1` surface clean for cross-platform consumers while sharing portable types (interfaces, config POCOs, temp file utilities).
+</Note>
+
+<Note>
+**Validator vs Processor distinction.** `IProcessor` (and `INuGetProcessor`) are pure marker interfaces that extend `IValidator`/`INuGetValidator`. Their sole purpose is to allow the orchestrator to detect at registration time whether a validator mutates the package and to enforce that no other validator runs concurrently with a processor. No additional methods are required.
+</Note>
+
+<Warning>
+**Optimistic concurrency in `ValidatorStateService`.** `TryAddValidatorStatusAsync` silently absorbs `StatusAlreadyExists` (duplicate primary key) and returns the existing row — this is expected behavior when the orchestrator retries a message. Similarly, `TryUpdateValidationStatusAsync` absorbs `StaleStatus` (EF6 concurrency token mismatch) and re-fetches. Code that calls these helpers must not assume the returned status reflects the state it just attempted to write.
+</Warning>
+
+<Warning>
+**Azure Blob lease time constraints.** `CloudBlobLeaseService` hard-enforces a 15–60 second window for all lease acquisitions (Azure platform requirement). Callers passing a duration outside this range will receive an `ArgumentOutOfRangeException` — there is no silent clamping.
+</Warning>
+
+<Tip>
+**SAS token safety in telemetry.** `FileDownloader` and `CommonTelemetryService` both strip the query string from file URIs before emitting to Application Insights. This prevents accidental logging of SAS tokens in the `FileDownloadedSeconds` / `FileDownloadSpeedBytesPerSec` metrics.
+</Tip>
+
+<Tip>
+**`SubscriptionProcessorJob<T>` lifecycle.** The job intentionally restarts on a configurable schedule (`ProcessDuration`, defaulting to 1 day) by calling `Task.Delay` and then gracefully shutting down the Service Bus processor. This is a deliberate "rolling restart" pattern to prevent long-lived zombie processes in Azure WebJobs.
+</Tip>
+
+```csharp
+// Validator lifecycle — how the orchestrator calls a validator
+var response = await validator.StartAsync(request);     // idempotent start
+// ... later, on next message ...
+response = await validator.GetResponseAsync(request);   // poll status
+// ... on success or terminal failure ...
+await validator.CleanUpAsync(request);                  // best-effort cleanup
+```
+
+```csharp
+// Processor file staging pattern
+await processorFileService.SaveAsync(id, version, validationId, mutatedStream);
+var sasUri = await processorFileService.GetReadAndDeleteUriAsync(id, version, validationId, sasDefinition);
+// Return sasUri in INuGetValidationResponse.NupkgUrl so the orchestrator can promote the file
+```

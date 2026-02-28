@@ -1,0 +1,130 @@
+---
+title: NuGet.Jobs.Db2AzureSearch
+sidebarTitle: Db2AzureSearch
+description: One-time bootstrap job that performs a full initial population of the Azure Search indexes and auxiliary files from the Gallery database or Kusto, establishing the baseline from which incremental jobs (Catalog2AzureSearch and Auxiliary2AzureSearch) take over.
+icon: database
+---
+
+## Overview
+
+`NuGet.Jobs.Db2AzureSearch` is a run-once bootstrap tool that creates and populates the Azure AI Search infrastructure required by the NuGet.org search service. It provisions two Azure Search indexes (the "search" index used by end-user queries and the "hijack" index used by the NuGet client), creates the Azure Blob Storage container for search auxiliary files, and bulk-loads every available package registration from the Gallery SQL database into those indexes. Once complete, it writes a catalog cursor blob so that `NuGet.Jobs.Catalog2AzureSearch` and `NuGet.Jobs.Auxiliary2AzureSearch` can take over incremental updates.
+
+The job reads package metadata, ownership, download counts, excluded package lists, verified package flags, and popularity transfer data all in a single pass. These are written both into the Azure Search document store (as indexed documents) and into Azure Blob Storage (as canonical JSON auxiliary files). Download counts are taken from the external `downloads.v1.json` statistics file rather than from the Gallery DB, because that is the authoritative source used by the live search service.
+
+The core data pipeline uses a producer/consumer pattern: a single producer task fetches package registrations from the database in key-range batches (default 10,000 packages per batch), and a configurable number of consumer tasks (default 4, `MaxConcurrentBatches`) concurrently build index action documents and push them to Azure Search. A back-pressure mechanism pauses the producer when unprocessed packages in memory exceed twice the `DatabaseBatchSize`, preventing out-of-memory conditions during large runs. For local development, data can alternatively be sourced from NuGet.Insights Kusto tables instead of the Gallery database.
+
+## Role in System
+
+```
+Gallery DB (SQL)
+    │
+    ▼
+NewPackageRegistrationFromDbProducer
+    │  (or NewPackageRegistrationFromKustoProducer for dev)
+    │  reads packages in key-range batches
+    ▼
+Db2AzureSearchCommand (orchestrator)
+    ├─► PackageEntityIndexActionBuilder
+    │       builds search + hijack IndexDocumentsActions
+    │
+    ├─► BatchPusher ──► Azure AI Search ("search" index)
+    │                └► Azure AI Search ("hijack" index)
+    │
+    ├─► VersionListDataClient ──► Azure Blob Storage
+    │       (per-package version list blobs)
+    │
+    └─► Auxiliary file clients ──► Azure Blob Storage
+            owners.v2.json
+            downloads.v2.json
+            verified-packages.v1.json
+            popularity-transfers.v1.json
+            catalog cursor blob
+```
+
+After this job completes, `NuGet.Jobs.Catalog2AzureSearch` picks up from the written cursor and applies incremental catalog changes, while `NuGet.Jobs.Auxiliary2AzureSearch` keeps the auxiliary files and download counts current on an ongoing basis.
+
+<CardGroup cols={2}>
+  <Card title="Full Index Bootstrap" icon="database">
+    Creates both Azure Search indexes from scratch and populates every available package registration. This is the only job that performs a complete rebuild; all other search jobs are incremental.
+  </Card>
+  <Card title="Dual Data Source Support" icon="git-branch">
+    Supports two producer backends: `NewPackageRegistrationFromDbProducer` for production (Gallery SQL DB) and `NewPackageRegistrationFromKustoProducer` for development (NuGet.Insights Kusto tables). The selection is automatic based on whether `KustoConnectionString` is configured.
+  </Card>
+  <Card title="Auxiliary File Initialization" icon="file-json">
+    Writes the initial versions of all four search auxiliary files to Blob Storage with an `IfNotExists` access condition, ensuring they are only written once and not overwritten if they already exist.
+  </Card>
+  <Card title="Catalog Cursor Seeding" icon="clock">
+    Captures the NuGet catalog's current commit timestamp before reading the database (ensuring the cursor is no newer than the data read), then writes it as the starting cursor for Catalog2AzureSearch to avoid missing updates.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Job.cs` | `Job` | Entry point; extends `AzureSearchJob<Db2AzureSearchCommand>`; registers configuration sections and the `DownloadsV1JsonClient` |
+| `Program.cs` | `Program` | Thin console host; calls `JobRunner.RunOnce(job, args)` |
+| `Scripts/PostDeploy.ps1` | — | Post-deployment script that invokes `RunJob.cmd` to execute the job after deployment |
+| `NuGet.Jobs.Db2AzureSearch.nuspec` | — | NuGet packaging manifest; bundles the `net472` build output and the PowerShell script |
+| `Db2AzureSearch/Db2AzureSearchCommand.cs` | `Db2AzureSearchCommand` | Top-level orchestrator; initializes indexes and storage, drives the producer/consumer pipeline, writes auxiliary files, and seeds the catalog cursor |
+| `Db2AzureSearch/NewPackageRegistrationFromDbProducer.cs` | `NewPackageRegistrationFromDbProducer` | Production data source; fetches package registrations from Gallery SQL DB in key-range batches; builds `InitialAuxiliaryData` from downloads, owners, excluded packages, verified packages, and popularity transfers |
+| `Db2AzureSearch/NewPackageRegistrationFromKustoProducer.cs` | `NewPackageRegistrationFromKustoProducer` | Development data source; queries NuGet.Insights Kusto tables for the same data; supports `KustoTopPackageCount` to limit scope during local iteration |
+| `Db2AzureSearch/PackageEntityIndexActionBuilder.cs` | `PackageEntityIndexActionBuilder` | Converts a `NewPackageRegistration` into `IndexActions` (search + hijack) by building `VersionLists`, resolving latest-version flags, and producing `IndexDocumentsAction.Upload` or `.Delete` calls |
+| `Db2AzureSearch/NewPackageRegistration.cs` | `NewPackageRegistration` | Data transfer object carrying package ID, total download count, owner array, package entity list, and exclusion flag for a single package registration |
+| `Db2AzureSearch/InitialAuxiliaryData.cs` | `InitialAuxiliaryData` | Collects owners, downloads, excluded packages, verified packages, and popularity transfers returned by the producer after enumeration is complete |
+| `Db2AzureSearch/Db2AzureSearchConfiguration.cs` | `Db2AzureSearchConfiguration` | Configuration POCO; extends `AzureSearchJobConfiguration` with `DatabaseBatchSize`, `DatabaseCommandTimeoutInSeconds`, `CatalogIndexUrl`, auxiliary storage settings, and `DownloadsV1JsonUrl` |
+| `Db2AzureSearch/Db2AzureSearchDevelopmentConfiguration.cs` | `Db2AzureSearchDevelopmentConfiguration` | Development-only configuration; adds `ReplaceContainersAndIndexes`, `SkipPackagePrefixes`, and Kusto connection settings |
+| `Db2AzureSearch/EnumerableExtensions.cs` | `EnumerableExtensions` | Internal helper that batches a sequence by item size into groups whose total size does not exceed `DatabaseBatchSize`; used to build key-range batches |
+| `Db2AzureSearch/INewPackageRegistrationProducer.cs` | `INewPackageRegistrationProducer` | Interface for the two producer implementations; defines `ProduceWorkAsync` and `GetInitialCursorValueAsync` |
+| `Db2AzureSearch/IPackageEntityIndexActionBuilder.cs` | `IPackageEntityIndexActionBuilder` | Interface for `PackageEntityIndexActionBuilder`; single method `AddNewPackageRegistration` |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | `JobRunner`, `JsonConfigurationJob`, `AzureSearchJob<T>` base class, secret reader, storage helpers |
+| `NuGet.Services.AzureSearch` | All Db2AzureSearch command and producer implementations, `IndexBuilder`, `BatchPusher`, auxiliary file clients, `IBlobContainerBuilder`, telemetry service, document builders |
+
+### NuGet Package References
+
+These are declared on `NuGet.Services.AzureSearch`, which the job depends on transitively:
+
+| Package | Purpose |
+|---------|---------|
+| `Azure.Search.Documents` | Azure AI Search SDK; `SearchIndexClient`, `SearchClient`, `IndexDocumentsAction` |
+| `Azure.Identity` | Managed Identity and DefaultAzureCredential authentication to Azure Search |
+| `Microsoft.Azure.Kusto.Data` | Kusto query client used by `NewPackageRegistrationFromKustoProducer` |
+| `Microsoft.Rest.ClientRuntime` | `ServiceClientTracing` interceptor for HTTP-level diagnostics |
+| `System.Text.Json` / `System.Text.Encodings.Web` | JSON serialization of auxiliary files and index documents |
+
+## Notable Patterns and Implementation Details
+
+<Warning>
+This job is destructive by design. When `Development:ReplaceContainersAndIndexes` is `true`, it deletes the existing Azure Search indexes and Blob Storage container before recreating them. This flag must be `false` in production environments. Running the job against an already-populated production index without this guard would first delete all existing documents.
+</Warning>
+
+<Note>
+The catalog cursor is captured **before** any database reads begin, not after. This is intentional: the database is always more up-to-date than the catalog, so capturing the catalog timestamp first guarantees that any data read from the database is at least as fresh as that timestamp. When Catalog2AzureSearch starts, it may re-process some catalog entries already reflected in the index, but duplicate upserts are safe.
+</Note>
+
+<Note>
+Download counts are intentionally **not** read from the Gallery database. The job fetches `downloads.v1.json` from the configured URL (the statistics pipeline), which is the same source the live search service uses. This ensures the index is seeded with the same download counts that will be maintained by `Auxiliary2AzureSearch` going forward.
+</Note>
+
+<Tip>
+The back-pressure mechanism in both producer implementations prevents unbounded memory growth. The producer pauses when the number of package entities in the `ConcurrentBag` exceeds `2 * DatabaseBatchSize`. This allows consumer tasks to drain the queue before more data is loaded from the database or Kusto.
+</Tip>
+
+<Note>
+The Kusto producer (`NewPackageRegistrationFromKustoProducer`) handles oversized result sets by halving the page size whenever Kusto returns an `E_QUERY_RESULT_SET_TOO_LARGE` error. It starts at 20,000 records per page (well below the 64 MB Kusto response limit) and will retry with progressively smaller pages down to a minimum of 100 records.
+</Note>
+
+<Note>
+Auxiliary files are written with `AccessConditionWrapper.GenerateIfNotExistsCondition()`. This means a second run of the job (without `ReplaceContainersAndIndexes`) will skip rewriting the auxiliary files if they were already created by the first run. The index documents, however, are re-uploaded unconditionally.
+</Note>
+
+<Warning>
+`PackageEntityIndexActionBuilder` validates consistency between the database `NormalizedVersion` field and the parsed `NuGetVersion`. If they do not match, it throws `InvalidOperationException` and aborts the job. This guard catches data quality issues in the Gallery database before they corrupt the index.
+</Warning>

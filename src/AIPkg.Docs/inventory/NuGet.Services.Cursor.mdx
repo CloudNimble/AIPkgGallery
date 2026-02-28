@@ -1,0 +1,102 @@
+---
+title: NuGet.Services.Cursor
+sidebarTitle: Services.Cursor
+description: Shared library providing an abstract cursor abstraction that tracks the last-processed timestamp for NuGet catalog pipeline jobs, with durable (blob-backed), in-memory, HTTP-read-only, and aggregate implementations.
+icon: bookmark
+---
+
+## Overview
+
+`NuGet.Services.Cursor` is a small shared library that defines the **cursor pattern** used across NuGet's catalog processing pipeline. A cursor holds a `DateTimeOffset` value representing how far a pipeline job has processed; jobs load the cursor at startup, process catalog commits up to a "back" cursor, then save the "front" cursor to record their new watermark before the next run.
+
+The library is built around two abstract base classes — `ReadCursor<T>` (load only) and `ReadWriteCursor<T>` (load and save) — and ships four concrete implementations: `DurableCursor` for persisting state to Azure Blob Storage via `NuGet.Services.Storage`, `MemoryCursor` for in-process or test use, `HttpReadCursor` for reading a remote cursor endpoint over HTTP, and `AggregateCursor` for combining multiple read cursors into a single minimum-value constraint.
+
+The library targets **net472** and has a single external NuGet dependency (`System.Text.Json` for format compatibility) plus a project reference to `NuGet.Services.Storage`. It is consumed by catalog collector jobs such as `NuGet.Services.AzureSearch`, `NuGet.Services.GitHub`, `GitHubVulnerabilities2Db`, `GitHubVulnerabilities2v3`, and `PackageHash`, as well as the broader `Catalog` and `Ng` infrastructure.
+
+## Role in System
+
+The cursor library sits between the durable storage layer and the catalog collector loop. Each pipeline job initializes a "front" cursor (its own progress marker, written to blob storage) and a "back" cursor (an upper bound it must not exceed, either from a remote HTTP endpoint or set to max for unconstrained runs). The collector processes only catalog commits whose timestamps fall in the window `(front.Value, back.Value]`, then saves the updated front cursor.
+
+```
+  Remote HTTP cursor(s)         Azure Blob Storage
+  (upstream pipeline state)     (this job's state)
+         │                              │
+         ▼                              ▼
+  HttpReadCursor           DurableCursor (front)
+         │                              │
+         └──────► AggregateCursor ◄─────┘
+                  (min of all back   (writable,
+                   cursors = back)    = front)
+                         │
+                         ▼
+              Catalog Collector / Job
+              processes commits in
+              window (front, back]
+                         │
+                         ▼
+              DurableCursor.Save()
+              (advances front watermark)
+```
+
+<CardGroup cols={2}>
+  <Card title="Durable State" icon="hard-drive">
+    `DurableCursor` persists the cursor value as a JSON blob (`{"value":"<ISO-8601>"}`) via `NuGet.Services.Storage`. On first run, when no blob exists, it falls back to a caller-supplied `defaultValue` (typically `DateTimeOffset.MinValue`).
+  </Card>
+  <Card title="Dependency Coordination" icon="link">
+    `AggregateCursor` loads all inner cursors in parallel via `Task.WhenAll` and exposes their minimum value. This enforces that a downstream job never processes data beyond what upstream jobs have already committed.
+  </Card>
+  <Card title="Remote Cursor Reading" icon="globe">
+    `HttpReadCursor` fetches a cursor JSON document from a remote URI over HTTP. It accepts an optional `Func<HttpMessageHandler>` for injection of custom handlers (e.g., retry or mock handlers in tests).
+  </Card>
+  <Card title="In-Process Cursor" icon="memory-stick">
+    `MemoryCursor` is a no-op read/write cursor that holds a fixed value in memory. Factory methods `CreateMin()` and `CreateMax()` produce sentinels for unconstrained or full-history collector runs.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `ReadCursor.cs` | `ReadCursor<T>` (abstract) | Base class exposing a `Value` property and an abstract `Load(CancellationToken)` method. All cursor types derive from this. |
+| `ReadWriteCursor.cs` | `ReadWriteCursor<T>` (abstract) | Extends `ReadCursor<T>` with an abstract `Save(CancellationToken)` method for cursors that can persist their state. |
+| `DurableCursor.cs` | `DurableCursor : ReadWriteCursor<DateTimeOffset>` | Reads and writes a `DateTimeOffset` to/from a JSON blob in Azure Storage via `NuGet.Services.Storage`. Uses ISO 8601 round-trip format (`"O"`). Stores JSON as `{"value":"..."}` with `Cache-Control: no-store`. |
+| `MemoryCursor.cs` | `MemoryCursor : ReadWriteCursor<DateTimeOffset>` | In-memory cursor whose `Load` and `Save` are no-ops. Provides `CreateMin()` and `CreateMax()` static factories returning `DateTimeOffset.MinValue` and `DateTimeOffset.MaxValue` (both UTC). |
+| `HttpReadCursor.cs` | `HttpReadCursor : ReadCursor<DateTimeOffset>` | Read-only cursor that fetches JSON from an HTTP endpoint and parses the `value` field as `DateTimeOffset`. Accepts an optional custom `HttpMessageHandler` factory. |
+| `AggregateCursor.cs` | `AggregateCursor<T> : ReadCursor<T>` | Composes one or more `ReadCursor<T>` instances; on `Load`, loads all in parallel and sets `Value` to the minimum across them. Requires at least one inner cursor. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `System.Text.Json` | Included as a package reference for JSON format compatibility; actual JSON parsing in the current code uses `Newtonsoft.Json.Linq.JObject` (transitively available via the broader solution). |
+| `System.Net.Http` (framework reference) | Referenced explicitly for `HttpClient` and `HttpMessageHandler` used by `HttpReadCursor`. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Storage` | Provides the abstract `Storage` base class, `IStorage`, and `StringStorageContent` used by `DurableCursor` to read and write cursor blobs in Azure Blob Storage or the file system. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Front/back cursor convention.** By convention, consuming jobs construct a writable `DurableCursor` as the "front" (their own progress watermark) and a read-only cursor — either a `MemoryCursor.CreateMax()` or an `AggregateCursor` over `HttpReadCursor` instances — as the "back" (the upper bound they must not exceed). The collector only processes catalog commits whose timestamps are strictly greater than `front.Value` and less than or equal to `back.Value`.
+</Note>
+
+<Note>
+**Parallel load in `AggregateCursor`.** `AggregateCursor.Load` calls `Task.WhenAll` over all inner cursors before computing the minimum. This means all remote or storage reads happen concurrently, keeping startup latency proportional to the slowest single cursor rather than the sum of all cursors.
+</Note>
+
+<Warning>
+**`DurableCursor` uses `Newtonsoft.Json` at runtime despite the `System.Text.Json` package reference.** The implementation imports `Newtonsoft.Json.Linq` for `JObject` parsing. The `System.Text.Json` package reference appears to be a forward-compatibility or transitive-alignment declaration rather than the active serializer.
+</Warning>
+
+<Tip>
+`MemoryCursor.CreateMin()` is useful for collector runs that should process the entire catalog history (no lower bound restriction), while `MemoryCursor.CreateMax()` is used as the "back" cursor when a job has no upstream dependency and should process up to the latest available catalog commit.
+</Tip>
+
+<Note>
+**`HttpReadCursor` creates a new `HttpClient` per `Load` call.** Each invocation of `Load` constructs and disposes an `HttpClient` within a `using` block. For jobs that load cursors infrequently (typically once per run), this is acceptable, but callers should be aware that it does not reuse connections across multiple loads.
+</Note>

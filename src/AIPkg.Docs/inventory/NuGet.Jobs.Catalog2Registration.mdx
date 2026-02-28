@@ -1,0 +1,133 @@
+---
+title: NuGet.Jobs.Catalog2Registration
+sidebarTitle: Catalog2Registration
+description: A background job that reads package publish and delete events from the NuGet V3 catalog and writes the corresponding registration blobs to Azure Blob Storage across three hive types.
+icon: database
+---
+
+## Overview
+
+Catalog2Registration is a .NET Framework 4.7.2 console application that runs as a continuous background job. Its purpose is to keep the NuGet V3 Registration resource up to date. The registration resource is the structured JSON-LD data that NuGet clients query to discover all versions of a package, their metadata, and their dependencies. This job is the sole writer of those blobs; the blobs are served directly from Azure Blob Storage to NuGet clients without any intermediary service.
+
+The job operates as a catalog collector. It polls the NuGet V3 catalog index for new commit items, which represent package publishes (`PackageDetails`) and package deletions (`PackageDelete`). When new items are found, the job batches them and processes each affected package ID in parallel. For each ID it reads the existing registration index from blob storage, merges the incoming changes using an in-memory merge algorithm, and then writes back only the blobs that changed—leaves, pages, and the index—while deleting blobs that are no longer needed.
+
+A key design decision is the concept of "hives." The job writes the same data to three separate Azure Blob Storage containers with different characteristics: a Legacy hive (plain JSON, SemVer 1 only), a Gzipped hive (gzip-compressed JSON, SemVer 1 only), and a SemVer2 hive (gzip-compressed JSON, SemVer 1 and SemVer 2). The Gzipped hive is treated as a replica of the Legacy hive—writes to Legacy are automatically mirrored to Gzipped with URL rewriting. The SemVer2 hive is processed independently and also includes package deprecation and vulnerability metadata that are omitted from the other two hives.
+
+## Role in System
+
+```
+NuGet Catalog (V3 API)
+        |
+        | polls for new commit items
+        v
+ Catalog2RegistrationCommand
+        |
+        | feeds batches of catalog items grouped by package ID
+        v
+ RegistrationCollectorLogic  <-- downloads PackageDetails leaves in parallel
+        |
+        | one worker per package ID (MaxConcurrentIds, default 64)
+        v
+ RegistrationUpdater
+        |
+        | one worker per hive (Legacy+Gzipped, SemVer2)
+        v
+ HiveUpdater
+   |        |        |
+   |        |        +--> HiveMerger (in-memory merge of catalog vs. existing registration)
+   |        |
+   |        +--> EntityBuilder (constructs JSON-LD registration entities)
+   |
+   +--> HiveStorage --> Azure Blob Storage (3 containers: legacy, gzipped, semver2)
+                         - <id>/index.json
+                         - <id>/page/<lower>/<upper>.json
+                         - <id>/<version>.json
+```
+
+<CardGroup cols={2}>
+  <Card title="Three Registration Hives" icon="layers">
+    Writes to Legacy (plain JSON, SemVer 1), Gzipped (gzip, SemVer 1), and SemVer2 (gzip, SemVer 1+2) containers. Gzipped is a replica of Legacy with URL rewriting applied automatically during writes.
+  </Card>
+  <Card title="Cursor-Based Progress" icon="bookmark">
+    Uses a durable front cursor stored in blob storage to track how far through the catalog the job has processed. Optionally depends on upstream cursors via HTTP so it does not run ahead of upstream jobs.
+  </Card>
+  <Card title="Inlined vs. Non-Inlined Pages" icon="file-json">
+    For packages with 127 or fewer total versions, page items are inlined directly into the registration index JSON. Above that threshold, each page is written as a separate blob, keeping the index small for large packages.
+  </Card>
+  <Card title="Parallel Merge Algorithm" icon="git-merge">
+    Uses a textbook merge algorithm to combine sorted catalog commits with the existing sorted registration pages and leaves, touching only the blobs that actually change rather than rewriting everything.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; delegates to `JobRunner` from `NuGet.Jobs.Common`. |
+| `Job.cs` | `Job` | Wires up DI and configuration, sets `ServicePointManager` connection limits, and invokes `Catalog2RegistrationCommand`. |
+| `Catalog2RegistrationCommand.cs` | `Catalog2RegistrationCommand` | Initializes front and back cursors, optionally creates blob containers, and runs the collector. |
+| `Catalog2RegistrationConfiguration.cs` | `Catalog2RegistrationConfiguration` | Configuration POCO; controls hive container names, base URLs, parallelism settings (`MaxConcurrentIds`, `MaxConcurrentHivesPerId`, `MaxConcurrentOperationsPerHive`, `MaxConcurrentStorageOperations`), page sizing (`MaxLeavesPerPage` = 64, `MaxInlinedLeafItems` = 127), and snapshot behavior. |
+| `DependencyInjectionExtensions.cs` | `DependencyInjectionExtensions` | Registers all services. Cursor storage uses the legacy container via a keyed Autofac binding. The `IThrottle` is a `SemaphoreSlimThrottle` that caps total concurrent blob operations. |
+| `RegistrationCollectorLogic.cs` | `RegistrationCollectorLogic` | `ICommitCollectorLogic` implementation; groups catalog items by package ID, deduplicates to latest per identity, downloads `PackageDetails` leaves in bulk, then fans out to `RegistrationUpdater` with `MaxConcurrentIds` workers. |
+| `RegistrationUpdater.cs` | `RegistrationUpdater` | Launches parallel hive-processing tasks. Defines the replica map: Legacy → Gzipped, SemVer2 → (none). |
+| `Hives/HiveUpdater.cs` | `HiveUpdater` | Core update orchestrator for a single hive. Reads the existing index, loads relevant pages in parallel, calls `HiveMerger`, then writes/deletes leaves, pages, and the index. Also handles SemVer 2 exclusion by converting `PackageDetails` items to synthetic `PackageDelete` items for the Legacy and Gzipped hives. |
+| `Hives/HiveMerger.cs` | `HiveMerger` | Implements the sorted merge algorithm over catalog items and registration leaf items. Handles inserts, updates, deletes, and page size enforcement (splitting oversized pages, consolidating underfull ones). |
+| `Hives/HiveStorage.cs` | `HiveStorage` | Reads and writes registration blobs (index, page, leaf). Handles gzip serialization per hive type, blob snapshot creation, throttle coordination, and URL rewriting when writing a primary hive and its replica in the same call. |
+| `Hives/HiveType.cs` | `HiveType` (enum) | Enumerates the three hive types: `Legacy`, `Gzipped`, `SemVer2`. |
+| `Hives/HiveMergeResult.cs` | `HiveMergeResult` | Value object returned by `HiveMerger` containing sets of modified pages, modified leaves, and deleted leaves. |
+| `Hives/CatalogCommit.cs` | `CatalogCommit` | Simple record holding a commit GUID and UTC timestamp applied to every written blob. |
+| `Hives/Bookkeeping/IndexInfo.cs` | `IndexInfo` | Bookkeeping wrapper around `RegistrationIndex`. Keeps `PageInfo` list and underlying `RegistrationPage` list in sync during merge operations. |
+| `Hives/Bookkeeping/PageInfo.cs` | `PageInfo` | Bookkeeping wrapper around a registration page. Lazily fetches the external page blob on first access. Tracks `Count`, `Lower`, `Upper` version bounds, and whether the page is inlined. |
+| `Hives/Bookkeeping/LeafInfo.cs` | `LeafInfo` | Bookkeeping wrapper around `RegistrationLeafItem` that carries a parsed `NuGetVersion` for fast comparison during the merge. |
+| `Schema/EntityBuilder.cs` | `EntityBuilder` | Constructs and updates the JSON-LD registration entities (`RegistrationIndex`, `RegistrationPage`, `RegistrationLeaf`, `RegistrationLeafItem`). Handles URL generation, dependency registration links, deprecation (SemVer2 only), vulnerability data (SemVer2 only), icon URLs (via flat container), and license/readme URLs (via gallery). |
+| `Schema/RegistrationUrlBuilder.cs` | `RegistrationUrlBuilder` | Generates and converts blob paths and public-facing URLs for index, page (inlined and non-inlined), and leaf resources across all three hives. |
+| `Schema/JsonLdConstants.cs` | `JsonLdConstants` | Defines the JSON-LD `@context` objects and type strings used in every registration blob (`catalog:CatalogRoot`, `PackageRegistration`, `catalog:CatalogPage`, etc.). |
+| `Scripts/` | PowerShell | Deployment scripts (`PreDeploy.ps1`, `PostDeploy.ps1`, `Functions.ps1`) and `nssm.exe` for running the job as a Windows service. |
+
+## Dependencies
+
+### NuGet Package References
+
+The project itself declares no direct NuGet package references; all external packages are pulled in transitively through the two internal project references below. The most significant transitive dependencies include:
+
+| Package | Purpose |
+|---------|---------|
+| `WindowsAzure.Storage` | Azure Blob Storage client used by `HiveStorage` and cursor storage. |
+| `Azure.Storage.Blobs` / `Azure.Identity` | Used in `DependencyInjectionExtensions` for managed identity authentication via `BlobServiceClientFactory` and `ManagedIdentityCredential`. |
+| `Autofac` / `Autofac.Extensions.DependencyInjection` | IoC container; keyed registrations isolate cursor storage from product storage. |
+| `Microsoft.Extensions.Options` | Strongly-typed configuration via `IOptionsSnapshot<Catalog2RegistrationConfiguration>`. |
+| `Newtonsoft.Json` | JSON serialization of registration blobs in `HiveStorage`. |
+| `NuGet.Versioning` | `NuGetVersion` parsing and comparison throughout the merge algorithm. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | Provides `JsonConfigurationJob`, `JobRunner`, `CommitCollectorConfiguration`, and Azure Storage helpers (`StorageAccountExtensions`, `DefaultBlobRequestOptions`). |
+| `NuGet.Services.V3` | Provides `CommitCollectorHost` (the catalog polling loop), `CommitCollectorUtility` (batch grouping helpers), `ICommitCollectorLogic`, `ICollector`, and DI extensions (`AddV3`). Also transitively pulls in `NuGet.Services.Metadata.Catalog` (catalog client, `AzureStorageFactory`) and `Validation.Common.Job`. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  The Gzipped hive is a replica of the Legacy hive. In `RegistrationUpdater`, the `HiveToReplicaHives` dictionary maps `HiveType.Legacy` to `[HiveType.Gzipped]` and `HiveType.SemVer2` to an empty list. When `HiveStorage.WriteAsync` is called, it iterates the primary hive plus its replicas, rewrites the entity's internal URLs for each target hive using `EntityBuilder.UpdateIndexUrls` / `UpdatePageUrls` / `UpdateLeafUrls`, serializes and writes in parallel, then restores the original URLs so the caller sees no side effects.
+</Note>
+
+<Note>
+  SemVer 2.0.0 packages are excluded from the Legacy and Gzipped hives. `HiveUpdater` detects this by checking `PackageDetailsCatalogLeaf.IsSemVer2()` on incoming items. When a SemVer 2 package is found heading to a non-SemVer2 hive, its catalog commit item is replaced with a synthetic `PackageDelete` entry before the merge, ensuring that any previously stored version is removed without requiring a separate deletion flow.
+</Note>
+
+<Tip>
+  The page inlining threshold (`MaxInlinedLeafItems = 127`) and page size cap (`MaxLeavesPerPage = 64`) are configurable. When a package crosses the inlining threshold (e.g., after a new version push), `HiveUpdater` converts all previously inlined pages to external blob pages in a single pass. Going in the other direction (versions deleted until the package falls below the threshold) converts external pages back to inlined form. This transition is handled transparently by `PageInfo.CloneToInlinedAsync` and `CloneToNonInlinedAsync`.
+</Tip>
+
+<Note>
+  Every blob write optionally ensures at least one Azure snapshot exists for the blob (`EnsureSingleSnapshot = true` by default). After uploading a blob, `HiveStorage` lists the blob with snapshot details and creates a snapshot if none is present. This provides a recovery point against accidental deletion via tooling such as Azure Storage Explorer without using soft-delete.
+</Note>
+
+<Warning>
+  The concurrent storage operation throttle (`MaxConcurrentStorageOperations = 64`) is a single `SemaphoreSlimThrottle` shared across all hive writers within a single job run. All reads, writes, and deletes in `HiveStorage` acquire and release this throttle. Because the job can also process up to 64 package IDs in parallel (`MaxConcurrentIds`) and up to 64 operations per hive (`MaxConcurrentOperationsPerHive`), the throttle is the binding constraint that prevents Azure Storage from being overwhelmed.
+</Warning>
+
+<Tip>
+  Deprecation and vulnerability metadata are intentionally omitted from the Legacy and Gzipped hives—they are only written to the SemVer2 hive. This is enforced in `EntityBuilder.UpdateCatalogEntry` by setting `catalogEntry.Deprecation = null` and `catalogEntry.Vulnerabilities = null` for those hive types.
+</Tip>

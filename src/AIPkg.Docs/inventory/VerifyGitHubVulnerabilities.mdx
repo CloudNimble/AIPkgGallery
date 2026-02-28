@@ -1,0 +1,135 @@
+---
+title: VerifyGitHubVulnerabilities
+sidebarTitle: VerifyGitHubVulnerabilities
+description: A monitoring job that cross-checks GitHub's NuGet security advisories against the NuGet Gallery database and V3 registration metadata, reporting any discrepancies without making mutations.
+icon: shield-check
+---
+
+## Overview
+
+`VerifyGitHubVulnerabilities` is a recurring, read-only monitoring job that ensures the NuGet Gallery's vulnerability data stays in sync with GitHub's Security Advisory Database. It fetches every advisory tagged for the `NUGET` ecosystem via GraphQL, then walks through the same ingestion pipeline used by `GitHubVulnerabilities2Db` — but instead of writing to the database it compares what _should_ be there against what _is_ there and logs errors for every mismatch.
+
+<Note>
+  This job is intentionally side-effect-free. It opens the Gallery database in **read-only** mode and never writes to SQL, Azure Blob Storage, or any other persistent store. Its only outputs are structured log entries and Application Insights metrics.
+</Note>
+
+The two verification passes are independently toggleable:
+
+- **Database verification** — checks that every advisory exists in the `PackageVulnerabilities` table with the correct severity, advisory URL, and per-version `VulnerablePackageRanges` linkage.
+- **Registration metadata verification** — fetches NuGet V3 registration blobs for each affected package and confirms that every version in a vulnerable range carries the correct `vulnerabilities` array, and that no out-of-range version is incorrectly tagged.
+
+---
+
+## Role in the NuGet Gallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="GitHubVulnerabilities2Db" icon="database">
+    Sibling job that actually ingests GitHub advisories into the Gallery SQL database. VerifyGitHubVulnerabilities reuses its GraphQL query layer and ingestion pipeline but substitutes a verifying visitor for the writer.
+  </Card>
+  <Card title="NuGet Gallery (Web)" icon="globe">
+    Consumes the vulnerability records that this job monitors. Discrepancies reported here indicate that package detail pages or V3 feeds may be serving incorrect security data.
+  </Card>
+  <Card title="GitHub Security Advisory API" icon="github">
+    Authoritative source of truth. Queried in full on every run (since epoch) using the same GraphQL query as the ingest job.
+  </Card>
+  <Card title="NuGet V3 Registration Blobs" icon="layers">
+    The second verification target. The job uses `NuGet.Protocol` to download package metadata and inspect the embedded vulnerability arrays directly from CDN-served blobs.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Console entry point; bootstraps `JobRunner` from `NuGet.Jobs`. |
+| `Job.cs` | `Job : JsonConfigurationJob` | Orchestrates the full run: queries GitHub, drives ingestion/verification, emits Application Insights metrics. |
+| `Configuration/VerifyGitHubVulnerabilitiesConfiguration.cs` | `VerifyGitHubVulnerabilitiesConfiguration` | Extends `GraphQLQueryConfiguration` with `NuGetV3Index`, `VerifyDatabase`, and `VerifyRegistrationMetadata` flags. |
+| `Verify/IPackageVulnerabilitiesVerifier.cs` | `IPackageVulnerabilitiesVerifier` | Extends `IPackageVulnerabilitiesManagementService` with a `HasErrors` flag so the job can emit a binary pass/fail metric. |
+| `Verify/PackageVulnerabilitiesVerifier.cs` | `PackageVulnerabilitiesVerifier` | Core verification engine. Implements both DB and registration-metadata checks; registered as `SingleInstance` in Autofac to accumulate the `HasErrors` flag across all advisories. |
+| `Scripts/Functions.ps1` | — | PowerShell helpers (`Install-NuGetService` / `Uninstall-NuGetService`) used by deploy scripts to manage the Windows service via NSSM. |
+| `Scripts/PreDeploy.ps1` / `PostDeploy.ps1` | — | NSSM-based Windows service lifecycle hooks for blue/green deployment. |
+
+---
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `GitHubVulnerabilities2Db` | Provides the shared GitHub GraphQL query layer (`IAdvisoryQueryService`, `IAdvisoryIngestor`, `AdvisoryQueryBuilder`, `GalleryDbVulnerabilityWriter`, `GitHubVersionRangeParser`) and Gallery DB access stubs. |
+| `NuGet.Jobs.Common` | Base class `JsonConfigurationJob`, `JobRunner`, Key Vault integration, and `GalleryDbConfiguration` SQL connection helpers. |
+
+### NuGet / Framework Dependencies (resolved transitively)
+
+| Package / Namespace | Purpose |
+|--------------------|---------|
+| `Autofac` | IoC container; all services registered in `ConfigureAutofacServices`. |
+| `Microsoft.Extensions.Configuration` | Reads `appsettings.json` and Key Vault secrets. |
+| `Microsoft.Extensions.Logging` | Structured logging throughout; errors are the primary signal. |
+| `NuGet.Protocol` / `NuGet.Protocol.Core.Types` | Downloads V3 registration metadata (`PackageMetadataResource`) to verify vulnerability arrays in blobs. |
+| `NuGet.Versioning` | Parses `VersionRange` and `NuGetVersion` strings to determine which package versions fall within a vulnerable range. |
+| `NuGet.Services.Logging` | `ITelemetryClient` used to emit `DataIsConsistent` / `DataIsInconsistent` metrics to Application Insights. |
+| `System.Data.Entity` (EF6) | `Include`-based eager loading of `Vulnerabilities` and `AffectedRanges` from the Gallery DB. |
+| Target framework: `net472` | Full .NET Framework 4.7.2, required for compatibility with the shared Gallery EF6 context. |
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **Dual-registration pattern for the verifier.** `PackageVulnerabilitiesVerifier` is registered in Autofac as both `IPackageVulnerabilitiesManagementService` (the interface the ingestion pipeline calls) and `IPackageVulnerabilitiesVerifier` (the interface the job checks for `HasErrors`). The `SingleInstance()` lifetime ensures the same object accumulates errors across the entire advisory set before `Job.Run` inspects it.
+</Note>
+
+<Note>
+  **Full advisory scan on every run.** Unlike incremental ingestion jobs, `GetAdvisoriesSinceAsync` is called with `DateTimeOffset.MinValue`, meaning the entire GitHub NuGet advisory corpus is fetched and verified on every execution. This is intentional — the goal is a complete consistency check, not delta processing.
+</Note>
+
+<Warning>
+  **Withdrawn advisory check is DB-only.** The job explicitly skips registration-metadata verification for withdrawn advisories. Verifying withdrawals in metadata would require downloading every package/version blob to confirm absence — impractical at scale. Database coverage is considered sufficient for withdrawn entries.
+</Warning>
+
+<Warning>
+  **`ApplyExistingVulnerabilitiesToPackage` is not implemented.** This method from `IPackageVulnerabilitiesManagementService` throws `NotImplementedException`. It is never called during normal verification flow; the interface is implemented solely to satisfy the shared ingestion pipeline contract.
+</Warning>
+
+<Note>
+  **Thread-safe metadata caching via `SemaphoreSlim`.** `PackageVulnerabilitiesVerifier` fans out verification tasks concurrently per advisory but serializes V3 metadata fetches with a static `SemaphoreSlim(1)` and a `Dictionary` cache keyed on `packageId`. This avoids redundant HTTP calls when multiple advisories affect the same package while remaining safe under `Task.WhenAll` parallelism.
+</Note>
+
+<Tip>
+  **Incoming package ID whitespace.** GitHub advisory data can include leading or trailing spaces in package IDs. The verifier trims these (`range.PackageId.Trim(' ')`) before grouping ranges for metadata verification, preventing phantom cache misses and false-positive error reports.
+</Tip>
+
+---
+
+## Running Locally
+
+```bash
+VerifyGitHubVulnerabilities.exe \
+  -Configuration appsettings.json \
+  -InstrumentationKey <key> \
+  -HeartbeatIntervalSeconds 60
+```
+
+Minimal `appsettings.json`:
+
+```json
+{
+  "GalleryDb": {
+    "ConnectionString": "<Gallery SQL connection string>"
+  },
+  "Initialization": {
+    "GitHubPersonalAccessToken": "<GitHub PAT>",
+    "NuGetV3Index": "https://api.nuget.org/v3/index.json"
+  },
+  "KeyVault_VaultName": "<vault name>",
+  "KeyVault_UseManagedIdentity": true
+}
+```
+
+<Note>
+  The Microsoft Entra ID client certificate for the app registration must be installed in the `CurrentUser` certificate store before running. Key Vault secrets (including the GitHub PAT) are resolved at startup via managed identity or the installed certificate.
+</Note>

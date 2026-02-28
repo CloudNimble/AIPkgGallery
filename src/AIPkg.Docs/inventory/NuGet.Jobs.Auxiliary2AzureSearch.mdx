@@ -1,0 +1,119 @@
+---
+title: "NuGet.Jobs.Auxiliary2AzureSearch"
+sidebarTitle: "Auxiliary2AzureSearch"
+description: "Background job that synchronizes search auxiliary files and Azure Search index documents for downloads, owners, and verified packages."
+icon: "refresh-cw"
+---
+
+## Overview
+
+`NuGet.Jobs.Auxiliary2AzureSearch` is a scheduled background job that keeps the NuGet.org Azure Search "search" index and its associated auxiliary files in sync with the current state of the Gallery database and the statistics pipeline. It runs continuously as a singleton Windows service and performs three incremental update passes on every execution:
+
+1. **Verified packages** — updates `verified-packages/verified-packages.v1.json` in Blob Storage when the set of prefix-reserved package IDs changes.
+2. **Downloads** — fetches the latest `downloads.v1.json` from the statistics pipeline URL, diffs it against the previously indexed copy, applies popularity-transfer adjustments, and pushes changed download counts to the Azure Search "search" index in parallel batches.
+3. **Owners** — fetches the current owner map from Gallery DB, diffs it against the previously indexed copy, pushes changed owner arrays to the "search" index, and appends a timestamped change-history file to Blob Storage for audit purposes.
+
+<Note>
+This job is a singleton. Only one instance must run per Azure Search resource at any given time. Running multiple instances against the same resource will cause conflicting writes and data corruption.
+</Note>
+
+## Role in the System
+
+<CardGroup cols={2}>
+  <Card title="Search Subsystem" icon="search">
+    Feeds real-time download counts, owner lists, and verified-package flags into the Azure Search "search" index so that `NuGet.Services.SearchService` can surface accurate metadata without querying the Gallery database on every request.
+  </Card>
+  <Card title="Auxiliary File Store" icon="database">
+    Maintains the canonical copies of the four search auxiliary files in Azure Blob Storage (`downloads.v2.json`, `owners.v2.json`, `verified-packages.v1.json`, `popularity-transfers.v1.json`).
+  </Card>
+  <Card title="Statistics Bridge" icon="bar-chart-2">
+    Bridges the statistics pipeline (which produces `downloads.v1.json` at a public URL) into the Azure Search index, applying popularity-transfer scoring adjustments as configured.
+  </Card>
+  <Card title="Prerequisite: Db2AzureSearch" icon="arrow-right">
+    Requires `NuGet.Jobs.Db2AzureSearch` to have performed the initial full index population. Auxiliary2AzureSearch only handles incremental updates from that baseline forward.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File Path | Class | Purpose |
+|-----------|-------|---------|
+| `Program.cs` | `Program` | Entry point; delegates to `JobRunner.Run` |
+| `Job.cs` | `Job` | Registers DI services; binds `Auxiliary2AzureSearchConfiguration` and the `DownloadsV1JsonClient` |
+| `Auxiliary2AzureSearchCommand.cs` | `Auxiliary2AzureSearchCommand` | Orchestrator; runs the three sub-commands in sequence and emits an end-to-end telemetry event |
+| `UpdateVerifiedPackagesCommand.cs` | `UpdateVerifiedPackagesCommand` | Diffs old vs new verified-package sets via symmetric-except; replaces the blob only when changed |
+| `UpdateDownloadsCommand.cs` | `UpdateDownloadsCommand` | Core download-sync logic: fetches, cleans, diffs, applies popularity transfers, batches and pushes to Azure Search |
+| `UpdateOwnersCommand.cs` | `UpdateOwnersCommand` | Diffs owner sets, pushes changed owner arrays to Azure Search, persists a change-history blob, replaces `owners.v2.json` |
+| `DataSetComparer.cs` | `DataSetComparer` | Generic two-pass set comparer used for owner and popularity-transfer diffs |
+| `DownloadSetComparer.cs` | `DownloadSetComparer` | Compares old vs new download counts; enforces `MaxDownloadCountDecreases` guard to prevent corrupt statistics from wiping download history |
+| `Auxiliary2AzureSearchConfiguration.cs` | `Auxiliary2AzureSearchConfiguration` | Configuration POCO — extends `AzureSearchJobConfiguration` with `DownloadsV1JsonUrl`, `MinPushPeriod`, and `MaxDownloadCountDecreases` |
+| `Scripts/Functions.ps1` | — | PowerShell helpers for installing/uninstalling the job as a Windows service via NSSM |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | `JobRunner`, `AzureSearchJob<T>`, `IAzureSearchCommand` base infrastructure |
+| `NuGet.Services.AzureSearch` | All Auxiliary2AzureSearch command implementations, auxiliary-file clients, `IBatchPusher`, telemetry service |
+
+### Key NuGet Package Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `NuGet.Packaging` | `PackageIdValidator` used to clean invalid IDs from download data |
+| `NuGet.Versioning` | `NuGetVersion` parsing and normalization during download-data cleaning |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<Auxiliary2AzureSearchConfiguration>` for runtime config |
+
+<Note>
+The project targets **net472** and produces a console executable. It is deployed as a Windows service using NSSM (Non-Sucking Service Manager), bundled as `Scripts/nssm.exe`.
+</Note>
+
+## Configuration Reference
+
+```json
+{
+  "Auxiliary2AzureSearch": {
+    "AzureSearchBatchSize": 1000,
+    "MaxConcurrentBatches": 1,
+    "MaxConcurrentVersionListWriters": 32,
+    "SearchServiceName": "<azure-search-resource-name>",
+    "SearchServiceApiKey": "<admin-key>",
+    "SearchIndexName": "search-000",
+    "HijackIndexName": "hijack-000",
+    "StorageConnectionString": "<blob-storage-connection-string>",
+    "StorageContainer": "v3-azuresearch-000",
+    "DownloadsV1JsonUrl": "<statistics-pipeline-url>",
+    "MinPushPeriod": "00:00:10",
+    "MaxDownloadCountDecreases": 30000,
+    "EnablePopularityTransfers": true
+  }
+}
+```
+
+## Notable Patterns and Implementation Details
+
+<Warning>
+`MaxDownloadCountDecreases` (default: 15,000; recommended production value: 30,000) is a safety guard in `DownloadSetComparer`. If the number of packages whose download count would *decrease* exceeds this threshold, the job aborts the download update to prevent a corrupted statistics file from zeroing out counts across the catalog. Setting it too low causes false-positive aborts during legitimate statistics reprocessing.
+</Warning>
+
+<Note>
+**Popularity transfers are double-gated.** `UpdateDownloadsCommand` checks both the `EnablePopularityTransfers` configuration property *and* the `IFeatureFlagService` runtime flag. If either is disabled, all transfers are treated as empty, effectively removing any previously applied transfer boosts on the next run.
+</Note>
+
+<Tip>
+`UpdateDownloadsCommand` uses a two-level batching strategy: it groups package IDs for parallel version list fetching (controlled by `MaxConcurrentVersionListWriters`), then groups resulting index actions into batches no larger than `AzureSearchBatchSize`. A `MinPushPeriod` delay between pushes throttles write pressure on the search service.
+</Tip>
+
+<Note>
+`DataSetComparer.CompareOwners` uses **ordinal** string comparison for owner usernames (not ordinal-ignore-case) so that a username case change is correctly detected as a change and propagated to the index. Popularity-transfer comparisons use ordinal-ignore-case because casing changes in package IDs are considered insignificant there.
+</Note>
+
+<Note>
+Owner change-history files are written to `owners/changes/TIMESTAMP.json` with a path timestamp formatted as `yyyy-MM-dd-HH-mm-ss-FFFFFFF` (UTC). These files are append-only and exist solely for future forensic and auditing purposes. They intentionally omit owner usernames to comply with GDPR requirements.
+</Note>
+
+<Warning>
+The `ExcludedPackages.v1.json` auxiliary file is **not** updated by this job. It is managed manually and only consumed during a full index rebuild by `Db2AzureSearch`. Any change to the excluded-packages list requires triggering a full rebuild.
+</Warning>

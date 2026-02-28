@@ -1,0 +1,108 @@
+---
+title: NuGet.Services.Sql
+sidebarTitle: Services.Sql
+description: Provides Azure SQL connection factory abstractions with Entra ID (AAD) certificate-based authentication and an in-process access token cache for NuGet services.
+icon: database
+---
+
+## Overview
+
+`NuGet.Services.Sql` is a small shared library whose single responsibility is producing authenticated `SqlConnection` instances for Azure SQL databases. When a database is configured for Entra ID (Azure AD) token-based authentication, the library acquires a bearer token from the identity platform using a certificate stored in Azure Key Vault and attaches it to the connection instead of relying on a SQL username and password.
+
+The central class is `AzureSqlConnectionFactory`, which implements `ISqlConnectionFactory`. It wraps an `AzureSqlConnectionStringBuilder` that parses three custom connection string properties (`AadTenant`, `AadClientId`, `AadCertificate`) and strips them from the string before handing the remainder to the standard `SqlConnectionStringBuilder`. At connection time the factory asks an `ICachingSecretInjector` (from `NuGet.Services.KeyVault`) to resolve any `$$secretName$$` placeholders in the connection string and certificate fields, then acquires a token through the static `AccessTokenCache`.
+
+Token lifecycle is managed entirely within `AccessTokenCache`, which holds tokens in a `ConcurrentDictionary` keyed by the raw connection string. Tokens are considered valid until five minutes before their issued expiry. When a token is within thirty minutes of expiry, or when the Key Vault certificate data has changed (indicating a rotation), a non-blocking background refresh is triggered via `Task.Run` so callers are never blocked on a re-authentication round trip. A `SemaphoreSlim` ensures only one refresh request is in flight at a time regardless of concurrency.
+
+## Role in System
+
+```
+Caller (e.g. NuGet.Jobs.Common, NuGetGallery, NuGet.Services.Metadata.Catalog)
+        │
+        │  AzureSqlConnectionFactory.CreateAsync() / OpenAsync() / TryCreate()
+        ▼
+   AzureSqlConnectionFactory
+        │
+        ├─► ICachingSecretInjector (NuGet.Services.KeyVault)
+        │       Resolves $$placeholders$$ in connection string and certificate field
+        │
+        └─► AccessTokenCache  [static, shared per factory instance]
+                │
+                ├─ ConcurrentDictionary: connection string → AccessTokenCacheValue
+                │       AccessTokenCacheValue holds IAuthenticationResult + cert fingerprint
+                │
+                └─► Microsoft.Identity.Client (MSAL)
+                        ConfidentialClientApplication with X509Certificate2
+                        Scope: https://database.windows.net/.default
+                        │
+                        ▼
+                    Entra ID token endpoint
+                        │
+                        ▼
+                    SqlConnection.AccessToken = bearer token
+```
+
+<CardGroup cols={2}>
+  <Card title="AAD Token Authentication" icon="shield-check">
+    When `AadTenant`, `AadClientId`, and `AadCertificate` are present in the connection string, the factory acquires an OAuth 2.0 bearer token scoped to `https://database.windows.net/.default` and sets it on `SqlConnection.AccessToken`, replacing SQL password authentication entirely.
+  </Card>
+  <Card title="In-Process Token Cache" icon="clock">
+    `AccessTokenCache` caches tokens in a static `ConcurrentDictionary`. Cached tokens are served immediately; tokens expiring within 30 minutes trigger a background refresh with a 250 ms lock timeout so callers are never delayed. Tokens expiring within 5 minutes trigger a blocking foreground refresh with a 6 second timeout.
+  </Card>
+  <Card title="Certificate Rotation Awareness" icon="refresh-cw">
+    On every connection attempt the factory compares the current Key Vault certificate data against the value stored with the cached token. A mismatch triggers a background refresh of both the token and the client assertion, allowing zero-downtime certificate rotation as long as the old certificate remains valid during the overlap period.
+  </Card>
+  <Card title="Sync and Async Paths" icon="split">
+    `ISqlConnectionFactory` exposes both `TryCreate` (sync, non-blocking, returns `false` if cached secrets are unavailable) and `CreateAsync`/`OpenAsync` (async, always resolves secrets from Key Vault if needed). The sync path is intended for callers that cannot await and accept a graceful degradation.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `ISqlConnectionFactory.cs` | `ISqlConnectionFactory` (interface) | Public contract exposing `ApplicationName`, `DataSource`, `InitialCatalog`, `TryCreate`, `CreateAsync`, and `OpenAsync`. Consumed by callers in `NuGet.Jobs.Common`, `NuGetGallery`, and the Catalog project. |
+| `AzureSqlConnectionFactory.cs` | `AzureSqlConnectionFactory` | Primary implementation. Holds a static `AccessTokenCache`, an `AzureSqlConnectionStringBuilder`, and an `ICachingSecretInjector`. Resolves secrets and delegates token acquisition to the cache on every connection request. |
+| `AzureSqlConnectionStringBuilder.cs` | `AzureSqlConnectionStringBuilder` | Extends `DbConnectionStringBuilder`. Parses and removes the custom `AadTenant`, `AadClientId`, `AadCertificate`, and `AadSendX5c` keys, constructs the Entra ID authority URL, and exposes the remainder through an inner `SqlConnectionStringBuilder`. |
+| `AccessTokenCache.cs` | `AccessTokenCache` (internal) | Thread-safe in-process cache of MSAL `AuthenticationResult` values. Implements foreground and background refresh with `SemaphoreSlim`, expiry checks, and certificate-change detection. Uses MSAL `ConfidentialClientApplicationBuilder` with an `X509Certificate2` to call the token endpoint. |
+| `AccessTokenCacheValue.cs` | `AccessTokenCacheValue` (internal) | Simple value type that pairs an `IAuthenticationResult` with the raw Base64 certificate data used to obtain it, enabling certificate-change detection on subsequent requests. |
+| `IAuthenticationResult.cs` | `IAuthenticationResult` (interface) | Public interface exposing `AccessToken` (string) and `ExpiresOn` (DateTimeOffset). Allows testability of the cache without depending directly on the MSAL `AuthenticationResult` class. |
+| `AuthenticationResultWrapper.cs` | `AuthenticationResultWrapper` (internal) | `IAuthenticationResult` adapter over the MSAL `AuthenticationResult` concrete type. Created inside `AccessTokenCacheValue` when a real token is acquired. |
+| `Properties/AssemblyInfo.cs` | — | Grants `InternalsVisibleTo` access to `NuGet.Services.Sql.Tests`, with a strong-name public key for signed builds. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.Identity.Client` | MSAL library used by `AccessTokenCache` to build a `ConfidentialClientApplication` and acquire tokens via the client-credentials flow with a certificate. |
+| `Microsoft.Extensions.Logging.Abstractions` | `ILogger` parameter accepted throughout the factory and cache for structured diagnostic logging of token refresh latency, errors, and cache hits. |
+| `System.Data.SqlClient` *(netstandard2.0 only)* | ADO.NET SQL client providing `SqlConnection` and `SqlConnectionStringBuilder`. On `net472` the in-box framework assembly is used instead. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.KeyVault` | Provides `ICachingSecretInjector`, which resolves `$$secretName$$` placeholders in the connection string and certificate field by reading from Azure Key Vault, with its own caching layer. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**AAD authentication is opt-in per connection string.** If `AadTenant` is absent from the connection string, `AzureSqlConnectionFactory` skips all token acquisition and creates a `SqlConnection` using the plain connection string. This means the same factory class works for both traditional SQL authentication and Entra ID token authentication, controlled entirely by the connection string configuration.
+</Note>
+
+<Note>
+**The `AccessTokenCache` is a static field on `AzureSqlConnectionFactory`.** All instances of `AzureSqlConnectionFactory` within the same process share one cache, keyed by the raw connection string. Long-lived factory instances (e.g. registered as singletons) are required for the cache to provide value across requests.
+</Note>
+
+<Warning>
+**Certificate loading fails on Azure App Service without `WEBSITE_LOAD_USER_PROFILE=1`.** The `X509Certificate2` constructor called inside `AcquireAccessTokenAsync` requires access to the user profile's cryptographic store. On Azure App Service, the worker process runs without a loaded user profile by default, causing the certificate load to throw `"The system cannot find the file specified."` This must be worked around by setting the `WEBSITE_LOAD_USER_PROFILE=1` application setting on the App Service resource.
+</Warning>
+
+<Tip>
+**`AadSendX5c` controls whether the full certificate chain is sent in the token request.** It defaults to `true`. Setting it to `false` in the connection string passes the flag directly to MSAL's `WithCertificate(certificate, sendX5c: false)`, which omits the X.509 chain from the client assertion JWT header. This is relevant when the issuing CA is not publicly trusted and Entra ID must validate the full chain.
+</Tip>
+
+<Tip>
+**Background refresh uses a 250 ms lock timeout to remain non-blocking.** When a token is near expiry or the certificate has rotated, `TriggerBackgroundRefresh` fires a `Task.Run` that waits at most 250 ms for the `SemaphoreSlim`. If another refresh is already in flight it silently gives up, relying on that concurrent refresh to update the cache. The foreground path (first acquisition or fully expired token) waits up to 6000 ms before failing.
+</Tip>

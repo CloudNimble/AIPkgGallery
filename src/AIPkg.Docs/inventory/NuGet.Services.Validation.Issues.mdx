@@ -1,0 +1,119 @@
+---
+title: NuGet.Services.Validation.Issues
+sidebarTitle: Validation Issues
+description: Strongly-typed, JSON-serializable validation issue types surfaced to users when NuGet package or symbol validation fails.
+icon: triangle-alert
+---
+
+## Overview
+
+`NuGet.Services.Validation.Issues` is a small, focused library that defines the concrete validation issue types reported when the NuGet pipeline rejects a package or symbol upload. Each issue carries a `ValidationIssueCode` (an integer enum) plus any structured contextual data needed to render a meaningful error message to the package author.
+
+The library targets both `net472` and `netstandard2.0`, allowing it to be consumed by full-framework Gallery web services and .NET Standard validation worker processes alike.
+
+## Role in the System
+
+<CardGroup cols={2}>
+  <Card title="Produced by validators" icon="shield-check">
+    Signing, symbol, and policy validators create `ValidationIssue` instances and persist them (code + serialized JSON data) to the validation database.
+  </Card>
+  <Card title="Consumed by the Gallery" icon="globe">
+    NuGetGallery reads persisted issue records and calls `ValidationIssue.Deserialize` to reconstruct typed objects for display on the package page.
+  </Card>
+  <Card title="Contract boundary" icon="handshake">
+    Sits between `NuGet.Services.Contracts` (which owns `IValidationIssue` and `ValidationIssueCode`) and any service that needs to produce or render rich error payloads.
+  </Card>
+  <Card title="Multi-framework shared library" icon="layers">
+    Dual-targets `net472` + `netstandard2.0` so it can be referenced by both legacy ASP.NET Gallery code and modern worker services without forking.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `ValidationIssue.cs` | `ValidationIssue` (abstract) | Base class; owns static singleton instances for no-data issues, the `IssueCodeTypes` dispatch map, and the `Deserialize` / `Serialize` methods. |
+| `NoDataValidationIssue.cs` | `NoDataValidationIssue` | Sealed concrete type for all issue codes that carry no additional payload (e.g. `PackageIsSigned`, `PackageIsZip64`, all symbol error codes). |
+| `ClientSigningVerificationFailure.cs` | `ClientSigningVerificationFailure` | Carries a `ClientCode` and `ClientMessage` forwarded verbatim from the NuGet client signing APIs; JSON-compact properties `"c"` and `"m"`. |
+| `UnauthorizedCertificateFailure.cs` | `UnauthorizedCertificateFailure` | Carries the SHA-256 thumbprint of the certificate that was rejected; JSON-compact property `"t"`. |
+| `ObsoleteTestingIssue.cs` | `ObsoleteTestingIssue` | `[Obsolete]` type used only in tests; maps to `ValidationIssueCode.ObsoleteTesting = 9999`. |
+| `Properties/AssemblyInfo.cs` | — | Grants `InternalsVisibleTo` for the test project; supports both signed and unsigned builds via `#if SIGNED_BUILD`. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Newtonsoft.Json` | JSON serialization and deserialization of issue payload data via `JsonConvert`, `[JsonProperty]`, and `[JsonConstructor]`. |
+
+### Internal Project References
+
+| Project | What it provides |
+|---------|-----------------|
+| `NuGet.Services.Contracts` | `IValidationIssue` interface and the `ValidationIssueCode` enum (integer codes 0–9 for package issues, 250–254 for symbol issues, 9999 for obsolete testing). |
+
+## Issue Code Reference
+
+| Code | Value | Class | Has Payload |
+|------|-------|-------|-------------|
+| `Unknown` | 0 | `NoDataValidationIssue` | No |
+| `PackageIsSigned` | 1 | `NoDataValidationIssue` | No |
+| `ClientSigningVerificationFailure` | 2 | `ClientSigningVerificationFailure` | Yes — client code + message |
+| `PackageIsZip64` | 3 | `NoDataValidationIssue` | No |
+| `OnlyAuthorSignaturesSupported` | 4 | `NoDataValidationIssue` | No |
+| `AuthorAndRepositoryCounterSignaturesNotSupported` | 5 | `NoDataValidationIssue` | No |
+| `OnlySignatureFormatVersion1Supported` | 6 | `NoDataValidationIssue` | No |
+| `AuthorCounterSignaturesNotSupported` | 7 | `NoDataValidationIssue` | No |
+| `PackageIsNotSigned` | 8 | `NoDataValidationIssue` | No |
+| `PackageIsSignedWithUnauthorizedCertificate` | 9 | `UnauthorizedCertificateFailure` | Yes — SHA-256 thumbprint |
+| `SymbolErrorCode_ChecksumDoesNotMatch` | 250 | `NoDataValidationIssue` | No |
+| `SymbolErrorCode_MatchingAssemblyNotFound` | 251 | `NoDataValidationIssue` | No |
+| `SymbolErrorCode_PdbIsNotPortable` | 252 | `NoDataValidationIssue` | No |
+| `SymbolErrorCode_SnupkgDoesNotContainSymbols` | 253 | `NoDataValidationIssue` | No |
+| `SymbolErrorCode_SnupkgContainsEntriesNotSafeForExtraction` | 254 | `NoDataValidationIssue` | No |
+| `ObsoleteTesting` _(obsolete)_ | 9999 | `ObsoleteTestingIssue` | Yes — test fields A, B |
+
+## Serialization Pattern
+
+Issues are persisted as two separate columns: the integer `ValidationIssueCode` and a JSON `data` string. The base class controls the full round-trip:
+
+```csharp
+// Serialize (called by validators before writing to DB)
+string json = issue.Serialize(); // => JsonConvert.SerializeObject(this)
+
+// Deserialize (called by Gallery when reading from DB)
+ValidationIssue issue = ValidationIssue.Deserialize(errorCode, json);
+```
+
+JSON property names on payload-bearing types are intentionally abbreviated to reduce storage size:
+
+```json
+// ClientSigningVerificationFailure
+{ "c": "NU3008", "m": "The package integrity check failed." }
+
+// UnauthorizedCertificateFailure
+{ "t": "A1B2C3...SHA256thumbprint..." }
+```
+
+<Note>
+`NoDataValidationIssue` is **not** constructed via JSON deserialization. Its instances are either the pre-built static singletons on `ValidationIssue` or constructed directly from an issue code. The `IssueCodesWithNoData` set acts as a fast-path gate in `Deserialize` to skip JSON parsing entirely for these codes.
+</Note>
+
+## Notable Patterns and Quirks
+
+<Note>
+The dispatch map `IssueCodeTypes` only contains entries for issue codes that have a custom payload class. All other codes fall through to the `IssueCodesWithNoData` fast path or resolve to `ValidationIssue.Unknown`. Adding a new payload-bearing issue requires updating **both** `IssueCodeTypes` and `ValidationIssueCode` in the contracts project.
+</Note>
+
+<Warning>
+`ValidationIssue.Deserialize` silently swallows all `JsonException` errors and returns `ValidationIssue.Unknown`. This means a corrupt or schema-mismatched payload stored in the database will surface to users as a generic "unknown issue" rather than an exception. Validate payload schemas carefully before persisting.
+</Warning>
+
+<Warning>
+`ObsoleteTestingIssue` and `ValidationIssueCode.ObsoleteTesting` are decorated with `[Obsolete]` and guarded by `#pragma warning disable 618` at every reference site. They exist solely to enable round-trip serialization tests. Do not use them in production validation logic.
+</Warning>
+
+<Tip>
+Symbol error codes are deliberately clustered in the 250–254 range (reserving 200–299 for future symbol issues) and map exclusively to `NoDataValidationIssue`. This makes it straightforward to detect all symbol-related failures with a simple range check on the integer code value.
+</Tip>

@@ -1,0 +1,585 @@
+---
+title: "Metadata Schema"
+sidebarTitle: "03 · Metadata Schema"
+description: "Full JSON Schema for the `.aispec` manifest file, field-by-field reference, capability and permission enums, worked examples, and validation rules."
+icon: "file-code"
+---
+
+The `.aispec` file is a UTF-8 JSON document stored at the root of an `.aipkg` archive. It describes the package's identity, metadata, capabilities, targeting, dependencies, and embedded assets. It corresponds to NuGet's `.nuspec` but uses JSON instead of XML and contains AIpkg-specific fields.
+
+<Note>
+  File naming: `{id}.aispec` — the filename must match the `id` field inside the manifest.
+</Note>
+
+---
+
+## JSON Schema
+
+```json
+{
+  "$schema": "https://aipkg.org/schemas/aispec/1.0.0",
+  "type": "object",
+  "required": ["schema", "id", "version", "description", "authors", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+
+    "schema": {
+      "type": "string",
+      "description": "Schema version URI. Must be 'https://aipkg.org/schemas/aispec/1.0.0'.",
+      "const": "https://aipkg.org/schemas/aispec/1.0.0"
+    },
+
+    "id": {
+      "type": "string",
+      "description": "Package identifier. Lowercase, alphanumeric, hyphens and dots only. Must match the filename ({id}.aispec).",
+      "pattern": "^[a-z][a-z0-9\\-\\.]{0,127}$",
+      "maxLength": 128
+    },
+
+    "version": {
+      "type": "string",
+      "description": "Semantic version string. SemVer 2.0.0 format. Pre-release and build metadata supported.",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
+    },
+
+    "description": {
+      "type": "string",
+      "description": "Short description shown in search results. Plain text only. Max 500 characters.",
+      "minLength": 1,
+      "maxLength": 500
+    },
+
+    "authors": {
+      "type": "array",
+      "description": "One or more author names.",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+    },
+
+    "capabilities": {
+      "type": "array",
+      "description": "What this package provides. At least one required.",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": ["skill", "command", "agent", "prompt", "mcp-server", "lsp-server", "config", "hook", "theme"]
+      },
+      "uniqueItems": true
+    },
+
+    "targets": {
+      "type": "array",
+      "description": "APM monikers this package supports. Empty array or omitted means 'ai' (universal).",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9\\-]{0,63}$" },
+      "uniqueItems": true,
+      "default": []
+    },
+
+    "title": {
+      "type": "string",
+      "description": "Human-readable display name. Falls back to id if omitted.",
+      "maxLength": 256
+    },
+
+    "summary": {
+      "type": "string",
+      "description": "One-line summary (shorter than description). Used in some UI contexts.",
+      "maxLength": 256
+    },
+
+    "releaseNotes": {
+      "type": "string",
+      "description": "What changed in this version. Markdown supported.",
+      "maxLength": 10000
+    },
+
+    "projectUrl": { "type": "string", "format": "uri" },
+    "repositoryUrl": { "type": "string", "format": "uri" },
+    "repositoryType": { "type": "string", "enum": ["git", "svn", "mercurial", "other"] },
+    "repositoryBranch": { "type": "string" },
+    "repositoryCommit": { "type": "string" },
+    "licenseExpression": { "type": "string" },
+    "licenseFile": { "type": "string" },
+    "iconFile": { "type": "string", "default": "icon.png" },
+    "readme": { "type": "string", "default": "README.md" },
+
+    "tags": {
+      "type": "array",
+      "description": "Search tags. Lowercase, alphanumeric and hyphens.",
+      "maxItems": 30,
+      "items": { "type": "string", "pattern": "^[a-z0-9\\-]{1,50}$" },
+      "uniqueItems": true
+    },
+
+    "copyright": { "type": "string", "maxLength": 500 },
+    "language": { "type": "string", "pattern": "^[a-zA-Z]{2,8}(-[a-zA-Z0-9]{1,8})*$" },
+
+    "modelCompatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimumContextWindow": { "type": "integer", "minimum": 0 },
+        "requiresToolUse": { "type": "boolean" },
+        "requiresVision": { "type": "boolean" },
+        "notes": { "type": "string", "maxLength": 1000 }
+      }
+    },
+
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "filesystem:read", "filesystem:write",
+          "network:outbound", "network:inbound",
+          "process:exec",
+          "clipboard:read", "clipboard:write",
+          "env:read", "env:write",
+          "secrets:read"
+        ]
+      },
+      "uniqueItems": true
+    },
+
+    "mcpServers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "transport"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9\\-]{0,63}$" },
+          "transport": { "type": "string", "enum": ["stdio", "sse", "http", "websocket"] },
+          "command": { "type": "string" },
+          "args": { "type": "array", "items": { "type": "string" } },
+          "url": { "type": "string", "format": "uri" },
+          "env": { "type": "object", "additionalProperties": { "type": "string" } },
+          "description": { "type": "string", "maxLength": 500 },
+          "targets": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    "lspServers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "command"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9\\-]{0,63}$" },
+          "command": { "type": "string", "description": "Executable to launch. May reference a file bundled in lsp/ using {install_path}." },
+          "args": { "type": "array", "items": { "type": "string" } },
+          "transport": { "type": "string", "enum": ["stdio"], "default": "stdio", "description": "LSP servers always use stdio per the LSP specification." },
+          "languages": {
+            "type": "array",
+            "description": "Language identifiers this server handles (e.g. 'python', 'typescript', 'rust'). At least one of languages or filetypes is recommended.",
+            "items": { "type": "string" }
+          },
+          "filetypes": {
+            "type": "array",
+            "description": "File extensions this server handles (e.g. '.py', '.ts'). Alternative to or combined with languages.",
+            "items": { "type": "string", "pattern": "^\\.[a-zA-Z0-9]+$" }
+          },
+          "env": { "type": "object", "additionalProperties": { "type": "string" } },
+          "initializationOptions": {
+            "type": "object",
+            "description": "Passed verbatim to the LSP initialize request as initializationOptions.",
+            "additionalProperties": true
+          },
+          "settings": {
+            "type": "object",
+            "description": "Workspace-level settings forwarded to the server via workspace/didChangeConfiguration.",
+            "additionalProperties": true
+          },
+          "description": { "type": "string", "maxLength": 500 },
+          "targets": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    "hooks": {
+      "type": "array",
+      "description": "Lifecycle hooks this package installs. Each entry declares an event, the path to its script or prompt file within the archive, and optional targeting.",
+      "items": {
+        "type": "object",
+        "required": ["event", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "The lifecycle event that triggers this hook.",
+            "enum": [
+              "PreToolUse",
+              "PostToolUse",
+              "Stop",
+              "SubagentStop",
+              "SessionStart",
+              "SessionEnd",
+              "UserPromptSubmit",
+              "PreCompact",
+              "Notification"
+            ]
+          },
+          "matcher": {
+            "type": "string",
+            "description": "Glob pattern matched against the tool name. Only valid for PreToolUse and PostToolUse. Omit to match all tools."
+          },
+          "path": {
+            "type": "string",
+            "description": "Archive-relative path to the hook's script or prompt file (e.g. 'shared/hooks/pre-tool-use.md')."
+          },
+          "type": {
+            "type": "string",
+            "description": "Whether this hook runs as a prompt (sent to the model) or a script (executed as a subprocess).",
+            "enum": ["prompt", "script"],
+            "default": "prompt"
+          },
+          "description": { "type": "string", "maxLength": 500 },
+          "targets": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "version"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "version": { "type": "string" },
+          "apms": { "type": "array", "items": { "type": "string" } },
+          "optional": { "type": "boolean", "default": false }
+        }
+      }
+    },
+
+    "listed": { "type": "boolean", "default": true },
+
+    "deprecated": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "message": { "type": "string", "maxLength": 1000 },
+        "alternatePackageId": { "type": "string" },
+        "alternatePackageVersion": { "type": "string" }
+      }
+    }
+  }
+}
+```
+
+---
+
+## Field Reference
+
+### Required Fields
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `schema` | string | Must be `"https://aipkg.org/schemas/aispec/1.0.0"` |
+| `id` | string | Package ID. Must match filename. |
+| `version` | string | SemVer 2.0.0 |
+| `description` | string | 1–500 chars |
+| `authors` | string[] | 1–10 authors |
+| `capabilities` | string[] | At least one capability |
+
+### Capability Values
+
+| Value | Meaning |
+|-------|---------|
+| `skill` | Provides one or more AI skills (`.md` skill files) |
+| `command` | Provides one or more slash commands |
+| `agent` | Provides one or more AI agent definitions |
+| `prompt` | Provides system prompts or prompt templates |
+| `mcp-server` | Bundles or configures an MCP server |
+| `lsp-server` | Bundles or configures a Language Server Protocol server |
+| `config` | Provides configuration files for a platform |
+| `hook` | Provides one or more lifecycle hooks (declared via `hooks[]`) |
+| `theme` | Provides UI theme or styling |
+
+A package may declare multiple capabilities.
+
+### Permission Values
+
+| Value | Meaning |
+|-------|---------|
+| `filesystem:read` | Reads files from the local filesystem |
+| `filesystem:write` | Writes or modifies files |
+| `network:outbound` | Makes outbound network calls |
+| `network:inbound` | Listens for inbound connections |
+| `process:exec` | Executes subprocesses |
+| `clipboard:read` | Reads clipboard contents |
+| `clipboard:write` | Writes to clipboard |
+| `env:read` | Reads environment variables |
+| `env:write` | Modifies environment variables |
+| `secrets:read` | Reads secrets or credentials |
+
+<Warning>
+  Platforms may enforce permissions at install or runtime. Installers **must** warn users when a package requests sensitive permissions (`process:exec`, `secrets:read`, `env:write`).
+</Warning>
+
+### `lspServers[]` Fields
+
+Each entry in `lspServers` configures one Language Server Protocol server the package installs.
+
+| Field | Required | Type | Notes |
+|-------|----------|------|-------|
+| `name` | Yes | string | Unique identifier within the package. Lowercase alphanumeric and hyphens. |
+| `command` | Yes | string | Executable to launch. Use `{install_path}` to reference bundled files in `lsp/`. |
+| `args` | No | string[] | Command-line arguments passed to the executable. |
+| `transport` | No | string | Always `"stdio"` (LSP specification). Default: `"stdio"`. |
+| `languages` | No | string[] | Language identifiers this server handles (e.g. `"python"`, `"typescript"`). |
+| `filetypes` | No | string[] | File extensions this server handles (e.g. `".py"`, `".ts"`). |
+| `env` | No | object | Environment variables set before launching the server. |
+| `initializationOptions` | No | object | Passed verbatim to the LSP `initialize` request. |
+| `settings` | No | object | Workspace settings forwarded via `workspace/didChangeConfiguration`. |
+| `description` | No | string | Human-readable description. Max 500 chars. |
+| `targets` | No | string[] | APM monikers this server applies to. Empty means all platforms. |
+
+### `hooks[]` Fields
+
+Each entry in `hooks` declares one lifecycle hook the package installs. Requires the `hook` capability.
+
+| Field | Required | Type | Notes |
+|-------|----------|------|-------|
+| `event` | Yes | string | Lifecycle event that triggers this hook. See event table below. |
+| `path` | Yes | string | Archive-relative path to the hook file (e.g. `"shared/hooks/pre-tool-use.md"`). |
+| `type` | No | string | `"prompt"` (sent to model) or `"script"` (executed as subprocess). Default: `"prompt"`. |
+| `matcher` | No | string | Glob pattern matched against the tool name. Only valid for `PreToolUse` and `PostToolUse`. |
+| `description` | No | string | Human-readable description. Max 500 chars. |
+| `targets` | No | string[] | APM monikers this hook applies to. Empty means all platforms. |
+
+**Hook event values:**
+
+| Event | Trigger |
+|-------|---------|
+| `PreToolUse` | Before any tool call. Use `matcher` to filter by tool name. |
+| `PostToolUse` | After any tool call completes. Use `matcher` to filter by tool name. |
+| `Stop` | When the agent reaches a stopping point and returns control to the user. |
+| `SubagentStop` | When a subagent finishes and returns to its parent. |
+| `SessionStart` | At the beginning of a new conversation session. |
+| `SessionEnd` | At the end of a conversation session. |
+| `UserPromptSubmit` | After the user submits a prompt, before the model responds. |
+| `PreCompact` | Before the context window is compacted. |
+| `Notification` | When the platform surfaces a system notification. |
+
+---
+
+## Examples
+
+<Tabs>
+  <Tab title="Simple Skill Package">
+    ```json
+    {
+      "schema": "https://aipkg.org/schemas/aispec/1.0.0",
+      "id": "git-helpers",
+      "version": "1.0.0",
+      "title": "Git Helper Skills",
+      "description": "A collection of Git workflow skills for AI coding assistants.",
+      "authors": ["Jane Developer"],
+      "capabilities": ["skill"],
+      "targets": ["claude-code", "copilot-vscode", "cursor"],
+      "licenseExpression": "MIT",
+      "projectUrl": "https://github.com/jane/git-helpers",
+      "repositoryUrl": "https://github.com/jane/git-helpers",
+      "repositoryType": "git",
+      "tags": ["git", "workflow", "version-control"],
+      "iconFile": "icon.png",
+      "readme": "README.md"
+    }
+    ```
+  </Tab>
+  <Tab title="MCP Server Package">
+    ```json
+    {
+      "schema": "https://aipkg.org/schemas/aispec/1.0.0",
+      "id": "filesystem-mcp",
+      "version": "2.1.0",
+      "title": "Filesystem MCP Server",
+      "description": "MCP server providing secure filesystem access tools to AI platforms.",
+      "authors": ["MCP Foundation"],
+      "capabilities": ["mcp-server"],
+      "targets": ["claude-code", "cursor", "opencode"],
+      "licenseExpression": "Apache-2.0",
+      "permissions": ["filesystem:read", "filesystem:write"],
+      "modelCompatibility": { "requiresToolUse": true },
+      "mcpServers": [
+        {
+          "name": "filesystem",
+          "transport": "stdio",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-filesystem", "{install_path}"],
+          "description": "Provides read/write access to the filesystem.",
+          "targets": []
+        }
+      ],
+      "tags": ["mcp", "filesystem", "tools"],
+      "projectUrl": "https://github.com/mcp/filesystem-server"
+    }
+    ```
+  </Tab>
+  <Tab title="Multi-Capability with Dependencies">
+    ```json
+    {
+      "schema": "https://aipkg.org/schemas/aispec/1.0.0",
+      "id": "full-stack-dev",
+      "version": "3.0.0-beta.1",
+      "title": "Full Stack Development Suite",
+      "description": "Complete set of skills, commands, and prompts for full-stack web development.",
+      "authors": ["Dev Tools Co.", "Jane Developer"],
+      "capabilities": ["skill", "command", "prompt"],
+      "targets": ["claude-code"],
+      "licenseExpression": "MIT",
+      "tags": ["fullstack", "web", "typescript", "react"],
+      "releaseNotes": "## 3.0.0-beta.1\n- Added React skill\n- Improved TypeScript commands",
+      "modelCompatibility": {
+        "minimumContextWindow": 100000,
+        "requiresToolUse": true
+      },
+      "dependencies": [
+        { "id": "git-helpers", "version": "[1.0.0,2.0.0)", "apms": ["claude-code"] },
+        { "id": "filesystem-mcp", "version": "2.0.0", "apms": [], "optional": true }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab title="LSP Server Package">
+    ```json
+    {
+      "schema": "https://aipkg.org/schemas/aispec/1.0.0",
+      "id": "python-language-server",
+      "version": "1.4.0",
+      "title": "Python Language Server",
+      "description": "Bundles and configures Pyright for AI coding assistants that support LSP.",
+      "authors": ["AIpkg Contributors"],
+      "capabilities": ["lsp-server"],
+      "targets": ["claude-code", "cursor", "opencode"],
+      "licenseExpression": "MIT",
+      "permissions": ["process:exec", "filesystem:read"],
+      "lspServers": [
+        {
+          "name": "pyright",
+          "command": "pyright-langserver",
+          "args": ["--stdio"],
+          "transport": "stdio",
+          "languages": ["python"],
+          "filetypes": [".py", ".pyi"],
+          "initializationOptions": {
+            "pythonVersion": "3.11"
+          },
+          "settings": {
+            "python": {
+              "analysis": {
+                "typeCheckingMode": "basic"
+              }
+            }
+          },
+          "description": "Pyright static type checker and language server for Python."
+        }
+      ],
+      "tags": ["python", "lsp", "type-checking", "pyright"]
+    }
+    ```
+  </Tab>
+  <Tab title="Hooks Package">
+    ```json
+    {
+      "schema": "https://aipkg.org/schemas/aispec/1.0.0",
+      "id": "safety-hooks",
+      "version": "1.0.0",
+      "title": "Safety Guardrail Hooks",
+      "description": "Lifecycle hooks that prompt the model to review dangerous operations before and after execution.",
+      "authors": ["Safety Team"],
+      "capabilities": ["hook"],
+      "targets": ["claude-code"],
+      "licenseExpression": "Apache-2.0",
+      "hooks": [
+        {
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "path": "shared/hooks/pre-bash-review.md",
+          "type": "prompt",
+          "description": "Asks the model to review shell commands for destructive patterns before execution."
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Edit",
+          "path": "shared/hooks/pre-edit-review.md",
+          "type": "prompt",
+          "description": "Asks the model to verify file edits are consistent with stated intent."
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Bash",
+          "path": "shared/hooks/post-bash-log.md",
+          "type": "prompt",
+          "description": "Logs executed shell commands for audit purposes."
+        },
+        {
+          "event": "SessionStart",
+          "path": "shared/hooks/session-start.md",
+          "type": "prompt",
+          "description": "Reminds the model of safety guidelines at the start of each session."
+        }
+      ],
+      "tags": ["safety", "hooks", "guardrails", "audit"]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Validation Rules
+
+Beyond JSON Schema conformance, the server enforces these additional rules:
+
+<AccordionGroup>
+  <Accordion title="ID and version rules">
+    1. **ID uniqueness:** The combination of `id` + `version` must be unique on the registry.
+    2. **ID immutability:** Once published, a version's `id` cannot change.
+    3. **Version uniqueness:** Once a version is published, it cannot be republished (even after deletion).
+    4. **Filename match:** The `.aispec` filename must match the `id` field exactly.
+  </Accordion>
+  <Accordion title="Asset rules">
+    5. **Icon format:** `iconFile` must reference a valid square PNG (validated server-side).
+    6. **MCP server names:** All `mcpServers[].name` values within a single package must be unique.
+    7. **LSP server names:** All `lspServers[].name` values within a single package must be unique.
+    8. **Hook matcher scope:** `hooks[].matcher` is only permitted when `event` is `PreToolUse` or `PostToolUse`. Setting it on any other event is a validation error.
+    9. **Hook capability:** Packages that declare entries in `hooks[]` must include `"hook"` in `capabilities`.
+    10. **LSP capability:** Packages that declare entries in `lspServers[]` must include `"lsp-server"` in `capabilities`.
+  </Accordion>
+  <Accordion title="Dependency rules">
+    7. **Dependency cycles:** Circular dependencies are rejected at push time (server resolves the full graph).
+  </Accordion>
+  <Accordion title="License recommendation">
+    8. **License:** At least one of `licenseExpression` or `licenseFile` is strongly recommended. A warning (not error) is emitted if both are absent.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Relationship to `.nuspec`
+
+| `.nuspec` Field | `.aispec` Equivalent | Notes |
+|-----------------|---------------------|-------|
+| `<id>` | `id` | Same |
+| `<version>` | `version` | Same format (SemVer) |
+| `<authors>` | `authors[]` | Array instead of comma-delimited string |
+| `<description>` | `description` | Same |
+| `<packageType>` | `capabilities[]` | Array of typed values instead of single type |
+| `<dependencies targetFramework>` | `dependencies[].apms[]` | APMs instead of TFMs |
+| `<requireLicenseAcceptance>` | _(dropped)_ | Not supported |
+| `<developmentDependency>` | _(dropped)_ | Not supported |
+| `<semVerLevel>` | _(dropped)_ | Always SemVer 2.0.0 |
+| _(no equivalent)_ | `capabilities[]` | New |
+| _(no equivalent)_ | `targets[]` | New |
+| _(no equivalent)_ | `permissions[]` | New |
+| _(no equivalent)_ | `mcpServers[]` | New |
+| _(no equivalent)_ | `lspServers[]` | New |
+| _(no equivalent)_ | `hooks[]` | New |
+| _(no equivalent)_ | `modelCompatibility` | New |

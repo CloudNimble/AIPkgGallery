@@ -1,0 +1,148 @@
+﻿---
+title: "Validation.PackageSigning.RevalidateCertificate"
+sidebarTitle: "RevalidateCertificate"
+description: "Scheduled job that promotes package signatures out of grace-period status and revalidates stale signing certificates via Azure Service Bus."
+icon: "shield-check"
+---
+
+## Overview
+
+`Validation.PackageSigning.RevalidateCertificate` is a standalone .NET 4.7.2 console application that runs as a scheduled Windows service. It performs two complementary maintenance tasks that keep the NuGet package-signing trust model up to date:
+
+1. **Signature promotion** — scans `PackageSignature` rows that are in the `InGracePeriod` status and advances any that are now fully promotable to `Valid`.
+2. **Certificate revalidation** — finds end-certificates whose last verification timestamp is older than the configured staleness window and re-enqueues them for fresh verification by the certificate validation pipeline.
+
+The job is designed to run repeatedly in short bursts; each execution processes one configurable batch of signatures and one configurable batch of certificates, then exits. Multiple executions are expected before the backlog is fully cleared.
+
+<Note>
+  Revoked certificates are explicitly excluded from revalidation. Certificate Authorities do not drop revocation status, so re-checking a revoked certificate would be wasteful and could produce misleading results.
+</Note>
+
+---
+
+## Role in the NuGet Gallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="Upstream: Package Signing Pipeline" icon="arrow-up-to-line">
+    Packages receive `InGracePeriod` signatures when they are first signed. This job promotes those signatures to `Valid` once all certificate chain checks pass.
+  </Card>
+  <Card title="Downstream: Certificate Validator" icon="arrow-down-to-line">
+    Certificate revalidation messages are published to an Azure Service Bus topic. A separate certificate validator service consumes those messages and updates `EndCertificate` status in the shared validation database.
+  </Card>
+  <Card title="Shared DB: Validation Entities" icon="database">
+    Reads and writes `PackageSignature`, `EndCertificate`, and `EndCertificateValidation` rows via `IValidationEntitiesContext` — the EF6-based context owned by `Validation.PackageSigning.Core`.
+  </Card>
+  <Card title="Observability: Application Insights" icon="chart-line">
+    All major operations are wrapped with duration tracking and error metrics via `ITelemetryService`, surfacing data to Application Insights through `NuGet.Services.Logging`.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|------|-------------------|---------|
+| `Program.cs` | `Program` | Entry point; delegates immediately to `NuGet.Jobs.JobRunner`. |
+| `Job.cs` | `Job : ValidationJobBase` | Wires DI registrations and implements the two-phase `Run()` loop (promote then revalidate). |
+| `CertificateRevalidator.cs` | `CertificateRevalidator` | Core orchestration logic for both signature promotion and certificate revalidation, including polling and timeout handling. |
+| `ICertificateRevalidator.cs` | `ICertificateRevalidator` | Abstraction over `PromoteSignaturesAsync()` and `RevalidateStaleCertificatesAsync()`. |
+| `ValidateCertificateEnqueuer.cs` | `ValidateCertificateEnqueuer` | Builds a `CertificateValidationMessage` and sends it to the Azure Service Bus topic via `ITopicClient`. |
+| `IValidateCertificateEnqueuer.cs` | `IValidateCertificateEnqueuer` | Abstraction over the Service Bus enqueue operation. |
+| `RevalidationConfiguration.cs` | `RevalidationConfiguration` | Strongly-typed POCO for all tuneable thresholds (batch sizes, timeouts, poll intervals). Bound to the `"RevalidateJob"` config section. |
+| `TelemetryService.cs` | `TelemetryService` | Wraps `ITelemetryClient` with named metrics prefixed `RevalidateCertificate.*`. |
+| `ITelemetryService.cs` | `ITelemetryService` | Contract for duration tracking and warning/timeout counters. |
+| `Scripts/PostDeploy.ps1` | — | Octopus Deploy post-deployment script that installs the job as a Windows service using NSSM. |
+
+---
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Assembly | Role |
+|---------|----------|------|
+| `Validation.Common.Job` | `NuGet.Services.Validation.Common.Job` | `ValidationJobBase`, DI bootstrap, `NuGet.Jobs.JobRunner` integration. |
+| `Validation.PackageSigning.Core` | `NuGet.Jobs.Validation.PackageSigning` | Shared signing models (`PackageSignature`, `EndCertificate`), `IValidationEntitiesContext`, and `CertificateValidationMessageSerializer`. |
+
+### Transitive NuGet Packages (key ones)
+
+| Package | Consumed Via | Purpose |
+|---------|--------------|---------|
+| `Autofac` / `Autofac.Extensions.DependencyInjection` | `Validation.Common.Job` | DI container used by the job host. |
+| `Microsoft.Extensions.DependencyInjection` | `Validation.Common.Job` | `IServiceCollection` registration surface. |
+| `Microsoft.Extensions.Options.ConfigurationExtensions` | `Validation.Common.Job` | Binds `RevalidationConfiguration` from `IConfiguration`. |
+| `NuGet.Services.ServiceBus` | `Validation.Common.Job` | `ITopicClient`, `TopicClientWrapper`, `IBrokeredMessageSerializer<T>`. |
+| `NuGet.Services.Logging` | `Validation.Common.Job` | `ITelemetryClient` (Application Insights wrapper). |
+| `NuGet.Services.Validation` | `Validation.PackageSigning.Core` | EF6 entity types and `IValidationEntitiesContext`. |
+| `NuGet.Jobs.Common` | `Validation.Common.Job` | `JobRunner`, `ValidationJobBase` base class. |
+
+---
+
+## Configuration Reference
+
+All settings live under the `"RevalidateJob"` key in the job's configuration source.
+
+```json
+"RevalidateJob": {
+  "SignaturePromotionScanSize": 500,
+  "SignaturePromotionBatchSize": 200,
+  "CertificateRevalidationBatchSize": 100,
+  "RevalidationPeriodForCertificates": "7.00:00:00",
+  "CertificateRevalidationPollTime": "00:00:10",
+  "CertificateRevalidationTrackAfter": "00:05:00",
+  "CertificateRevalidationTimeout": "00:30:00"
+}
+```
+
+| Setting | Type | Description |
+|---------|------|-------------|
+| `SignaturePromotionScanSize` | `int` | Max signatures fetched per inner scan loop iteration. |
+| `SignaturePromotionBatchSize` | `int` | Total promotable signatures targeted per job run. |
+| `CertificateRevalidationBatchSize` | `int` | Max certificates revalidated per job run. |
+| `RevalidationPeriodForCertificates` | `TimeSpan` | Minimum age of `LastVerificationTime` before a cert is considered stale. |
+| `CertificateRevalidationPollTime` | `TimeSpan` | Delay between database polls while waiting for validations to complete. |
+| `CertificateRevalidationTrackAfter` | `TimeSpan` | Elapsed time after which a slow-validation warning metric is emitted. |
+| `CertificateRevalidationTimeout` | `TimeSpan` | Hard ceiling on how long the job waits for in-flight validations. |
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **Chunked, iterative design.** Neither `PromoteSignaturesAsync` nor `RevalidateStaleCertificatesAsync` processes every eligible record in a single pass. The job is expected to be scheduled frequently (e.g. every few minutes) so that the total work is spread across many executions without holding long-running transactions or overwhelming Service Bus.
+</Note>
+
+<Note>
+  **Signature promotion uses a nested scan loop.** `FindPromotableSignaturesAsync` pages through `InGracePeriod` author signatures in creation order, accumulating promotable ones until the batch size is reached or all candidates are exhausted. This avoids a single unbounded query while still being precise about which signatures qualify.
+</Note>
+
+<Warning>
+  **Certificate revalidation is synchronous within a run.** After enqueuing all certificate validation messages and persisting `EndCertificateValidation` rows, the job polls the database in a tight loop until all rows transition away from `null` status — or the configured timeout is hit. If the downstream validator is slow or unavailable, the job will log an error and emit a timeout metric but will not retry in the same execution.
+</Warning>
+
+<Warning>
+  **All-or-nothing Service Bus enqueue.** `StartCertificateValidationsAsync` fans out all enqueue tasks with `Task.WhenAll` before calling `SaveChangesAsync`. If any single enqueue fails, `SaveChangesAsync` is never called and no `EndCertificateValidation` rows are persisted — ensuring the database and queue stay consistent. However, partially-sent messages (if the exception surfaces mid-fan-out) are not rolled back from the bus.
+</Warning>
+
+<Tip>
+  The `revalidateRevokedCertificate: false` and `sendCheckValidator: false` flags on `CertificateValidationMessage` are intentional: this job never re-checks revoked certs and does not trigger the secondary "check validator" workflow. These are hard-coded, not configurable.
+</Tip>
+
+### Telemetry Metrics
+
+| Metric Name | Kind | Emitted When |
+|-------------|------|--------------|
+| `RevalidateCertificate.PromoteSignatureDuration` | Duration | Wraps the entire signature promotion phase. |
+| `RevalidateCertificate.CertificateRevalidationDuration` | Duration | Wraps the entire certificate revalidation phase including polling. |
+| `RevalidateCertificate.CertificateRevalidationTakingTooLong` | Counter | Emitted each poll cycle after `CertificateRevalidationTrackAfter` elapses. |
+| `RevalidateCertificate.CertificateRevalidationReachedTimeout` | Counter | Emitted once when `CertificateRevalidationTimeout` is exceeded. |
+
+### Deployment
+
+The job ships as a NuGet package (`Validation.PackageSigning.RevalidateCertificate`) containing the compiled `net472` binaries and four deployment artifacts:
+
+- `Scripts/PreDeploy.ps1` — pre-deployment teardown hook (Octopus Deploy).
+- `Scripts/PostDeploy.ps1` — installs or reconfigures the job as a Windows service via NSSM.
+- `Scripts/Functions.ps1` — shared PowerShell helpers (`Install-NuGetService`).
+- `Scripts/nssm.exe` — Non-Sucking Service Manager binary, bundled for zero-dependency service installation.

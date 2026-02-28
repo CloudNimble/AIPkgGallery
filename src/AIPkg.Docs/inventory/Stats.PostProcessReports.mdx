@@ -1,0 +1,119 @@
+---
+title: Stats.PostProcessReports
+sidebarTitle: Stats.PostProcessReports
+description: A scheduled background job that post-processes aggregated NuGet download statistics reports, splitting per-package detailed JSON blobs from a source Azure Blob Storage location into individual per-package files in a publicly accessible destination container.
+icon: chart-bar
+---
+
+## Overview
+
+`Stats.PostProcessReports` is a .NET Framework 4.7.2 console application that runs as a scheduled background job. Its sole responsibility is to take large, aggregated download statistics blobs produced upstream by a statistics pipeline (e.g., HDInsight/Spark jobs) and fan them out into thousands of individual per-package JSON files that the NuGet Gallery frontend can serve directly.
+
+Each line in an input JSON blob represents one package's detailed popularity statistics. The job reads each line, extracts the `PackageId`, and writes a file named `recentpopularitydetail_<packageid>.json` to a publicly accessible Azure Blob Storage container.
+
+<Note>
+  The job is idempotent. It uses sentinel files (`_SUCCESS`, `_WorkCopySucceeded`, `_JobSucceeded`) and Azure Blob metadata to detect whether previous runs completed successfully, allowing it to skip redundant work when re-triggered.
+</Note>
+
+## Role in System
+
+This job sits in the **statistics post-processing pipeline** of the NuGetGallery ecosystem:
+
+1. An upstream process (HDInsight or similar) produces aggregated report blobs in a **source** container and writes a `_SUCCESS` marker when complete.
+2. `Stats.PostProcessReports` detects the marker, copies the source blobs to a **work** container for safe in-place processing, then fans out each JSON line to a **destination** container.
+3. The Gallery web app reads `recentpopularitydetail_<id>.json` from the destination container to display per-package download statistics on package detail pages.
+
+```
+Source Container (private)          Work Container (private)         Destination Container (public)
+  detailed-reports/                   work-path/                       dest-path/
+    _SUCCESS              ----copy---> blob.json  ---fan-out--->          recentpopularitydetail_foo.json
+    blob.json                          _WorkCopySucceeded                 recentpopularitydetail_bar.json
+                                       _JobSucceeded                      ...
+```
+
+<Tip>
+  The destination container is configured with `enablePublicAccess: true`, making the individual JSON files publicly readable without authentication — suitable for direct CDN or browser fetch.
+</Tip>
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|---|---|---|
+| `Program.cs` | `Program` | Entry point; delegates to `JobRunner.Run(job, args)` from `NuGet.Jobs` |
+| `Job.cs` | `Job` | Extends `JsonConfigurationJob`; wires Autofac DI for three named `IStorage` instances and `DetailedReportPostProcessor` |
+| `IDetailedReportPostProcessor.cs` | `IDetailedReportPostProcessor` | Single-method interface (`CopyReportsAsync`) isolating the processing contract |
+| `DetailedReportPostProcessor.cs` | `DetailedReportPostProcessor` | Core logic: enumerates blobs, copies to work storage, fans out lines in parallel, writes sentinel files, stores metadata |
+| `PostProcessReportsConfiguration.cs` | `PostProcessReportsConfiguration` | Strongly-typed configuration POCO bound from `Configuration` section; controls container names, paths, and parallelism degree |
+| `BlobStatistics.cs` | `BlobStatistics` | Thread-safe per-blob counters for `TotalLineCount`, `FilesCreated`, and `LinesFailed` using `Interlocked` |
+| `TotalStats.cs` | `TotalStats` | Simple mutable accumulator for job-level aggregate statistics |
+| `LineProcessingContext.cs` | `LineProcessingContext` | Carries a single line's number and raw JSON string through the `ConcurrentBag` processing queue |
+| `Telemetry/ITelemetryService.cs` | `ITelemetryService` | Contract for emitting per-file and job-total metrics, plus source data age |
+| `Telemetry/TelemetryService.cs` | `TelemetryService` | Implements `ITelemetryService` via `ITelemetryClient` (Application Insights wrapper from `NuGet.Services.Logging`) |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Purpose |
+|---|---|
+| `NuGet.Jobs.Common` | Provides `JsonConfigurationJob`, `JobRunner`, `StorageMsiConfiguration`, `ConfigureStorageMsi` extension |
+| `NuGet.Services.Storage` | Provides `IStorage`, `AzureStorage`, `AzureStorageFactory`, `BlobServiceClientFactory`, `StorageListItem`, `StringStorageContent` |
+
+### Key NuGet / Framework Dependencies (resolved transitively)
+
+| Package | Usage |
+|---|---|
+| `Autofac` | DI container; keyed `IStorage` registrations via `ContainerBuilder` |
+| `Azure.Storage.Blobs` | Underlying Azure SDK for blob operations |
+| `Azure.Identity` | `ManagedIdentityCredential`, `DefaultAzureCredential` for MSI auth |
+| `Microsoft.Extensions.Configuration` | `IConfigurationRoot` for JSON config loading |
+| `Microsoft.Extensions.DependencyInjection` | `IServiceCollection` service registration |
+| `Microsoft.Extensions.Logging` | Structured logging throughout |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<T>` for live config access |
+| `Newtonsoft.Json` | Deserializes each JSON line to extract `PackageId` |
+| `NuGet.Services.Logging` | `ITelemetryClient` / Application Insights integration |
+
+## Configuration Reference
+
+All settings live under the `"Configuration"` JSON section, bound to `PostProcessReportsConfiguration`:
+
+| Property | Description |
+|---|---|
+| `StorageAccount` | Azure Blob endpoint or connection string (used for all three containers) |
+| `SourceContainerName` | Container holding upstream-generated report blobs |
+| `SourcePath` | Path prefix within the source container |
+| `DetailedReportDirectoryName` | Appended to `SourcePath` to locate the detailed report directory |
+| `WorkContainerName` | Private container used as a staging/work area |
+| `WorkPath` | Path prefix within the work container |
+| `DestinationContainerName` | Publicly accessible container for individual per-package JSON files |
+| `DestinationPath` | Path prefix within the destination container |
+| `ReportWriteDegreeOfParallelism` | Number of concurrent writer tasks per blob (default: `10`) |
+
+## Notable Patterns and Implementation Details
+
+<CardGroup cols={2}>
+  <Card title="Three-Storage Architecture" icon="database">
+    Three distinct `IStorage` instances (source, work, destination) are registered as Autofac keyed services and injected by parameter name into `DetailedReportPostProcessor`. This prevents accidental cross-container writes.
+  </Card>
+  <Card title="Parallel Fan-Out via ConcurrentBag" icon="arrows-split-up-and-left">
+    Lines read from each blob are placed into a `ConcurrentBag<LineProcessingContext>`. Multiple writer tasks (controlled by `ReportWriteDegreeOfParallelism`) drain the bag concurrently, each calling `_destinationStorage.Save(...)`.
+  </Card>
+  <Card title="Blob Metadata as Resume Checkpoint" icon="bookmark">
+    After processing each blob, the job writes `TotalLines`, `LinesFailed`, and `FilesCreated` as Azure Blob metadata. On the next run, if this metadata exists, the blob is skipped and totals are reconstructed from metadata alone.
+  </Card>
+  <Card title="Sentinel File Ordering" icon="flag">
+    When cleaning up work storage, flag files (`_WorkCopySucceeded`, `_JobSucceeded`) are deleted before data blobs. The `FlagFilesFirst` sort helper ensures a failed mid-deletion run cannot leave the system in an inconsistent state where a sentinel exists but data does not.
+  </Card>
+</CardGroup>
+
+<Warning>
+  The job raises `ServicePointManager.DefaultConnectionLimit` to `ReportWriteDegreeOfParallelism + 10` on startup. This is a process-wide .NET Framework setting. Since the project targets `net472`, this is expected behavior, but be aware if any shared-process hosting model is ever adopted.
+</Warning>
+
+<Note>
+  The MSI authentication path contains a compile-time `#if DEBUG` branch: in debug builds, `DefaultAzureCredential` is used for local development; in release builds, `ManagedIdentityCredential` is used. System-assigned and user-assigned (via `ManagedIdentityClientId`) identities are both supported.
+</Note>
+
+## Deployment
+
+The project packages via a `.nuspec` file targeting `net472` binaries and includes PowerShell deployment scripts (`PreDeploy.ps1`, `PostDeploy.ps1`, `Functions.ps1`) plus `nssm.exe` for installing the job as a Windows Service. Deployment is orchestrated through Octopus Deploy, with service names and scripts parameterized via `$OctopusParameters`.

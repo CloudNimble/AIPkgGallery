@@ -1,0 +1,109 @@
+---
+title: "Bootstrap"
+sidebarTitle: "Bootstrap"
+description: "A vendored and heavily customized fork of Bootstrap 3.4.1 that compiles the NuGet Gallery's complete CSS and JS front-end assets, including a bespoke Fluent/dotnet-branded LESS theme layer."
+icon: "palette"
+---
+
+## Overview
+
+The `Bootstrap` directory is a **local vendor copy of Bootstrap 3.4.1** (the final stable Bootstrap 3 release) that has been extended in-place to serve as the front-end design system for nuget.org. Rather than pulling Bootstrap from a CDN or NuGet package at runtime, the Gallery keeps the full source tree under version control so that NuGet-specific styles, theming tokens, and JavaScript overrides can be built into the final distribution files as part of a reproducible Grunt build.
+
+The project outputs two artifacts that are copied directly into the main `NuGetGallery` web project:
+
+- `dist/css/bootstrap.min.css` → `../NuGetGallery/Content/gallery/css/`
+- `dist/js/bootstrap.js` → `../NuGetGallery/Scripts/gallery/`
+
+<Note>
+Bootstrap v3 is in maintenance-only mode upstream. No new features are accepted by the upstream project; the Gallery's additions are maintained entirely within this vendored copy.
+</Note>
+
+## Role in System
+
+```
+src/Bootstrap/
+├── less/bootstrap.less        ← upstream Bootstrap 3 core (entry point)
+├── less/theme/all.less        ← NuGet Gallery theme layer (entry point)
+│   ├── base.less              ← global layout, typography, Fluent tokens
+│   ├── themes.less            ← CSS custom-property definitions for light/dark
+│   ├── common-*.less          ← shared component overrides
+│   └── page-*.less            ← per-page scoped styles (~35 pages)
+├── js/*.js                    ← upstream Bootstrap 3 plugins (unmodified)
+├── dist/                      ← compiled output (committed)
+└── Gruntfile.js               ← build orchestration
+```
+
+<CardGroup cols={2}>
+  <Card title="CSS Build" icon="brush">
+    LESS source compiled via `grunt-contrib-less`, then autoprefixed and minified with `clean-css`. IE 8 compatibility is preserved via `ieCompat: true` and `cssmin` compatibility flags.
+  </Card>
+  <Card title="JS Build" icon="code">
+    Twelve Bootstrap plugin files concatenated in dependency order, jQuery version-checked at runtime, then minified with UglifyJS with IE 8 mangling support enabled.
+  </Card>
+  <Card title="Theme System" icon="sun">
+    Light and dark modes are driven entirely by CSS custom properties defined in `themes.less`. The `data-theme` attribute on `<html>` switches the active palette at runtime with no JavaScript required.
+  </Card>
+  <Card title="Gallery Copy Task" icon="copy">
+    `grunt copy:gallerycss` and `grunt copy:galleryjs` push the compiled artefacts into the main Gallery project. Developers must run Grunt after any LESS changes.
+  </Card>
+</CardGroup>
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `less/bootstrap.less` | Imports all upstream Bootstrap 3 partials. `carousel.less` is commented out (not used). |
+| `less/variables.less` | Defines all Bootstrap LESS variables; NuGet overrides `@brand-danger` to `#c50f1f` (Cranberry) and adds `@verified-color`. |
+| `less/theme/all.less` | Aggregates every NuGet-specific partial in correct import order. |
+| `less/theme/base.less` | Global layout — defines `.nuget-logo-image`, `.footer`, `.package-list`, `.tag`, `.banner`. |
+| `less/theme/themes.less` | Full Fluent Design + .NET brand CSS custom-property palette for light and dark themes. Brand blues map to dotnet color ramp (`dotnetBluePrimary #0b6cff`). |
+| `less/theme/common-high-contrast.less` | `@media (-ms-high-contrast:active)` overrides for SVG text fill and popover arrows. |
+| `less/theme/page-display-package.less` | `.page-package-details` scoped styles: package icon, version badge, TFM framework badges, deprecation banners. |
+| `less/theme/page-home.less` | Jumbotron overrides, `what-is-nuget` section, gradient home background. |
+| `dist/js/bootstrap.js` | Concatenated JS with jQuery version guard (requires jQuery 1.9.1–3.x). |
+| `Gruntfile.js` | Defines `dist`, `dist-css`, `dist-js`, and `default` tasks; copy tasks target `../NuGetGallery`. |
+
+## Dependencies
+
+### Build-time (npm / Grunt)
+
+| Package | Purpose |
+|---------|---------|
+| `grunt` | Task runner |
+| `grunt-contrib-less` | LESS to CSS compilation (`ieCompat`, `strictMath`, source maps) |
+| `grunt-postcss` + `autoprefixer` | Vendor-prefix injection post-compilation |
+| `grunt-contrib-cssmin` | CSS minification (IE 8 compat mode) |
+| `grunt-contrib-concat` | JS plugin concatenation |
+| `grunt-contrib-uglify` | JS minification (IE 8 mangling) |
+| `grunt-contrib-copy` | Copies artefacts into `NuGetGallery` project |
+
+### Runtime
+
+| Dependency | Version | Purpose |
+|-----------|---------|---------|
+| jQuery | 1.9.1 – 3.x | Required by all Bootstrap JS plugins; version-checked at boot |
+
+<Note>
+There are no `.csproj` or NuGet package references in this folder. This is a pure front-end npm/Grunt project with no .NET build integration. It must be built separately before the ASP.NET application picks up updated styles.
+</Note>
+
+## Notable Patterns and Implementation Details
+
+<Warning>
+The `dist/` directory is **committed to source control** alongside the LESS source. Pull requests that modify LESS files must also include a re-compiled `dist/` output, or the Gallery will render with stale styles in production deployments that skip the Grunt step.
+</Warning>
+
+<Note>
+**Fluent Design token naming**: `themes.less` uses a verbose but systematic naming convention (`--neutralBackground2Rest`, `--brandForegroundLinkHover`, etc.) derived from Microsoft Fluent UI. Every interactive state (Rest, Hover, Pressed, Selected) and every semantic role has an explicit token, making it straightforward to audit colour-contrast compliance per WCAG.
+</Note>
+
+<Tip>
+**Dark mode is zero-JavaScript**: Theme switching is achieved by toggling `data-theme="dark"` on the `<html>` element. All colour values are CSS custom properties resolved at paint time, so the switch is instant and can be wired to `prefers-color-scheme` without any additional scripting.
+</Tip>
+
+- **`carousel.less` is intentionally disabled** in `bootstrap.less` (commented out). The Gallery does not use Bootstrap carousels.
+- **Glyphicons are also disabled** — the Gallery uses Microsoft Fluent UI icons (`.ms-Icon`) instead of the Bootstrap glyph font.
+- **xs container width bug workaround**: `base.less` sets `width: calc(100vw - 20px)` on `.container` at `max-width: @screen-sm` because Bootstrap 3 does not constrain overflow at the extra-small breakpoint.
+- **`@verified-color: #068918`** is a custom LESS variable added on top of Bootstrap's standard palette to style the package verified/prefix-reserved indicator badge.
+- **IE 8 support is explicit** throughout: `cssmin` compatibility flag, UglifyJS `ie8: true`, and `ieCompat: true` in the LESS compiler are all set.
+- **Per-page LESS files** (~35 `page-*.less` files) scope all page-specific rules under a top-level class (e.g. `.page-package-details`, `.page-home`) to prevent cross-page style bleed.

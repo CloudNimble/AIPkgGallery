@@ -1,0 +1,209 @@
+---
+title: "Platform Targeting"
+sidebarTitle: "02 · Platform Targeting"
+description: "AI Platform Monikers (APMs) — the hierarchical string identifiers that describe AI platforms, their fallback resolution graph, install paths, and compatibility rules."
+icon: "sitemap"
+---
+
+AI Platform Monikers (APMs) are hierarchical string identifiers that describe AI platforms and tools that can consume AIpkg packages. They serve the same purpose as Target Framework Monikers (TFMs) in NuGet: they allow a single package to ship platform-specific content and allow the installer to select the most appropriate files for the current environment.
+
+---
+
+## Moniker Syntax
+
+APMs are lowercase alphanumeric strings with hyphens. The hierarchy is encoded in the moniker string itself — a parent is a prefix of its child, separated by `-`:
+
+```
+ai
+ai-{platform}
+ai-{platform}-{variant}
+```
+
+<Note>
+  The root moniker is `ai`. Every moniker implicitly has `ai` as its ultimate ancestor.
+</Note>
+
+---
+
+## Canonical Moniker Table
+
+| Moniker | Display Name | Parent | Install Path |
+|---------|--------------|--------|--------------|
+| `ai` | All AI Platforms | — | _(root fallback only)_ |
+| `claude` | Claude (all) | `ai` | _(parent group only)_ |
+| `claude-code` | Claude Code | `claude` | `.claude/` |
+| `claude-desktop` | Claude Desktop | `claude` | See below |
+| `copilot` | GitHub Copilot (all) | `ai` | _(parent group only)_ |
+| `copilot-vscode` | Copilot in VS Code | `copilot` | `.github/` |
+| `copilot-github` | Copilot on GitHub.com | `copilot` | `.github/` |
+| `cursor` | Cursor | `ai` | `.cursor/` |
+| `windsurf` | Windsurf | `ai` | `.windsurf/` |
+| `continue` | Continue | `ai` | `.continue/` |
+| `opencode` | OpenCode | `ai` | `.opencode/` |
+| `aider` | Aider | `ai` | `.aider/` |
+| `cline` | Cline | `ai` | `.cline/` |
+| `zed` | Zed AI | `ai` | `.zed/` |
+
+### Claude Desktop Install Paths
+
+Claude Desktop uses OS-specific config directories:
+
+| OS | Path |
+|----|------|
+| macOS | `~/Library/Application Support/Claude/` |
+| Windows | `%APPDATA%\Claude\` |
+| Linux | `~/.config/claude/` |
+
+---
+
+## Fallback Graph
+
+The fallback graph defines which platform directories the installer checks, ordered from most specific to most general:
+
+```
+claude-code     →  claude  →  ai  →  shared
+claude-desktop  →  claude  →  ai  →  shared
+copilot-vscode  →  copilot →  ai  →  shared
+copilot-github  →  copilot →  ai  →  shared
+cursor          →  ai  →  shared
+windsurf        →  ai  →  shared
+continue        →  ai  →  shared
+opencode        →  ai  →  shared
+aider           →  ai  →  shared
+cline           →  ai  →  shared
+zed             →  ai  →  shared
+```
+
+### Resolution Algorithm
+
+Given a target APM `T`, build the chain:
+
+<Steps>
+  <Step title="Start with T">
+    Begin the chain with `[T]`.
+  </Step>
+  <Step title="Walk to parent">
+    Find the parent of `T` in the canonical table. If the parent is not `ai`, append it to the chain.
+  </Step>
+  <Step title="Append ai">
+    Append `ai` to the chain.
+  </Step>
+  <Step title="Append shared">
+    Append `shared` (always last).
+  </Step>
+</Steps>
+
+For file resolution, iterate the chain from **end to start** (least specific first), applying each directory's files. The last write wins, so most-specific files override less-specific ones.
+
+---
+
+## Package Compatibility
+
+A package is compatible with a target APM if any of the following are true:
+
+1. The package's `targets` array in `.aispec` includes the **target APM** exactly, OR
+2. The package's `targets` array includes a **parent** of the target APM (e.g., a package targeting `claude` is compatible with `claude-code`), OR
+3. The package's `targets` array is **empty or contains only `ai`** (universal package).
+
+<Note>
+  Compatibility checking is performed by `PlatformCompatibilityService` in `AIpkg.Core`. See [spec 06](06-sdk-tooling) for the API surface.
+</Note>
+
+---
+
+## Moniker Normalization
+
+APMs are always lowercased. During ingestion and search, the server normalizes APM values:
+
+- Convert to lowercase
+- Strip leading/trailing whitespace
+- Reject any characters outside `[a-z0-9-]`
+- Reject monikers longer than 64 characters
+
+---
+
+## Unknown Monikers
+
+A package may declare a dependency on or include files for a moniker not in the canonical table. Installers must:
+
+- **Warn** (not error) when encountering an unknown moniker in `targets[]`
+- **Silently skip** unknown `apm/{unknown-moniker}/` directories during extraction
+- **Not fail validation** solely due to an unknown moniker (forward compatibility)
+
+<Info>
+  The registry server logs unknown monikers for monitoring purposes.
+</Info>
+
+---
+
+## Moniker Registration
+
+New monikers are added to the canonical table by opening a PR to the AIpkg spec repository. Requirements for a new moniker:
+
+1. Must have a public, documented plugin/extension system
+2. Must have a clearly defined install path
+3. Must be lower-kebab-case
+4. Must not conflict with an existing moniker or be a prefix of one
+
+---
+
+## APM in API Queries
+
+The V3 search endpoint accepts an `apm` query parameter that filters results to packages compatible with the specified platform:
+
+```http
+GET /v3/search?q=mcp&apm=claude-code
+```
+
+The server expands `claude-code` to `[claude-code, claude, ai]` using the fallback graph, then returns packages whose `targets` array intersects with the expanded set (plus universal packages).
+
+---
+
+## APM Stability Guarantees
+
+| Moniker | Stability |
+|---------|-----------|
+| `ai` | Stable — never removed |
+| `claude`, `claude-code`, `claude-desktop` | Stable |
+| `copilot`, `copilot-vscode`, `copilot-github` | Stable |
+| `cursor`, `windsurf`, `continue` | Stable |
+| `opencode`, `aider`, `cline`, `zed` | Stable |
+| Any other moniker | Provisional until canonical registration |
+
+<Note>
+  Stable monikers will not be removed or renamed. If a platform is discontinued, its moniker is deprecated (marked in the registry) but not deleted.
+</Note>
+
+---
+
+## Example: Multi-Platform Package Layout
+
+A package that ships different skill files for Claude Code vs Copilot but shares a common prompt:
+
+```
+my-tool.1.0.0.aipkg
+├── my-tool.aispec
+├── shared/
+│   └── prompts/
+│       └── base-prompt.md          ← All platforms
+├── apm/
+│   ├── claude-code/
+│   │   └── skills/
+│   │       └── my-tool.md          ← Claude Code only
+│   └── copilot/
+│       └── instructions/
+│           └── my-tool.md          ← All Copilot variants
+```
+
+<Tabs>
+  <Tab title="claude-code install">
+    - `base-prompt.md` is installed (from `shared/`)
+    - `skills/my-tool.md` is installed (from `apm/claude-code/`)
+    - `instructions/my-tool.md` is **not** installed (wrong platform)
+  </Tab>
+  <Tab title="copilot-vscode install">
+    - `base-prompt.md` is installed (from `shared/`)
+    - `instructions/my-tool.md` is installed (from `apm/copilot/` via parent fallback)
+    - `skills/my-tool.md` is **not** installed (wrong platform)
+  </Tab>
+</Tabs>

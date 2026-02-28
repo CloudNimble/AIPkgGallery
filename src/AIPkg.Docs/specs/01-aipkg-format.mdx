@@ -1,0 +1,226 @@
+---
+title: "Package Format"
+sidebarTitle: "01 · Package Format"
+description: "The `.aipkg` archive format, manifest naming convention, directory layout, file conflict resolution, size limits, and relationship to NuGet's `.nupkg`."
+icon: "box-archive"
+---
+
+An `.aipkg` file is a ZIP archive (deflate or store compression) with a structured directory layout. The format is mechanically identical to `.nupkg` — any ZIP tool can read it — but the contents and naming conventions differ.
+
+Files on disk follow the naming convention:
+
+```
+{id}.{version}.aipkg
+```
+
+**Example:** `my-mcp-server.1.2.0.aipkg`
+
+---
+
+## Archive Structure
+
+```
+{id}.{version}.aipkg
+├── {id}.aispec                  # Required. Package manifest (JSON).
+├── README.md                    # Optional. Embedded readme shown on registry.
+├── icon.png                     # Optional. Square PNG, ≥128×128. Shown on registry.
+├── LICENSE.txt                  # Optional. License text.
+├── shared/                      # Optional. Platform-agnostic files (all platforms receive these).
+│   ├── skills/
+│   │   └── my-skill.md
+│   ├── commands/
+│   │   └── my-command.md
+│   ├── agents/
+│   │   └── my-agent.md
+│   ├── prompts/
+│   │   └── system-prompt.md
+│   ├── hooks/
+│   │   └── pre-tool-use.md     # Hook script or prompt file.
+│   ├── mcp/
+│   │   └── server-config.json
+│   └── lsp/
+│       └── lsp-config.json     # LSP server configuration or bundled server scripts.
+├── apm/                         # Optional. Platform-specific overrides.
+│   ├── claude-code/             # Files for Claude Code only.
+│   │   └── skills/
+│   │       └── my-skill.md     # Overrides shared/skills/my-skill.md on claude-code.
+│   ├── claude/                  # Files for all claude/* platforms.
+│   └── copilot/                 # Files for all copilot/* platforms.
+└── _rels/                       # Reserved. Do not use in user packages.
+    └── .rels                    # Optional Open Packaging Conventions relationship file.
+```
+
+---
+
+## Manifest File: `{id}.aispec`
+
+The manifest is a JSON file stored at the root of the archive.
+
+<Note>
+  The manifest must be named exactly `{id}.aispec` where `{id}` matches the `id` field inside the manifest, be valid UTF-8 with no BOM, and conform to the schema defined in [spec 03](03-metadata-schema).
+</Note>
+
+The `.aispec` extension was chosen to mirror NuGet's `.nuspec` and the `.csproj` naming pattern — the filename is self-identifying in a repository or file listing. Inside the archive, globbing for `*.aispec` reliably locates the manifest.
+
+---
+
+## Directory Conventions
+
+### `shared/`
+
+Files in `shared/` are installed on all platforms unless overridden by a platform-specific file. There are no mandatory subdirectory names inside `shared/`, but the following are conventional:
+
+| Subdirectory | Contents |
+|--------------|----------|
+| `skills/` | Skill definition files (`.md` or platform-specific format) |
+| `commands/` | Slash command definition files |
+| `agents/` | Agent definition files |
+| `prompts/` | System prompt and prompt template files |
+| `hooks/` | Hook scripts or prompt files, keyed by event name |
+| `mcp/` | MCP server configuration files (JSON) |
+| `lsp/` | LSP server configuration files or bundled server scripts |
+| `config/` | Generic configuration files |
+| `docs/` | Documentation included with the package |
+
+### `apm/`
+
+Files in `apm/{moniker}/` apply only to the named platform (and its children in the APM hierarchy). The same subdirectory conventions from `shared/` apply within each platform directory.
+
+<Note>
+  Valid moniker directory names are the canonical APM names defined in [spec 02](02-platform-targeting). Unknown monikers are silently ignored by installers.
+</Note>
+
+---
+
+## File Conflict Resolution
+
+When a file exists in both `shared/` and an `apm/{moniker}/` directory with the same relative path, the platform-specific file wins.
+
+Resolution order (highest priority first):
+
+1. `apm/{exact-moniker}/` — most specific platform match
+2. `apm/{parent-moniker}/` — parent in fallback graph (e.g., `claude` when installing for `claude-code`)
+3. `apm/ai/` — root platform fallback
+4. `shared/` — platform-agnostic baseline
+
+If the same relative path appears at multiple specificity levels, only the highest-priority copy is installed.
+
+<Tip>
+  For a `claude-code` install, `apm/claude-code/skills/demo.md` takes precedence over `apm/claude/skills/demo.md`, which takes precedence over `shared/skills/demo.md`.
+</Tip>
+
+---
+
+## Compression
+
+- The `.aispec` manifest file **must** be stored uncompressed (deflate level 0 / store method) to allow streaming reads without full archive extraction.
+- All other files **may** use deflate compression (level 1–9). Level 6 is recommended.
+- ZIP64 is supported and required when any single file exceeds 4 GB or the total archive exceeds 4 GB.
+
+---
+
+## Size Limits
+
+| Constraint | Limit |
+|------------|-------|
+| Total archive size | 512 MB |
+| Single file within archive | 256 MB |
+| Manifest file (`.aispec`) | 1 MB |
+| `icon.png` | 1 MB |
+| `README.md` | 5 MB |
+
+<Warning>
+  Archives exceeding these limits are rejected during `push` with a `413` response.
+</Warning>
+
+---
+
+## Reserved Paths
+
+The following paths inside the archive are reserved and must not be created by package authors:
+
+- `_rels/` — Open Packaging Conventions relationships
+- `[Content_Types].xml` — OPC content types
+- `package/` — Reserved for future use
+- `.signature.p7s` — Reserved for future package signing
+
+---
+
+## Signing
+
+<Info>
+  Package signing is reserved for a future spec revision. When implemented, a detached signature will be stored at `.signature.p7s`, covering the full archive minus the signature entry itself. The registry will enforce signature validation for packages from verified authors.
+</Info>
+
+---
+
+## MIME Type
+
+The registered MIME type for `.aipkg` files is:
+
+```
+application/x-aipkg
+```
+
+Use this when serving packages over HTTP.
+
+---
+
+## Creation and Extraction
+
+<Tabs>
+  <Tab title="aipkg pack">
+    The `aipkg pack` command reads an `.aispec` file from the current directory (or a specified path), validates it, collects referenced files, and produces a `{id}.{version}.aipkg` archive.
+
+    See [spec 06](06-sdk-tooling) for full CLI details.
+  </Tab>
+  <Tab title="aipkg install">
+    The `aipkg install` command follows these steps:
+
+    <Steps>
+      <Step title="Download">
+        Downloads or reads a `.aipkg` archive.
+      </Step>
+      <Step title="Read manifest">
+        Reads the `.aispec` manifest.
+      </Step>
+      <Step title="Determine APM">
+        Determines the target APM from CLI arg, project config, or auto-detection.
+      </Step>
+      <Step title="Resolve fallback chain">
+        Resolves the fallback chain for the APM. See [spec 02](02-platform-targeting).
+      </Step>
+      <Step title="Collect baseline">
+        Collects files from `shared/` as the baseline.
+      </Step>
+      <Step title="Apply overlays">
+        Overlays files from each APM directory in the fallback chain, highest specificity last (most specific wins).
+      </Step>
+      <Step title="Copy files">
+        Copies the resolved file set to the platform's install path.
+      </Step>
+      <Step title="Update lockfile">
+        Updates `aipkg.lock.json`.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+---
+
+## Relationship to NuGet `.nupkg`
+
+`.aipkg` is intentionally isomorphic with `.nupkg`:
+
+| Aspect | `.nupkg` | `.aipkg` |
+|--------|----------|----------|
+| Container format | ZIP | ZIP |
+| Manifest | `{id}.nuspec` (XML) | `{id}.aispec` (JSON) |
+| Targeting dirs | `lib/{tfm}/` | `apm/{moniker}/` |
+| Content files | `contentFiles/` | `shared/` |
+| Compression | deflate | deflate |
+| Signing | `.signature.p7s` | `.signature.p7s` (reserved) |
+
+<Note>
+  This similarity is deliberate: existing NuGet tooling infrastructure (CDN, storage, streaming readers) requires minimal adaptation to serve `.aipkg` files.
+</Note>

@@ -1,0 +1,480 @@
+---
+title: "SDK & Tooling"
+sidebarTitle: "06 · SDK & Tooling"
+description: "`AIpkg.Core` library public API, `aipkg` CLI command reference, configuration file formats, and the post-MVP TypeScript SDK strategy."
+icon: "terminal"
+---
+
+The AIpkg SDK consists of three components:
+
+<CardGroup cols={3}>
+  <Card title="AIpkg.Core" icon="cube">
+    Cross-platform .NET 10 class library. Consumed by both the server and CLI.
+  </Card>
+  <Card title="aipkg CLI" icon="terminal">
+    .NET 10 Native AOT single-file binary. No runtime required.
+  </Card>
+  <Card title="TypeScript SDK" icon="code">
+    `@aipkg/core` and platform packages. Post-MVP.
+  </Card>
+</CardGroup>
+
+---
+
+## Part 1: `AIpkg.Core`
+
+### Overview
+
+`AIpkg.Core` is the shared parsing, validation, and archive-handling library. It has no dependency on ASP.NET Core or any server infrastructure. Both `AIpkg.Server` and `AIpkg.CLI` reference it.
+
+| Property | Value |
+|----------|-------|
+| Target framework | `net10.0` |
+| NuGet package ID | `AIpkg.Core` |
+| AOT compatible | Yes (no reflection emit, no dynamic code) |
+| Serialization | `System.Text.Json` with source-generated serializers |
+| Third-party NuGet deps | None |
+
+### Public API Surface
+
+<Tabs>
+  <Tab title="AIpkg.Core (root)">
+    ```csharp
+    // Represents a parsed .aispec manifest
+    public sealed class AipkgManifest
+    {
+        public string Schema { get; init; }
+        public string Id { get; init; }
+        public string Version { get; init; }
+        public string Description { get; init; }
+        public IReadOnlyList<string> Authors { get; init; }
+        public IReadOnlyList<string> Capabilities { get; init; }
+        public IReadOnlyList<string> Targets { get; init; }
+        public string? Title { get; init; }
+        public string? Summary { get; init; }
+        public string? ReleaseNotes { get; init; }
+        public Uri? ProjectUrl { get; init; }
+        public Uri? RepositoryUrl { get; init; }
+        public string? RepositoryType { get; init; }
+        public string? RepositoryBranch { get; init; }
+        public string? RepositoryCommit { get; init; }
+        public string? LicenseExpression { get; init; }
+        public string? LicenseFile { get; init; }
+        public string? IconFile { get; init; }
+        public string? Readme { get; init; }
+        public IReadOnlyList<string> Tags { get; init; }
+        public string? Copyright { get; init; }
+        public string? Language { get; init; }
+        public ModelCompatibility? ModelCompatibility { get; init; }
+        public IReadOnlyList<string> Permissions { get; init; }
+        public IReadOnlyList<McpServerDefinition> McpServers { get; init; }
+        public IReadOnlyList<PackageDependency> Dependencies { get; init; }
+        public bool Listed { get; init; }
+        public DeprecationInfo? Deprecated { get; init; }
+    }
+
+    public sealed class ModelCompatibility
+    {
+        public int? MinimumContextWindow { get; init; }
+        public bool? RequiresToolUse { get; init; }
+        public bool? RequiresVision { get; init; }
+        public string? Notes { get; init; }
+    }
+
+    public sealed class McpServerDefinition
+    {
+        public string Name { get; init; }
+        public string Transport { get; init; }
+        public string? Command { get; init; }
+        public IReadOnlyList<string> Args { get; init; }
+        public Uri? Url { get; init; }
+        public IReadOnlyDictionary<string, string> Env { get; init; }
+        public string? Description { get; init; }
+        public IReadOnlyList<string> Targets { get; init; }
+    }
+
+    public sealed class PackageDependency
+    {
+        public string Id { get; init; }
+        public string Version { get; init; }
+        public IReadOnlyList<string> Apms { get; init; }
+        public bool Optional { get; init; }
+    }
+
+    public sealed class DeprecationInfo
+    {
+        public string? Message { get; init; }
+        public string? AlternatePackageId { get; init; }
+        public string? AlternatePackageVersion { get; init; }
+    }
+    ```
+  </Tab>
+  <Tab title="AIpkg.Core.Packaging">
+    ```csharp
+    // Reads .aipkg archives
+    public sealed class AipkgReader : IDisposable
+    {
+        public AipkgReader(Stream stream);
+        public AipkgReader(string filePath);
+
+        // Reads the manifest without extracting the full archive
+        public AipkgManifest ReadManifest();
+
+        // Lists all entries in the archive
+        public IReadOnlyList<AipkgEntry> GetEntries();
+
+        // Opens a specific entry for reading
+        public Stream OpenEntry(string entryPath);
+
+        // Extracts files for a given APM, applying fallback resolution
+        public IReadOnlyDictionary<string, Stream> ExtractForPlatform(string apmMoniker);
+    }
+
+    public sealed record AipkgEntry(
+        string Path,
+        long CompressedSize,
+        long UncompressedSize,
+        string Section  // "shared", "apm/{moniker}", "root", "reserved"
+    );
+
+    // Creates .aipkg archives
+    public sealed class AipkgWriter : IDisposable
+    {
+        public AipkgWriter(Stream outputStream);
+        public AipkgWriter(string outputFilePath);
+
+        // Must be called first
+        public void WriteManifest(AipkgManifest manifest);
+
+        // Adds a file to shared/
+        public void AddSharedFile(string relativePath, Stream content);
+
+        // Adds a file to apm/{moniker}/
+        public void AddPlatformFile(string moniker, string relativePath, Stream content);
+
+        // Adds icon, README, LICENSE at archive root
+        public void AddRootFile(string filename, Stream content);
+
+        public void Finalize();
+    }
+    ```
+  </Tab>
+  <Tab title="AIpkg.Core.Platform">
+    ```csharp
+    public sealed class PlatformCompatibilityService
+    {
+        // e.g. "claude-code" → ["apm/claude-code", "apm/claude", "apm/ai", "shared"]
+        public IReadOnlyList<string> GetFallbackChain(string moniker);
+
+        public string? GetParent(string moniker);
+
+        public bool IsCompatible(IReadOnlyList<string> packageTargets, string targetMoniker);
+
+        public string? GetInstallPath(string moniker, OperatingSystem os);
+
+        public IReadOnlyList<ApmInfo> GetAllPlatforms();
+
+        public bool IsKnown(string moniker);
+    }
+
+    public sealed record ApmInfo(
+        string Moniker,
+        string DisplayName,
+        string? Parent,
+        string? InstallPath,
+        string Stability  // "stable", "provisional", "deprecated"
+    );
+    ```
+  </Tab>
+  <Tab title="AIpkg.Core.Validation">
+    ```csharp
+    public sealed class AipkgValidator
+    {
+        public ValidationResult ValidateManifest(AipkgManifest manifest);
+        public ValidationResult ValidateArchive(Stream archiveStream);
+    }
+
+    public sealed class ValidationResult
+    {
+        public bool IsValid { get; }
+        public IReadOnlyList<ValidationError> Errors { get; }
+        public IReadOnlyList<ValidationWarning> Warnings { get; }
+    }
+
+    public sealed record ValidationError(string Code, string Message, string? Field = null);
+    public sealed record ValidationWarning(string Code, string Message, string? Field = null);
+    ```
+  </Tab>
+  <Tab title="AIpkg.Core.Versioning">
+    ```csharp
+    // SemVer 2.0.0 — compatible with NuGet versioning
+    public sealed class AipkgVersion : IComparable<AipkgVersion>
+    {
+        public static AipkgVersion Parse(string version);
+        public static bool TryParse(string version, out AipkgVersion result);
+        public bool SatisfiesRange(string versionRange);
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Documentation coverage requirement: 100% of public surface members must carry XML doc comments before the 1.0.0 release. See [spec 07](07-docs-platform) for DotNetDocs.com integration.
+</Note>
+
+---
+
+## Part 2: `aipkg` CLI
+
+### Distribution
+
+| Channel | Command |
+|---------|---------|
+| Direct download | GitHub Releases |
+| Windows | `winget install aipkg` |
+| macOS | `brew install aipkg` |
+| Linux (future) | `apt install aipkg` |
+| Script | `curl -fsSL https://aipkg.org/install.sh \| sh` |
+
+Ships for: `win-x64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`. No .NET runtime required.
+
+Published with: `dotnet publish -r {rid} --self-contained`
+
+### Command Reference
+
+<AccordionGroup>
+  <Accordion title="aipkg pack">
+    ```
+    aipkg pack [manifest-path] [options]
+
+    Arguments:
+      manifest-path    Path to .aispec file (default: finds *.aispec in current dir)
+
+    Options:
+      -o, --output <dir>     Output directory (default: current dir)
+      --no-validate          Skip validation (not recommended)
+      -v, --verbosity <lvl>  Verbosity: quiet, normal, detailed (default: normal)
+
+    Output:
+      {id}.{version}.aipkg
+    ```
+
+    Behavior:
+    1. Reads and validates the `.aispec` manifest
+    2. Resolves all file references (icon, readme, license, shared/, apm/)
+    3. Builds the ZIP archive
+    4. Reports the archive size and file count
+  </Accordion>
+  <Accordion title="aipkg push">
+    ```
+    aipkg push <package-path> [options]
+
+    Arguments:
+      package-path    Path to .aipkg file
+
+    Options:
+      -s, --source <url>    Registry URL (default: https://aipkg.org)
+      -k, --api-key <key>   API key (or set AIPKG_API_KEY env var)
+      --skip-duplicate      Return success if version already exists
+      -t, --timeout <sec>   Upload timeout in seconds (default: 300)
+    ```
+  </Accordion>
+  <Accordion title="aipkg install">
+    ```
+    aipkg install <id[@version]> [options]
+    aipkg install                    ← installs from aipkg.config.json
+
+    Options:
+      -p, --platform <apm>    Target APM moniker (default: auto-detect)
+      -g, --global            Install globally (not project-scoped)
+      --prerelease            Include pre-release versions
+      -s, --source <url>      Registry URL
+      --dry-run               Show what would be installed without installing
+    ```
+
+    Auto-detect platform: the CLI inspects the current directory for known config directories (`.claude/`, `.cursor/`, etc.) to infer the active platform. Falls back to prompting if ambiguous.
+  </Accordion>
+  <Accordion title="aipkg restore">
+    ```
+    aipkg restore [options]
+
+    Options:
+      --locked    Fail if aipkg.lock.json is out of date
+      --no-lock   Do not write/update aipkg.lock.json
+      --force     Re-install even if already installed
+    ```
+
+    Reads `aipkg.config.json` and installs all declared packages.
+  </Accordion>
+  <Accordion title="aipkg remove">
+    ```
+    aipkg remove <id> [options]
+
+    Options:
+      -p, --platform <apm>    Target APM moniker
+      -g, --global            Remove globally installed package
+    ```
+  </Accordion>
+  <Accordion title="aipkg list">
+    ```
+    aipkg list [options]
+
+    Options:
+      -p, --platform <apm>    Filter by platform
+      -g, --global            List global packages
+      --format <fmt>          Output format: table, json (default: table)
+    ```
+  </Accordion>
+  <Accordion title="aipkg search">
+    ```
+    aipkg search <query> [options]
+
+    Options:
+      --apm <moniker>         Filter by platform
+      --capability <cap>      Filter by capability
+      --prerelease            Include pre-release versions
+      --take <n>              Results to show (default: 20, max: 100)
+      --format <fmt>          Output format: table, json (default: table)
+    ```
+  </Accordion>
+  <Accordion title="aipkg info">
+    ```
+    aipkg info <id[@version]> [options]
+
+    Options:
+      --format <fmt>    Output format: text, json (default: text)
+      -s, --source      Registry URL
+    ```
+
+    Shows: ID, version, description, authors, capabilities, targets, permissions, dependencies, download count.
+  </Accordion>
+  <Accordion title="aipkg verify">
+    ```
+    aipkg verify <package-path>
+
+    Validates:
+      - Archive integrity (ZIP validity)
+      - Manifest schema (JSON Schema)
+      - Manifest business rules (see spec 03)
+      - File structure conventions
+      - Icon dimensions and format
+      - Size limits
+
+    Exit codes: 0 = valid, 1 = invalid, 2 = warnings only
+    ```
+  </Accordion>
+  <Accordion title="aipkg sources">
+    ```
+    aipkg sources list
+    aipkg sources add <name> <url>
+    aipkg sources remove <name>
+    aipkg sources update <name> [--url <url>]
+    ```
+
+    Sources are stored in `~/.aipkg/sources.json`.
+  </Accordion>
+  <Accordion title="aipkg new">
+    ```
+    aipkg new [options]
+
+    Options:
+      --id <id>           Package ID (prompted if not given)
+      --capability <cap>  Initial capability
+      --non-interactive   Use defaults without prompting
+    ```
+
+    Creates a minimal `{id}.aispec` file in the current directory.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+### Configuration Files
+
+<Tabs>
+  <Tab title="aipkg.config.json">
+    Project dependencies file — analogous to `package.json` (npm).
+
+    ```json
+    {
+      "$schema": "https://aipkg.org/schemas/config/1.0.0",
+      "platform": "claude-code",
+      "packages": [
+        { "id": "git-helpers", "version": "1.0.0" },
+        { "id": "filesystem-mcp", "version": "2.1.0", "optional": true }
+      ],
+      "sources": [
+        { "name": "aipkg.org", "url": "https://aipkg.org/v3/index.json" }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab title="aipkg.lock.json">
+    Lockfile — analogous to `package-lock.json`. Records exact resolved versions and content hashes.
+
+    ```json
+    {
+      "$schema": "https://aipkg.org/schemas/lock/1.0.0",
+      "version": 1,
+      "platform": "claude-code",
+      "packages": [
+        {
+          "id": "git-helpers",
+          "resolved": "1.0.0",
+          "contentHash": "sha256:abc123...",
+          "downloadUrl": "https://aipkg.org/v3/flatcontainer/git-helpers/1.0.0/git-helpers.1.0.0.aipkg",
+          "installedFiles": [
+            ".claude/skills/git-helpers.md",
+            ".claude/prompts/git-base.md"
+          ],
+          "dependencies": []
+        }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab title="~/.aipkg/config.json">
+    Global user settings:
+
+    ```json
+    {
+      "defaultSource": "https://aipkg.org/v3/index.json",
+      "defaultPlatform": "claude-code",
+      "globalInstallPath": "~/.aipkg/global/",
+      "httpTimeout": 300
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Part 3: TypeScript SDK (Post-MVP)
+
+| Package | Purpose |
+|---------|---------|
+| `@aipkg/core` | Registry client, manifest parsing, version resolution |
+| `@aipkg/claude-code` | Claude Code integration helpers |
+| `@aipkg/copilot` | GitHub Copilot integration helpers |
+| `@aipkg/cursor` | Cursor integration helpers |
+
+```typescript
+// Registry client
+class AipkgClient {
+  constructor(options?: { source?: string });
+  search(query: string, options?: SearchOptions): Promise<SearchResult>;
+  getPackage(id: string, version?: string): Promise<PackageMetadata>;
+  getVersions(id: string): Promise<string[]>;
+  download(id: string, version: string): Promise<Uint8Array>;
+}
+
+// Manifest parsing
+function parseManifest(json: string): AipkgManifest;
+function validateManifest(manifest: AipkgManifest): ValidationResult;
+
+type Capability = 'skill' | 'command' | 'agent' | 'prompt' | 'mcp-server' | 'config' | 'hook' | 'theme';
+```
+
+<Info>
+  TypeScript SDK is not in scope for MVP. Defined here for future reference.
+</Info>

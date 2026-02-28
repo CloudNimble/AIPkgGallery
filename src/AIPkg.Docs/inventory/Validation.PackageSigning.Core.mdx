@@ -1,0 +1,152 @@
+﻿---
+title: Validation.PackageSigning.Core
+sidebarTitle: PackageSigning.Core
+description: Shared infrastructure for NuGet package signing validation — certificate blob storage, Service Bus message contracts, and cryptographic extension helpers.
+icon: shield-check
+---
+
+# Validation.PackageSigning.Core
+
+This library is the shared foundation for all NuGet package-signing validation workers. It owns the
+message contracts exchanged over Azure Service Bus, the certificate blob-store abstraction, and a
+small set of cryptographic helpers that are consumed across every signing-related validation job.
+
+<Note>
+  The assembly and root namespace differ from the folder name. The project builds as
+  `NuGet.Jobs.Validation.PackageSigning` (assembly: `NuGet.Jobs.Validation.PackageSigning`), not
+  `Validation.PackageSigning.Core`. Keep this in mind when resolving namespace collisions.
+</Note>
+
+## Overview
+
+<CardGroup cols={2}>
+  <Card title="Message Contracts" icon="envelope">
+    Versioned Service Bus message types (`SignatureValidationMessage`,
+    `CertificateValidationMessage`) and their `IBrokeredMessageSerializer` implementations that
+    bridge the queue wire-format to strongly-typed C# objects.
+  </Card>
+  <Card title="Certificate Store" icon="database">
+    `ICertificateStore` / `CertificateStore` — a blob-backed store that persists X.509 certificates
+    keyed by their SHA-256 thumbprint under the path `sha256/<thumbprint>.cer`.
+  </Card>
+  <Card title="Signature Extensions" icon="puzzle-piece">
+    `PackageSignatureExtensions.IsPromotable()` — decides whether a validated signature should be
+    promoted to `Valid` or held in `InGracePeriod` based on certificate status freshness relative
+    to the signing timestamp.
+  </Card>
+  <Card title="Crypto Helpers" icon="key">
+    `X509Certificate2Extensions.ComputeSHA256Thumbprint()` and
+    `CryptographicAttributeObjectCollectionExtensions.FirstOrDefault()` extend BCL types in their
+    own namespaces so they feel like native APIs.
+  </Card>
+</CardGroup>
+
+## Role in the NuGetGallery Ecosystem
+
+Package signing validation in NuGetGallery is decomposed into several independently-deployed jobs
+that communicate through Azure Service Bus queues:
+
+1. A **signature validation job** receives a `SignatureValidationMessage` and verifies that the
+   `.nupkg` at the given URI is properly signed.
+2. A **certificate validation job** receives a `CertificateValidationMessage` and checks revocation
+   / validity of the certificate identified by `CertificateKey`.
+3. Both jobs read and write X.509 DER blobs through `ICertificateStore`.
+
+This library is the single source of truth for those contracts and the storage primitive, so every
+consuming job targets the same schema version and uses the same thumbprint computation logic.
+
+```
+┌─────────────────────────────────┐      Service Bus       ┌───────────────────────────────────┐
+│  SignatureValidationJob         │ ─── SignatureMsg ────►  │  (processes package signature)    │
+│  CertificateValidationJob       │ ─── CertMsg ─────────►  │  (checks cert revocation)         │
+└────────────┬────────────────────┘                         └──────────────┬────────────────────┘
+             │                                                              │
+             └──────────── Validation.PackageSigning.Core ─────────────────┘
+                      (messages · ICertificateStore · extensions)
+```
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Messages/SignatureValidationMessage.cs` | `SignatureValidationMessage` | Immutable message carrying `PackageId`, `PackageVersion`, `NupkgUri`, `ValidationId`, and `RequireRepositorySignature` flag. |
+| `Messages/SignatureValidationMessageSerializer.cs` | `SignatureValidationMessageSerializer` | Serializes/deserializes `SignatureValidationMessage` via `BrokeredMessageSerializer<SignatureValidationMessageData1>` using schema name `SignatureValidationMessageData` v1. |
+| `Messages/CertificateValidationMessage.cs` | `CertificateValidationMessage` | Immutable message carrying `CertificateKey`, `ValidationId`, `RevalidateRevokedCertificate`, and `SendCheckValidator`. |
+| `Messages/CertificateValidationMessageSerializer.cs` | `CertificateValidationMessageSerializer` | Serializes/deserializes `CertificateValidationMessage` via schema name `CertificateValidationMessageData` v1. |
+| `Storage/ICertificateStore.cs` | `ICertificateStore` | Async interface: `ExistsAsync`, `LoadAsync`, `SaveAsync` — all keyed on SHA-256 thumbprint. |
+| `Storage/CertificateStore.cs` | `CertificateStore` | Blob-backed implementation. Blobs are stored at `sha256/<thumbprint>.cer` (lowercase). Verifies thumbprint on every load. |
+| `Configuration/CertificateStoreConfiguration.cs` | `CertificateStoreConfiguration` | POCO bound via `IOptions<T>`: `DataStorageAccount` and `ContainerName`. |
+| `Extensions/PackageSignatureExtensions.cs` | `PackageSignatureExtensions` | `IsPromotable()` — grace-period logic comparing `EndCertificate.StatusUpdateTime` against the latest trusted timestamp. |
+| `Extensions/X509Certificate2Extensions.cs` | `X509Certificate2Extensions` | `ComputeSHA256Thumbprint()` — SHA-256 hash of `RawData` encoded as a lowercase hex string without separators. |
+| `Extensions/CryptographicAttributeObjectCollectionExtensions.cs` | `CryptographicAttributeObjectCollectionExtensions` | `FirstOrDefault(oid)` — OID-based linear search over a `CryptographicAttributeObjectCollection`. |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `Validation.Common.Job` | Provides `IValidator`, `IProcessor`, `IValidatorStateService`, `SubscriptionProcessorJob`, and DI bootstrapping shared by all validation jobs. Itself references `NuGet.Services.ServiceBus` and `NuGet.Services.Storage`. |
+
+### NuGet Package References
+
+<Note>
+  This project carries **no direct NuGet `PackageReference` entries** in its `.csproj`. All
+  framework and NuGet package dependencies are inherited transitively through
+  `Validation.Common.Job`, which brings in Autofac, `Azure.Storage.Blobs`,
+  `Microsoft.Extensions.*`, `NuGet.Packaging`, `NuGet.Services.ServiceBus`, and
+  `NuGet.Services.Storage`.
+</Note>
+
+| Package (via `Validation.Common.Job`) | Role |
+|---------------------------------------|------|
+| `NuGet.Services.ServiceBus` | `IBrokeredMessageSerializer<T>`, `BrokeredMessageSerializer<T>`, `[Schema]` attribute, `IReceivedBrokeredMessage` |
+| `NuGet.Services.Storage` | `IStorage`, `StreamStorageContent` used by `CertificateStore` |
+| `Azure.Storage.Blobs` | Underlying blob transport |
+| `Autofac` / `Autofac.Extensions.DependencyInjection` | DI container used by hosting jobs |
+| `Microsoft.Extensions.Logging` | `ILogger<T>` consumed by `CertificateStore` |
+| `NuGet.Packaging` | NuGet package model types |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **SHA-256 thumbprints only.** The BCL `X509Certificate2.Thumbprint` property returns a SHA-1
+  hash. This library explicitly replaces it with `ComputeSHA256Thumbprint()`, which hashes
+  `RawData` with SHA-256. Every storage path, log message, and equality check in this library uses
+  the SHA-256 variant. Mixing the two will cause silent misses in the certificate store.
+</Note>
+
+<Warning>
+  **`CertificateStore.SaveAsync` does not overwrite.** The underlying `IStorage.Save` call passes
+  `overwrite: false`. Attempting to save a certificate that already exists will throw. Callers
+  should always call `ExistsAsync` first, or handle the resulting exception.
+</Warning>
+
+<Warning>
+  **Typo preserved in wire format.** `SignatureValidationMessageSerializer` serializes the
+  `RequireRepositorySignature` property into the JSON field `RequireReopsitorySignature` (note the
+  transposed `o` and `s`). This misspelling is baked into schema version 1 and cannot be changed
+  without a coordinated schema version bump across all producers and consumers.
+</Warning>
+
+<Note>
+  **Grace-period promotion logic.** `PackageSignatureExtensions.IsPromotable()` returns `false`
+  (keep in grace period) unless every `TrustedTimestamp.EndCertificate.StatusUpdateTime` and — when
+  not revoked — the signature's own `EndCertificate.StatusUpdateTime` are all strictly after the
+  latest signing timestamp. A revoked signing certificate short-circuits this check and is
+  considered already out of the grace period, because revocation data may be purged by CAs over
+  time and cannot be reverified.
+</Note>
+
+<Tip>
+  The `CryptographicAttributeObjectCollectionExtensions.FirstOrDefault` extension is defined in the
+  `System.Security.Cryptography` namespace (not the `NuGet.Jobs.*` namespace) so callers don't
+  need an additional `using` directive — it is available wherever the BCL cryptography types are
+  already in scope.
+</Tip>
+
+## Target Framework
+
+This project targets `net472` only. It is **not** a multi-targeted library, despite the downstream
+`Validation.Common.Job` supporting both `net472` and `netstandard2.1`. Consumers on .NET Core or
+.NET 5+ should not reference this project directly until it is retargeted.

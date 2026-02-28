@@ -1,0 +1,102 @@
+---
+title: NuGet.Services.Owin
+sidebarTitle: Services.Owin
+description: A small shared library that provides an OWIN middleware for enforcing HTTPS across the NuGet Gallery, with configurable port and per-path exclusions.
+icon: lock
+---
+
+## Overview
+
+`NuGet.Services.Owin` is a focused, single-responsibility library that slots into an OWIN pipeline to enforce HTTPS for every incoming HTTP request. When a plain HTTP request arrives, the middleware redirects `GET` and `HEAD` requests to the equivalent HTTPS URL (preserving the configured SSL port) and returns `400 Bad Request` with the reason phrase `"SSL Required"` for all other HTTP methods. Requests that already arrive over a secure connection pass through to the next middleware immediately.
+
+The library is designed for reuse across NuGet's service family. It is compiled for `net472` and carries only a single external dependency (`Microsoft.Owin`), keeping it as lightweight as possible. The `ForceSslMiddlewareExtensions` class registers extension methods on `IAppBuilder` in the `Owin` namespace, following the standard OWIN middleware registration convention so that callers can activate the feature with a single `app.UseForceSsl(...)` call in their startup code.
+
+A configurable exclusion list allows specific paths to bypass the redirect. In NuGet Gallery, this is used to exempt health-check and status endpoints (`/api/health-probe` and `/api/status`) so that load balancers and monitoring infrastructure can reach those endpoints over plain HTTP without triggering redirects or 400 responses.
+
+## Role in System
+
+```
+HTTP Request
+     |
+     v
++-----------------------------+
+|  ForceSslMiddleware         |
+|  (top of OWIN pipeline)     |
+|                             |
+|  IsSecure? ──Yes──────────────────────────────> Next Middleware
+|      |                      |
+|      No                     |
+|      |                      |
+|  Excluded path? ──Yes──────────────────────────> Next Middleware
+|      |                      |
+|      No                     |
+|      |                      |
+|  GET or HEAD? ──Yes──> 302 Redirect to https://[host]:[sslPort][path]
+|      |                      |
+|      No                     |
+|      v                      |
+|  400 Bad Request            |
+|  "SSL Required"             |
++-----------------------------+
+```
+
+Registered at the very top of the `NuGetGallery` OWIN pipeline in `OwinStartup.cs`, so it runs before authentication, MVC routing, or any other middleware. It is only added to the pipeline when the `Gallery.RequireSSL` configuration flag is `true`.
+
+<CardGroup cols={2}>
+  <Card title="Redirect Logic" icon="arrow-right">
+    Rebuilds the request URI using `UriBuilder`, swapping the scheme to `https` and the port to the configured SSL port. Only `GET` and `HEAD` are redirectable; all other methods receive a `400 Bad Request` response.
+  </Card>
+  <Card title="Path Exclusions" icon="filter">
+    Exclusion paths are stored in a `HashSet<string>` with `OrdinalIgnoreCase` comparison, enabling O(1) lookup per request. In Gallery, `/api/health-probe` and `/api/status` are excluded by default via `Web.config`.
+  </Card>
+  <Card title="OWIN Integration" icon="plug">
+    Extends `OwinMiddleware` and provides `IAppBuilder` extension methods in the `Owin` namespace. Three overloads cover: default port 443, custom port, and custom port with exclusion list.
+  </Card>
+  <Card title="Minimal Footprint" icon="feather">
+    The project contains exactly two source files, targets `net472`, and depends only on `Microsoft.Owin` and the BCL `System.Net.Http` reference assembly.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `ForceSslMiddleware.cs` | `ForceSslMiddleware` | Core OWIN middleware. Evaluates each request: passes through secure or excluded requests, redirects safe HTTP methods, rejects unsafe HTTP methods with 400. |
+| `ForceSslMiddlewareExtensions.cs` | `ForceSslMiddlewareExtensions` (static) | Provides `UseForceSsl()` extension methods on `IAppBuilder` in the `Owin` namespace. Three overloads: default port 443, explicit port, and explicit port with excluded paths. |
+| `NuGet.Services.Owin.csproj` | — | SDK-style project targeting `net472`. References `Microsoft.Owin` (NuGet) and `System.Net.Http` (BCL). |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.Owin` | Provides `OwinMiddleware`, `IOwinContext`, `IAppBuilder`, and the OWIN pipeline infrastructure that the middleware is built on. |
+
+### Internal Project References
+
+This project has no references to other projects in the solution. It is a leaf library consumed by others.
+
+### Projects That Reference This Library
+
+| Project | How It Is Used |
+|---------|---------------|
+| `NuGetGallery` | Registered in `App_Start/OwinStartup.cs` at pipeline startup when `RequireSSL` is `true`. The SSL port and exclusion paths come from `IAppConfiguration.SSLPort` and `IAppConfiguration.ForceSslExclusion`. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The middleware is registered **first** in the NuGetGallery OWIN pipeline, before authentication and MVC. This ensures that no request can reach any protected resource over plain HTTP, regardless of what downstream middleware would otherwise permit.
+</Note>
+
+<Warning>
+Only `GET` and `HEAD` requests are redirected to HTTPS. Any other HTTP method (e.g., `POST`, `PUT`, `DELETE`) sent over plain HTTP receives a `400 Bad Request` with reason phrase `"SSL Required"` and no redirect. This is intentional: redirecting non-idempotent requests could cause data loss or double-submission.
+</Warning>
+
+<Tip>
+The exclusion list uses `StringComparer.OrdinalIgnoreCase` and is backed by a `HashSet<string>`, so path matching is O(1) per request with no per-request allocations beyond the lookup. Paths must be an exact match — there is no wildcard or prefix support.
+</Tip>
+
+- **Configuration in Gallery**: `Gallery.RequireSSL=true` enables the middleware. `Gallery.SSLPort` sets the redirect target port (typically `443`). `Gallery.ForceSslExclusion` accepts a semicolon-separated list of paths (e.g., `/api/health-probe;/api/status`) parsed into a `string[]` by the configuration system.
+- **No logging or telemetry**: The middleware performs redirects and error responses silently. Any observability of SSL enforcement happens through the standard IIS/OWIN request logs.
+- **Extension methods live in the `Owin` namespace**: Following the OWIN convention, `ForceSslMiddlewareExtensions` is declared in the `Owin` namespace (not `NuGet.Services.Owin`) so that a single `using Owin;` is sufficient for callers to discover the extension methods.

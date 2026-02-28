@@ -1,0 +1,110 @@
+---
+title: DatabaseMigrationTools
+sidebarTitle: DatabaseMigrationTools
+description: Console executable that applies Entity Framework Code First migrations to the Gallery, SupportRequest, Validation, and CatalogValidation SQL databases as a NuGet job.
+icon: database
+---
+
+## Overview
+
+`DatabaseMigrationTools` is a .NET Framework 4.7.2 console application (NuGet job) that runs Entity Framework Code First database migrations against the four core SQL Server databases used by NuGet.org:
+
+- **GalleryDatabase** — the primary NuGet package index store
+- **SupportRequestDatabase** — admin support ticket data
+- **ValidationDatabase** — package signing / validation pipeline state
+- **CatalogValidationDatabase** — catalog consistency validation state
+
+The tool is invoked as part of the deployment pipeline. It accepts a single `MigrationTargetDatabase` argument that selects which database to migrate. A separate NuGet package is published for each target (four `.nuspec` files), allowing deployment pipelines to trigger migrations independently per database.
+
+<Note>
+The tool adds a hard 30-second `Thread.Sleep` after the job completes. This is a documented workaround for an Application Insights SDK bug where `TelemetryChannel.Flush()` is unreliable.
+</Note>
+
+## Role in System
+
+<CardGroup cols={2}>
+  <Card title="Deployment Gate" icon="shield-check">
+    Runs as a post-deploy step (via `Scripts/PostDeploy.ps1 → RunJob.cmd`) before traffic is shifted to a new deployment slot, ensuring the schema is always ahead of the application code.
+  </Card>
+  <Card title="Multi-Database Fan-Out" icon="share-2">
+    A single compiled binary covers all four databases. The `MigrationTargetDatabase` argument selects the context at runtime, so four separate NuGet packages can be published from one build artifact.
+  </Card>
+  <Card title="Entra ID–Aware" icon="lock">
+    All `*DbMigrationContext` classes capture the SQL connection's `AccessToken` at construction time and restore it before every EF context creation via `SetSqlConnectionAccessToken()`, supporting MSI / service principal authentication.
+  </Card>
+  <Card title="Migration Safety Check" icon="circle-check">
+    Before applying any pending migration, `Job.CheckIsValidMigration()` compares the ordered list of applied database migrations against the local code migrations to detect history divergence.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point. Constructs `MigrationContextFactory`, wires it into `Job`, runs via `JobRunner.RunOnce`, then sleeps 30s for telemetry flush. |
+| `MigrationContextFactory.cs` | `MigrationContextFactory` | Registry mapping each `MigrationTargetDatabaseArgumentNames` constant to an async factory delegate. |
+| `GalleryDbMigrationContext.cs` | `GalleryDbMigrationContext` | Configures `GalleryDbContextFactory` and `MigrationsConfiguration` for the main NuGet Gallery database. |
+| `SupportRequestDbMigrationContext.cs` | `SupportRequestDbMigrationContext` | Configures `SupportRequestDbContextFactory` for the admin support-request database. |
+| `ValidationDbMigrationContext.cs` | `ValidationDbMigrationContext` | Configures `ValidationDbContextFactory` for the package-validation pipeline database. |
+| `CatalogValidationDbMigrationContext.cs` | `CatalogValidationDbMigrationContext` | Configures `CatalogValidationDbContextFactory` for the catalog-validation database. |
+| `Scripts/PostDeploy.ps1` | — | Thin PowerShell wrapper invoked by the deployment system; calls `RunJob.cmd` and throws on non-zero exit code. |
+| `DatabaseMigration.*.nuspec` (×4) | — | Per-database NuGet packaging descriptors. |
+
+Classes in the companion library `NuGet.Services.DatabaseMigration`:
+
+| File | Class / Interface | Purpose |
+|------|-----------------|---------|
+| `IMigrationContext.cs` | `IMigrationContext` | Contract: exposes `SqlConnection`, `SqlConnectionAccessToken`, and `GetDbMigrator` factory. |
+| `BaseDbMigrationContext.cs` | `BaseDbMigrationContext` | Base implementation; holds the connection, restores access token when connection is closed. |
+| `Job.cs` | `Job` | Core job logic: reads the `MigrationTargetDatabase` arg, checks migration validity, scripts pending SQL, then calls `migrator.Update()`. |
+| `MigrationTargetDatabaseArgumentNames.cs` | `MigrationTargetDatabaseArgumentNames` | String constants (`GalleryDatabase`, `SupportRequestDatabase`, `ValidationDatabase`, `CatalogValidationDatabase`). |
+
+## Dependencies
+
+### NuGet Packages
+
+| Package | Purpose |
+|---------|---------|
+| `EntityFramework` | EF6 `DbMigrator`, `DbMigrationsConfiguration`, `MigratorScriptingDecorator` — the migration engine. |
+
+### Internal Project References
+
+| Project | What It Provides |
+|---------|----------------|
+| `NuGet.Services.DatabaseMigration` | `Job`, `BaseDbMigrationContext`, `IMigrationContext`, core migration abstractions. |
+| `NuGetGallery` | `EntitiesContext`, `MigrationsConfiguration`, `GalleryDbContextFactory`. |
+| `NuGet.Services.Validation` | `ValidationEntitiesContext`, `ValidationMigrationsConfiguration`. |
+| `NuGet.Services.CatalogValidation` | `CatalogValidationEntitiesContext`, `CatalogValidationMigrationsConfiguration`. |
+
+## Deployment Flow
+
+```text
+Deploy pipeline
+  └─ Install NuGet package (e.g. DatabaseMigration.Gallery)
+       └─ Scripts/PostDeploy.ps1
+            └─ RunJob.cmd  →  DatabaseMigrationTools.exe
+                 --MigrationTargetDatabase GalleryDatabase
+                 --Configuration <key-vault-or-json-path>
+```
+
+## Notable Patterns and Quirks
+
+<Note>
+**Static context factory pattern.** Each `*DbMigrationContext` constructor assigns a lambda to a static `*ContextFactory` property. This side-effectful static mutation works for a single-run console job but would break under concurrent or parallel migration runs in the same process.
+</Note>
+
+<Warning>
+**Access token renewal gap.** `SetSqlConnectionAccessToken()` only resets the token when `SqlConnection.State == ConnectionState.Closed`. If a token expires mid-migration while the connection is open, the migration will fail. Long-running schema changes on databases with short token lifetimes are a risk.
+</Warning>
+
+<Note>
+**Skipped Gallery migration.** `Job.cs` hard-codes `SkipGalleryDatabaseMigrationFile = "201304262245205_CuratedPackagesUniqueIndex"`. This migration exists in the database history but has no corresponding local file; the validation loop skips it to avoid a spurious divergence error.
+</Note>
+
+<Tip>
+**Migration script logging.** Before calling `migrator.Update()`, the job uses `MigratorScriptingDecorator` to generate and log the full SQL for all pending migrations — making the deployment log an audit trail of every DDL statement applied.
+</Tip>
+
+<Warning>
+**Validation check is partially disabled.** `CheckIsValidMigration` contains commented-out guards that would throw when either the database or local migration list is empty. Empty-list scenarios are currently silently allowed.
+</Warning>

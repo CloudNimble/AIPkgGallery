@@ -1,0 +1,106 @@
+---
+title: "Ng"
+sidebarTitle: "Ng"
+description: "Command-line job runner (ng.exe) that drives NuGet catalog synchronization, DNX flat-container population, icon processing, and package monitoring pipelines."
+icon: "terminal"
+---
+
+## Overview
+
+`Ng` is the background-job executable (`ng.exe`) for the NuGet Gallery infrastructure. It is a single .NET 4.7.2 console application that hosts a named-job dispatcher: at startup the caller passes a job name as the first argument, and `NgJobFactory` instantiates and runs the matching `NgJob` subclass.
+
+The project has no REST API surface. Its purpose is to run long-lived, looping or one-shot background workers that keep derived NuGet infrastructure (catalog, flat container, registration hives, monitoring queues, icon CDN) in sync with the gallery database.
+
+<Note>
+`ng.exe` is the legacy job host. Newer NuGet jobs use `NuGet.Jobs`-based infrastructure with JSON configuration. `Ng` predates that pattern and uses its own key-value CLI argument convention (`-argName value`).
+</Note>
+
+## Role in the NuGet Gallery Ecosystem
+
+```
+Gallery DB ──► db2catalog ──► Catalog (Azure Blob)
+                                   │
+                    ┌──────────────┼──────────────┐
+                    ▼              ▼               ▼
+             catalog2dnx    catalog2icon   catalog2monitoring
+            (flat container) (icon CDN)   (validation queue)
+                                               │
+                                        monitoringprocessor
+                                        monitoring2monitoring
+```
+
+<CardGroup cols={2}>
+  <Card title="Catalog Feeds" icon="database">
+    `db2catalog` reads the Gallery SQL database and writes package create / edit / delete events into the V3 catalog JSON feed stored in Azure Blob Storage.
+  </Card>
+  <Card title="Flat Container (DNX)" icon="layers">
+    `catalog2dnx` reads the catalog and populates the flat-container blob hierarchy used by NuGet restore.
+  </Card>
+  <Card title="Icon Pipeline" icon="image">
+    `catalog2icon` extracts embedded package icons and external icon URLs from catalog leaves and copies them into a CDN-backed icon storage container.
+  </Card>
+  <Card title="Monitoring" icon="activity">
+    `catalog2monitoring`, `monitoring2monitoring`, and `monitoringprocessor` queue packages for endpoint validation and process the results.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; configures Application Insights, Serilog, Autofac DI, KeyVault secret injection, then delegates to `NgJobFactory`. |
+| `NgJobFactory.cs` | `NgJobFactory` | Static string→`Type` map; resolves and instantiates the requested `NgJob` subclass via reflection. |
+| `Jobs/NgJob.cs` | `NgJob` (abstract) | Base class for all jobs. Owns logger, telemetry client, `SecretInjector`, HTTP connection-limit tuning (`DefaultConnectionLimit = 64`). Defines `Init` + `RunInternalAsync` template. |
+| `Jobs/LoopingNgJob.cs` | `LoopingNgJob` (abstract) | Extends `NgJob` with an infinite polling loop. Supports configurable `interval` and `ReinitializeIntervalSec`. Swallows `TransientException` without stopping the loop. |
+| `Jobs/Db2CatalogJob.cs` | `Db2CatalogJob` | Reads package creates, edits, and deletes from the Gallery SQL DB and appends them to the V3 catalog using `AppendOnlyCatalogWriter`. Detects deletes from auditing blob storage. |
+| `Jobs/Catalog2DnxJob.cs` | `Catalog2DnxJob` | Drives `DnxCatalogCollector` to mirror catalog entries into the flat container. Uses `DurableCursorWithUpdates`. Max parallelism 256. |
+| `Jobs/Catalog2IconJob.cs` | `Catalog2IconJob` | Drives `IconsCollector` with `IconProcessor` + `ExternalIconContentProvider`. Caches failure results via `IconCopyResultCache`. |
+| `Jobs/LightningJob.cs` | `LightningJob` | Two-phase bulk registration reindex tool. **Prepare** traverses the entire catalog index and emits batched cursor files. **Strike** processes one batch, writing registration hive blobs. |
+| `Jobs/Catalog2MonitoringJob.cs` | `Catalog2MonitoringJob` | Enqueues `PackageValidatorContext` messages for packages that appear in the catalog. |
+| `Jobs/MonitoringProcessorJob.cs` | `MonitoringProcessorJob` | Dequeues and executes validations against registration, flat-container, and search endpoints. |
+| `Jobs/Db2MonitoringJob.cs` | `Db2MonitoringJob` | Seeds the monitoring queue directly from the Gallery DB rather than from the catalog. |
+| `Jobs/Monitoring2MonitoringJob.cs` | `Monitoring2MonitoringJob` | Requeues packages that previously failed validation. |
+| `CommandHelpers.cs` | `CommandHelpers` (static) | Parses CLI arguments, wires up KeyVault secret injection, creates `StorageFactory` instances, builds HTTP handler pipelines with telemetry. |
+| `Arguments.cs` | `Arguments` (static) | Centralised string constants for every recognized CLI argument name. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Serilog.Sinks.File` | Rolling file log sink; writes `Log.txt` with 3-file retention, 1 MB size limit. |
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `NuGet.Jobs.Catalog2Registration` | Provides `IRegistrationUpdater`, `Catalog2RegistrationConfiguration`, and Autofac modules used by `LightningJob` to write registration hive blobs. |
+| `NuGet.Services.Metadata.Catalog.Monitoring` | Provides `ValidationCollector`, `PackageValidatorContextEnqueuer`, monitoring endpoint types. |
+| `NuGet.Services.Storage` | Provides `IStorageQueue<T>`, `StorageQueue<T>`, `AzureStorageQueue`, and `JsonMessageSerializer<T>`. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Cursor-based resumability.** Every looping job tracks its position in the catalog via a `DurableCursor` written to blob storage (`cursor.json`). On restart the job resumes from the last committed position rather than replaying the entire catalog.
+</Note>
+
+<Note>
+**Reinitialization interval.** `LoopingNgJob` separates the loop interval (`-interval`, default 3s) from the reinitialization interval (`-ReinitializeIntervalSec`, default 3600s). Expensive operations like creating storage clients and resolving Key Vault secrets only happen once per hour.
+</Note>
+
+<Warning>
+**Lightning job is Azure-only.** `LightningJob.Init` hard-codes `arguments[Arguments.StorageType] = "azure"`. Attempting to point it at file storage will fail at runtime. It also requires three separate storage containers (legacy, gzipped, SemVer 2.0.0) to be configured.
+</Warning>
+
+<Warning>
+**Db2CatalogJob deduplicates deletes per commit.** When multiple audit entries for the same package ID+version appear within one batch, `SegmentPackageDeletes` splits them into separate catalog commits. A `Thread.Sleep(1s)` is injected between segments to guarantee distinct commit timestamps.
+</Warning>
+
+<Tip>
+**KeyVault is optional.** If `-vaultName` is not supplied, `CommandHelpers` substitutes an `EmptySecretReader`. This makes local development against file storage straightforward without Azure KeyVault credentials.
+</Tip>
+
+<Tip>
+**Managed Identity vs. certificate auth.** `CommandHelpers.GetSecretInjector` selects between `ManagedIdentityCredential` (when `-useManagedIdentity true`) and certificate-based `KeyVaultReader` automatically, allowing the same job binary to run in both MSI-enabled pods and environments authenticated via storage account keys.
+</Tip>

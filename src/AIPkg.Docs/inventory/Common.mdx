@@ -1,0 +1,79 @@
+---
+title: Common
+sidebarTitle: Common
+description: A loose source folder (no .csproj) that holds a single vendor-copied hash-combining utility shared across the NuGet Gallery src tree.
+icon: "folder-open"
+---
+
+## Overview
+
+`src/Common` is not a compiled project. It contains no `.csproj`, no `AssemblyInfo`, and no NuGet package manifest. Instead it is a bare source-file directory used as a **solution-folder** grouping in several Visual Studio solution files (`NuGet.Jobs.sln`, `NuGet.Jobs.FunctionalTests.sln`). Its only current content is a single `.cs` file that was copied verbatim from the retired ASP.NET Web Stack CodePlex repository and is licensed under the Apache 2.0 License.
+
+The file that lives here — `HashCodeCombiner.cs` — provides a small, stateful hash-accumulator class. It uses the djb2 polynomial rolling-hash algorithm (`hash = (hash << 5) + hash ^ value`) seeded at `0x1505` to combine the hash codes of arbitrarily many objects, integers, or collections into a single `int`. Because the class is declared `internal`, any project that needs it must either include this file directly as a linked source item, or copy it locally.
+
+The namespace was deliberately changed from the original Microsoft namespace to `NuGet.Services` so that callers in the NuGet Gallery source tree can use the type without adding an extra `using` directive.
+
+## Role in System
+
+```
+src/Common/
+└── HashCodeCombiner.cs    ← single vendored utility file
+                              namespace: NuGet.Services
+                              visibility: internal
+                              license: Apache 2.0 (copied from aspnetwebstack)
+
+Solution folder membership
+  NuGet.Jobs.sln              → "Common" folder (solution-organizer only)
+  NuGet.Jobs.FunctionalTests.sln → "Common" folder (solution-organizer only)
+```
+
+The directory has no compile-time presence of its own. Projects that need `HashCodeCombiner` must reference the file explicitly (e.g., via a `<Compile Include="..." Link="...">` item in their `.csproj`). There are no `.csproj`-level references to this directory currently active in the repository.
+
+<CardGroup cols={2}>
+  <Card title="Vendored Utility" icon="copy">
+    `HashCodeCombiner.cs` is a verbatim copy of a file from the retired `aspnetwebstack` CodePlex project, retained under its original Apache 2.0 license. No modifications were made to the algorithm; only the namespace was changed.
+  </Card>
+  <Card title="No Build Artifact" icon="ban">
+    The directory produces no `.dll`, NuGet package, or other build output. It is a source-sharing mechanism only, organized as a solution folder in Visual Studio rather than as a standalone C# project.
+  </Card>
+  <Card title="djb2 Hash Algorithm" icon="hash">
+    The combiner seeds at `0x1505` and accumulates values using `hash = (hash << 5) + hash ^ value`, the classic djb2 polynomial variant. The final `int` result is obtained by calling `.GetHashCode()` on the internal `long` accumulator.
+  </Card>
+  <Card title="Fluent Builder API" icon="layers">
+    All `Add` overloads return `this`, enabling a fluent chain: `HashCodeCombiner.Start().Add(a).Add(b).CombinedHash`. Null objects and null enumerables are handled gracefully (treated as hash value `0`).
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `HashCodeCombiner.cs` | `HashCodeCombiner` (internal) | Accumulates hash codes for multiple objects, integers, or `IEnumerable` sequences into a single combined `int` using the djb2 polynomial algorithm. Provides a static `Start()` factory and fluent `Add` overloads. |
+
+## Dependencies
+
+### NuGet Package References
+
+_None. The directory contains no project file and declares no package dependencies._
+
+### Internal Project References
+
+_None. `src/Common` is not a project; it carries no `<ProjectReference>` entries._
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Not a compilable project.** `src/Common` has no `.csproj` file. It appears in solution files purely as a Visual Studio solution folder for organizational grouping. The directory cannot be built independently with `dotnet build` or `msbuild`.
+</Note>
+
+<Note>
+**Namespace intentionally changed from the original.** The file comment explicitly states: _"Namespace changed from original to avoid requiring using statements."_ The class lives in `NuGet.Services` rather than in any Microsoft-owned namespace so that consuming code in the `NuGet.Services.*` project tree can use it without an extra `using` directive.
+</Note>
+
+<Warning>
+**`internal` visibility limits reuse.** `HashCodeCombiner` is declared `internal`, meaning it is only accessible within the same assembly. Any project that needs this class must either link the file directly in its `.csproj` or copy it locally. There is currently no linked-file reference to this directory in the repository's active `.csproj` files, suggesting the type may be unused at present or has been superseded by `System.HashCode` (available since .NET Standard 2.1 / .NET Core 2.1).
+</Warning>
+
+<Tip>
+**Enumerables include element count in the hash.** When hashing an `IEnumerable`, the combiner iterates all elements and then also hashes the total count. This means two sequences with the same elements in the same order but different lengths (which is impossible for a valid `IEnumerable`) are guaranteed different, and it prevents hash collisions between prefix sequences.
+</Tip>

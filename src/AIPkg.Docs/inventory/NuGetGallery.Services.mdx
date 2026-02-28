@@ -1,0 +1,160 @@
+﻿---
+title: "NuGetGallery.Services"
+sidebarTitle: "Services"
+description: "Core business-logic library shared by the NuGet Gallery frontend and backend. Covers authentication, package management, user management, security policies, telemetry, configuration, and more."
+icon: "layers"
+---
+
+## Overview
+
+`NuGetGallery.Services` is the central business-logic assembly for the NuGet Gallery. It sits between the web
+layer and the data layer, providing well-defined service interfaces and their concrete implementations for every
+major feature area: authentication (passwords, API keys, OAuth, federated/OIDC credentials), package lifecycle,
+user and account management, security policy enforcement, feature flags, telemetry, and cloud storage
+abstraction.
+
+The project multi-targets **net472** (full .NET Framework, used by the ASP.NET MVC gallery host) and
+**netstandard2.1** (used by background worker processes). The `netstandard2.1` target deliberately excludes the
+most UI-coupled directories (`Authentication`, `Mail`, `Configuration`, etc.) via `<Compile Remove>` directives,
+exposing only the subset needed by workers.
+
+<Note>
+  The `netstandard2.1` compile exclusions are intentional — many classes in this library depend on
+  `System.Web`, OWIN middleware, and ASP.NET MVC types that are not available outside of the full
+  .NET Framework host. Check the `.csproj` `<Compile Remove>` blocks before referencing a type
+  from a non-net472 context.
+</Note>
+
+---
+
+## Role in the System
+
+<CardGroup cols={2}>
+  <Card title="Gallery Frontend" icon="monitor">
+    `NuGetGallery` (the MVC web app) consumes every service interface defined here — from
+    `IAuthenticationService` to `IPackageService` — via constructor-injected dependencies.
+  </Card>
+  <Card title="Backend Workers" icon="server">
+    Background job projects reference the `netstandard2.1` slice for shared entities, telemetry
+    helpers, and infrastructure utilities without pulling in the web-specific stack.
+  </Card>
+  <Card title="NuGetGallery.Core" icon="database">
+    This library sits directly above `NuGetGallery.Core`, which owns EF entity models,
+    repository abstractions, and low-level package-file operations.
+  </Card>
+  <Card title="NuGet.Services.*" icon="package">
+    Depends on `NuGet.Services.Configuration`, `NuGet.Services.Logging`, and
+    `NuGet.Services.FeatureFlags` for cross-cutting infrastructure.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File (relative to `NuGetGallery.Services/`) | Class / Interface | Purpose |
+|---|---|---|
+| `Authentication/AuthenticationService.cs` | `AuthenticationService` | Central auth orchestrator: password login, API key validation, external OAuth sign-in, credential lifecycle |
+| `Authentication/IAuthenticationService.cs` | `IAuthenticationService` | Public contract consumed by controllers and other services |
+| `Authentication/ApiKeyV5.cs` | `ApiKeyV5` | HISv2-format 84-char API key with embedded user ID, allocation timestamp, expiry, and Marvin32 checksum |
+| `Authentication/ApiKeyV3.cs` / `ApiKeyV4.cs` | `ApiKeyV3`, `ApiKeyV4` | Legacy API key formats retained for backward compatibility |
+| `Authentication/V3Hasher.cs` | `V3Hasher` | PBKDF2/HMAC-SHA256 (10 000 iterations) password hashing, modelled after ASP.NET Core Identity |
+| `Authentication/CredentialBuilder.cs` | `CredentialBuilder` | Factory for creating `Credential` entities (API keys, passwords, external logins) |
+| `Authentication/Federated/FederatedCredentialService.cs` | `IFederatedCredentialService` | Trusted-publishing: validates OIDC bearer tokens (GitHub Actions, Entra ID service principals) and mints short-lived API keys |
+| `Authentication/Federated/GitHubTokenPolicyValidator.cs` | `GitHubTokenPolicyValidator` | Validates GitHub Actions OIDC JWTs against user-defined federated credential policies |
+| `Authentication/Federated/EntraIdTokenValidator.cs` | `EntraIdTokenValidator` | Validates Entra ID (Azure AD) OIDC tokens for service-principal trusted publishing |
+| `Authentication/Providers/ApiKey/ApiKeyAuthenticator.cs` | `ApiKeyAuthenticator` | OWIN middleware authenticator for `X-NuGet-ApiKey` header |
+| `Authentication/Providers/AzureActiveDirectoryV2/` | `AzureActiveDirectoryV2Authenticator` | AAD v2 / MSAL-based external login provider |
+| `Configuration/AppConfiguration.cs` | `AppConfiguration` | Concrete implementation of `IAppConfiguration`; maps Azure Storage connection strings, SSL settings, feature toggles, and service bus config from app settings |
+| `Configuration/FeatureFlagService.cs` | `FeatureFlagService` | Wraps `NuGet.Services.FeatureFlags` to expose named flights/features (e.g. `NuGetGallery.Typosquatting`, `NuGetGallery.AsyncAccountDelete`) |
+| `Configuration/ConfigurationService.cs` | `ConfigurationService` | Reads and hydrates `IAppConfiguration` at startup |
+| `Configuration/SecretReader/SecretReaderFactory.cs` | `SecretReaderFactory` | Builds `ISecretReader` backed by Azure Key Vault for production secret injection |
+| `PackageManagement/PackageService.cs` | `PackageService` | Gallery-specific package CRUD extending `CorePackageService`; handles dependents, deprecation, vulnerability display |
+| `PackageManagement/IPackageService.cs` | `IPackageService` | Extends `ICorePackageService` with gallery-only operations |
+| `PackageManagement/PackageOwnershipManagementService.cs` | `PackageOwnershipManagementService` | Add/remove owners, namespace reservation enforcement, audit logging |
+| `PackageManagement/ReservedNamespaceService.cs` | `ReservedNamespaceService` | ID-prefix (namespace) reservation lifecycle |
+| `PackageManagement/PackageVulnerabilitiesManagementService.cs` | `PackageVulnerabilitiesManagementService` | Ingests and stores vulnerability advisories against package versions |
+| `UserManagement/UserService.cs` | `UserService` | User and organization CRUD, credential management, profile updates |
+| `AccountManagement/DeleteAccountService.cs` | `DeleteAccountService` | Synchronous account deletion: clears credentials, transfers/orphans packages, removes from orgs |
+| `AccountManagement/AsynchronousDeleteAccountService.cs` | `AsynchronousDeleteAccountService` | Enqueues account deletion via Azure Service Bus for async processing |
+| `Security/SecurityPolicyService.cs` | `SecurityPolicyService` | Evaluates user-level and package-level security policies (required signer, org-tenant, metadata compliance) |
+| `Storage/ContentObjectService.cs` | `ContentObjectService` | Periodically refreshes JSON configuration blobs (login discontinuation, cert config, typosquatting lists, etc.) from Azure Blob Storage |
+| `Storage/CloudBlobFileStorageService.cs` | `CloudBlobFileStorageService` | Azure Blob Storage adapter implementing `IFileStorageService` |
+| `Telemetry/TelemetryService.cs` | `TelemetryService` | Application Insights event/metric wrapper; tracks package push, delete, OData queries, search, auth events |
+| `Telemetry/ITelemetryService.cs` | `ITelemetryService` | ~80-method interface covering every tracked domain event |
+| `SupportRequest/SupportRequestService.cs` | `SupportRequestService` | CRUD over the separate support-request SQL database (`ISupportRequestDbContext`) |
+| `Permissions/ActionsRequiringPermissions.cs` | `ActionsRequiringPermissions` | Static registry of all permission actions (upload, delete, manage owners, etc.) |
+| `Mail/Messages/` | `PackageOwnershipRequest*Message` | Strongly-typed email message objects for ownership-request flow |
+
+---
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Target | Purpose |
+|---|---|---|
+| `Microsoft.ApplicationInsights` | both | Telemetry client for Application Insights |
+| `Microsoft.Identity.Web` | both | MSAL / Entra ID token validation for federated credentials |
+| `Microsoft.Security.Utilities.Core` | both | HISv2 ("Highly Identifiable Secret") format used in ApiKeyV5 |
+| `System.Text.Json` | both | JSON serialisation for content-object blobs |
+| `Microsoft.AspNet.Mvc` | net472 | MVC action results, controller base types |
+| `Microsoft.AspNetCore.Cryptography.KeyDerivation` | net472 | PBKDF2 key derivation used in V3Hasher |
+| `Microsoft.Owin` / `Microsoft.Owin.Security.*` | net472 | OWIN pipeline, cookie auth, OpenID Connect, Microsoft Account providers |
+| `NuGet.Protocol` | net472 | NuGet client protocol types |
+| `NuGet.StrongName.WebBackgrounder` | net472 | Background job scheduling within the ASP.NET host |
+
+### Internal Project References
+
+| Project | Target | Relationship |
+|---|---|---|
+| `NuGetGallery.Core` | both | Entity models, repository interfaces, core package-file services |
+| `NuGet.Services.Configuration` | net472 | `ConfigurationService` base, `ISecretReader` abstractions |
+| `NuGet.Services.Logging` | net472 | Structured logging setup and `IDiagnosticsService` |
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **Dual-target architecture** — The `.csproj` uses `<Compile Remove>` to strip the entire
+  `Authentication`, `Configuration`, `Mail`, `Permissions`, `Security`, `Storage`, and
+  `Telemetry` folders from the `netstandard2.1` build. This is the primary mechanism for
+  keeping background workers free of ASP.NET dependencies.
+</Note>
+
+<Note>
+  **API key versioning (V3 → V5)** — Three key formats coexist. V3 uses PBKDF2-hashed GUIDs.
+  V4 adds scope-aware prefixes. V5 uses the HISv2 standard (84 base62 characters) with embedded
+  metadata (user ID, allocation time, environment code, expiry) and a Marvin32 checksum for
+  fast pre-DB validation. All formats are still validated to support existing long-lived keys.
+</Note>
+
+<Warning>
+  **LegacyHasher** (`Authentication/LegacyHasher.cs`) implements the old MD5/SHA1-based
+  credential hashing that predates V3Hasher. It is retained solely to validate credentials
+  created before the PBKDF2 migration and automatically upgrades them on successful login.
+  New credentials must never use this hasher.
+</Warning>
+
+<Note>
+  **Federated credential / trusted publishing** — `FederatedCredentialService` issues
+  short-lived API keys (≤ 15 minutes, encoded in the V5 key body) after validating an OIDC
+  bearer token from GitHub Actions or an Entra ID service principal against policies stored
+  per-user in the database. The short lifetime is enforced both in the V5 key metadata and
+  by the database expiry field.
+</Note>
+
+<Tip>
+  **ContentObjectService** caches JSON blobs from Azure Blob Storage with a 5-minute refresh
+  interval (`RefreshInterval = TimeSpan.FromMinutes(5)`). Feature-gated configuration objects
+  (typosquatting lists, login discontinuation rules, cert allowlists) are all loaded this way,
+  allowing live updates without redeployment.
+</Tip>
+
+<Warning>
+  **SecurityPolicyService** handlers are registered as `static Lazy<IEnumerable<...>>`
+  singletons. Adding a new policy handler requires updating both `CreateUserHandlers()` and
+  `CreatePackageHandlers()` factory methods inside `SecurityPolicyService.cs`, otherwise the
+  new handler will never be evaluated.
+</Warning>

@@ -1,0 +1,136 @@
+---
+title: NuGet.Services.Configuration
+sidebarTitle: Services.Configuration
+description: Shared library that extends Microsoft.Extensions.Configuration with Azure Key Vault secret injection, attribute-driven configuration binding, and helper types used across NuGet Gallery services.
+icon: key-round
+---
+
+## Overview
+
+`NuGet.Services.Configuration` is a shared infrastructure library that bridges the standard `Microsoft.Extensions.Configuration` pipeline with Azure Key Vault secret injection. It provides custom `IConfigurationSource` and `IConfigurationProvider` wrappers that transparently resolve Key Vault secret references embedded inside configuration values — no application code needs to know whether a value came from a JSON file, an environment variable, or Key Vault.
+
+The library also ships an older, attribute-driven configuration model built around its own `IConfigurationProvider` and `IConfigurationFactory` abstractions. This model lets configuration POCO classes declare their Key Vault key names and prefixes through `[ConfigurationKey]` and `[ConfigurationKeyPrefix]` attributes and uses `ConfigurationFactory` to reflectively populate them at startup. This older pattern predates the `Microsoft.Extensions.Configuration` binder integration and coexists with the newer `SecretInjectedConfiguration` wrappers.
+
+Supporting both approaches, the library also provides `ConfigurationRootSecretReaderFactory`, which reads Key Vault connection details (`KeyVault_VaultName`, `KeyVault_UseManagedIdentity`, etc.) from the configuration root itself and produces the `ISecretReader` / `ISecretInjector` used by everything else. A `NonCachingOptionsSnapshot<T>` implementation ensures that when `KeyVaultInjectingConfigurationProvider` is in use, options objects are not cached across requests, allowing Key Vault secret rotation to take effect without a service restart.
+
+## Role in System
+
+```
+Application startup
+  │
+  ├── ConfigurationRootSecretReaderFactory
+  │     reads KeyVault_* keys from IConfigurationRoot
+  │     creates ISecretReader (KeyVaultReader or EmptySecretReader)
+  │     creates ISecretInjector (SecretInjector)
+  │
+  ├── IConfigurationBuilder extensions (ConfigurationBuilderExtensions)
+  │     .AddInjectedJsonFile()          → KeyVaultJsonInjectingConfigurationSource
+  │     .AddInjectedEnvironmentVariables() → KeyVaultEnvironmentVariableInjectingConfigurationSource
+  │     .AddInjectedInMemoryCollection()   → KeyVaultInMemoryCollectionInjectingConfigurationSource
+  │           │
+  │           └── each wraps its native provider with
+  │               KeyVaultInjectingConfigurationProvider
+  │                 TryGet() injects secrets on every read
+  │
+  ├── SecretInjectedConfiguration / SecretInjectedConfigurationSection
+  │     wraps an existing IConfiguration after the builder is built
+  │     uses ICachingSecretInjector (cached lookup, then live lookup)
+  │
+  ├── ConfigurationUtility.ConfigureInjected<T>()
+  │     registers IConfigureOptions<T> backed by SecretInjectedConfiguration
+  │     requires NonCachingOptionsSnapshot<T> to avoid stale cache
+  │
+  └── Older attribute-driven model (still used by some services)
+        ConfigurationFactory.Get<T>()
+          reads [ConfigurationKey] / [ConfigurationKeyPrefix] attributes
+          calls IConfigurationProvider.GetOrThrowAsync / GetOrDefaultAsync
+```
+
+<CardGroup cols={2}>
+  <Card title="Key Vault Injection at Read Time" icon="shield-check">
+    `KeyVaultInjectingConfigurationProvider` wraps any existing `IConfigurationProvider` and calls `ISecretInjector.InjectAsync` on every `TryGet` call. A hardcoded exclusion list prevents injection on known connection-string keys that must be passed as-is.
+  </Card>
+  <Card title="Attribute-Driven POCO Binding" icon="tag">
+    `ConfigurationFactory` uses reflection and `TypeDescriptor` to populate `Configuration` subclass properties. `[ConfigurationKey]` overrides the key name; `[ConfigurationKeyPrefix]` adds a prefix at the class or property level; `[Required]` and `[DefaultValue]` control error vs. fallback behavior.
+  </Card>
+  <Card title="Cached Secret Injection Wrapper" icon="layers">
+    `SecretInjectedConfiguration` wraps any `IConfiguration` after the builder stage. It uses `ICachingSecretInjector.TryInjectCached` first, falling back to a live Key Vault call only on a cache miss, reducing latency and request volume.
+  </Card>
+  <Card title="Managed Identity and Certificate Auth" icon="fingerprint">
+    `ConfigurationRootSecretReaderFactory` supports two Key Vault auth modes: managed identity (with an optional client ID) and certificate-based auth (thumbprint, store name, store location). It rejects configurations that supply both simultaneously.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `ConfigurationRootSecretReaderFactory.cs` | `ConfigurationRootSecretReaderFactory` | Reads Key Vault connection settings from an `IConfigurationRoot` and implements `ISecretReaderFactory` to produce `ISecretReader` (or `EmptySecretReader` when no vault is configured) and `ISecretInjector`. |
+| `KeyVaultInjectingConfigurationProvider.cs` | `KeyVaultInjectingConfigurationProvider` | Wraps any `IConfigurationProvider` and intercepts `TryGet` to inject Key Vault secrets into values before returning them. Maintains a hardcoded exclusion set for specific database connection-string keys. |
+| `KeyVaultJsonInjectingConfigurationSource.cs` | `KeyVaultJsonInjectingConfigurationSource` | `IConfigurationSource` that builds a `JsonConfigurationProvider` and wraps it with `KeyVaultInjectingConfigurationProvider`. Used by `AddInjectedJsonFile`. |
+| `KeyVaultEnvironmentVariableInjectingConfigurationSource.cs` | `KeyVaultEnvironmentVariableInjectingConfigurationSource` | `IConfigurationSource` that builds an `EnvironmentVariablesConfigurationProvider` (with optional prefix) and wraps it with `KeyVaultInjectingConfigurationProvider`. |
+| `KeyVaultInMemoryCollectionInjectingConfigurationSource.cs` | `KeyVaultInMemoryCollectionInjectingConfigurationSource` | `IConfigurationSource` that builds a `MemoryConfigurationProvider` from an `IReadOnlyDictionary<string, string>` and wraps it with `KeyVaultInjectingConfigurationProvider`. |
+| `ConfigurationBuilderExtensions.cs` | `ConfigurationBuilderExtensions` | Extension methods on `IConfigurationBuilder`: `AddInjectedJsonFile`, `AddInjectedEnvironmentVariables`, `AddInjectedInMemoryCollection`. Each adds the corresponding injecting source. |
+| `SecretInjectedConfiguration.cs` | `SecretInjectedConfiguration` | `IConfiguration` decorator that wraps an existing configuration and injects cached secrets on indexer access and `GetSection` / `GetChildren` calls. |
+| `SecretInjectedConfigurationSection.cs` | `SecretInjectedConfigurationSection` | Extends `SecretInjectedConfiguration` to implement `IConfigurationSection`, including secret injection on the `Value` property. |
+| `SecretConfigurationReader.cs` | `SecretConfigurationReader` | `IConfigurationRoot` wrapper that eagerly injects all secret references at construction time and re-injects on `Reload`. An older, eager-injection alternative to the lazy `KeyVaultInjectingConfigurationProvider` approach. |
+| `ConfigurationUtility.cs` | `ConfigurationUtility` | Static helpers: `ConvertFromString<T>` (via `TypeDescriptor`), `InjectCachedSecret` (try cache then live), and `ConfigureInjected<T>` extension on `IServiceCollection` that registers an `IConfigureOptions<T>` backed by `SecretInjectedConfiguration`. |
+| `NonCachingOptionsSnapshot.cs` | `NonCachingOptionsSnapshot<TOptions>` | `IOptionsSnapshot<TOptions>` implementation that bypasses the default per-request cache. Required when using `KeyVaultInjectingConfigurationProvider` so that secret rotation is reflected without a restart. |
+| `ConfigurationFactory.cs` | `ConfigurationFactory` | Reflectively populates `Configuration` subclasses by reading `[ConfigurationKey]` / `[ConfigurationKeyPrefix]` attributes from each property and calling `IConfigurationProvider.GetOrThrowAsync` or `GetOrDefaultAsync` accordingly. |
+| `Configuration.cs` | `Configuration` | Abstract base class for POCO configuration objects used with `ConfigurationFactory`. Records a `CreatedTime` (UTC) at instantiation. |
+| `IConfigurationFactory.cs` | `IConfigurationFactory` | Interface with a single `Get<T>()` method that returns a fully populated `T : Configuration`. |
+| `IConfigurationProvider.cs` | `IConfigurationProvider` | Interface for the older async configuration provider pattern: `GetOrThrowAsync<T>` and `GetOrDefaultAsync<T>`. Not the same as `Microsoft.Extensions.Configuration.IConfigurationProvider`. |
+| `ConfigurationProvider.cs` | `ConfigurationProvider` | Abstract base that implements the NuGet-specific `IConfigurationProvider` by delegating to a protected abstract `Get(key)` method and handling conversion and exception normalization. |
+| `ConfigurationKeyAttribute.cs` | `ConfigurationKeyAttribute` | Property-level attribute. Overrides the configuration key used by `ConfigurationFactory` for that property. |
+| `ConfigurationKeyPrefixAttribute.cs` | `ConfigurationKeyPrefixAttribute` | Class- or property-level attribute. Specifies a prefix prepended to configuration keys. Class-level prefix applies to all properties; property-level prefix overrides the class-level one for that property only. |
+| `ConfigurationNullOrEmptyException.cs` | `ConfigurationNullOrEmptyException` | Typed exception thrown by `ConfigurationProvider.GetOrThrowAsync` when a found key maps to a null or empty value. |
+| `SecretDictionary.cs` | `SecretDictionary` | `IDictionary<string, string>` decorator that injects secrets via `ISecretInjector` on every read access. Supports an optional exclusion set of keys that should be returned verbatim. |
+| `DictionaryExtensions.cs` | `DictionaryExtensions` | Extension methods on `IDictionary<string, string>`: `GetOrDefault<T>` and `GetOrThrow<T>`, both using `ConfigurationUtility.ConvertFromString` for type conversion. |
+| `StringArrayConverter.cs` | `StringArrayConverter` | `ArrayConverter` subclass that splits a semicolon-delimited string into a `string[]`, trimming each element and discarding empty entries. Used with `TypeDescriptor` for properties typed as `string[]`. |
+| `ConfigurationExtensions.cs` | `ConfigurationExtensions` | Extension method `GetTokenCredential` on `IConfiguration`. Returns `DefaultAzureCredential` in DEBUG builds and `ManagedIdentityCredential` in release builds, reading the client ID from `ManagedIdentityClientId`. |
+| `Constants.cs` | `Constants` | String constants for all well-known configuration key names: `KeyVault_VaultName`, `KeyVault_UseManagedIdentity`, `KeyVault_ClientId`, `KeyVault_CertificateThumbprint`, `ManagedIdentityClientId`, `Local_Development`, and storage-related identity keys. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.Extensions.Configuration.Abstractions` | `IConfiguration`, `IConfigurationBuilder`, `IConfigurationSource`, `IConfigurationProvider`, `IConfigurationSection` interfaces |
+| `Microsoft.Extensions.Configuration.Binder` | `configuration.Bind(settings)` used inside `ConfigureInjected<T>` |
+| `Microsoft.Extensions.Configuration.EnvironmentVariables` | `EnvironmentVariablesConfigurationSource` wrapped by `KeyVaultEnvironmentVariableInjectingConfigurationSource` |
+| `Microsoft.Extensions.Configuration.FileExtensions` | File provider resolution used in JSON source setup |
+| `Microsoft.Extensions.Configuration.Json` | `JsonConfigurationSource` / `JsonConfigurationProvider` wrapped by `KeyVaultJsonInjectingConfigurationSource` |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<T>`, `IConfigureOptions<T>`, `ConfigureNamedOptions<T>`, used by `NonCachingOptionsSnapshot` and `ConfigureInjected` |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.KeyVault` | Provides `ISecretInjector`, `ICachingSecretInjector`, `ISecretReader`, `ISecretReaderFactory`, `ISecretInjector.InjectAsync`, `KeyVaultConfiguration`, `KeyVaultReader`, `SecretInjector`, `EmptySecretReader`, and `CertificateUtility` |
+
+## Notable Patterns and Implementation Details
+
+<Warning>
+**Sync-over-async in `KeyVaultInjectingConfigurationProvider.TryGet`.** Secret injection calls `_secretInjector.InjectAsync(...).ConfigureAwait(false).GetAwaiter().GetResult()` synchronously. This is a known limitation: `Microsoft.Extensions.Configuration` providers expose only synchronous `TryGet`, so there is no async path available at this layer. This can cause thread-pool starvation under high load if Key Vault calls are slow.
+</Warning>
+
+<Note>
+**Hardcoded injection exclusions.** `KeyVaultInjectingConfigurationProvider` skips secret injection for four specific keys: `GalleryDb:ConnectionString`, `ValidationDb:ConnectionString`, `SupportRequestDb:ConnectionString`, and `StatisticsDb:ConnectionString`. These are expected to contain raw ADO.NET connection strings that must not be processed as Key Vault references.
+</Note>
+
+<Note>
+**Two distinct secret injection lifecycles coexist.** `KeyVaultInjectingConfigurationProvider` (via `ConfigurationBuilderExtensions`) injects on every `TryGet` call during the provider pipeline. `SecretInjectedConfiguration` (via `ConfigurationUtility.ConfigureInjected`) injects at options-binding time using a caching injector. `SecretConfigurationReader` injects eagerly at construction and on `Reload`. Services may use any of these; newer code generally prefers the `SecretInjectedConfiguration` path.
+</Note>
+
+<Note>
+**`NonCachingOptionsSnapshot<T>` must be registered explicitly.** The default `IOptionsSnapshot<T>` caches the bound options object for the lifetime of the current scope (request). When Key Vault secret rotation is required, the consuming service must replace the default registration with `NonCachingOptionsSnapshot<T>` using `services.Add(ServiceDescriptor.Scoped(typeof(IOptionsSnapshot<>), typeof(NonCachingOptionsSnapshot<>)))` before `services.AddOptions()`.
+</Note>
+
+<Tip>
+**Local development mode.** When `Local_Development` is `true` in configuration, `ConfigurationRootSecretReaderFactory` passes a `localDevelopment: true` flag into `KeyVaultConfiguration`. Combined with `ConfigurationExtensions.GetTokenCredential` returning `DefaultAzureCredential` in DEBUG builds, this allows developers to authenticate via their local Azure CLI or Visual Studio credentials instead of a managed identity or certificate.
+</Tip>
+
+<Warning>
+**`SecretConfigurationReader.Providers` throws `NotImplementedException`.** Any code that tries to enumerate the underlying providers via `IConfigurationRoot.Providers` on a `SecretConfigurationReader` instance will receive a `NotImplementedException`. This is intentional but can cause failures if middleware or libraries inspect the provider list.
+</Warning>

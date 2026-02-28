@@ -1,0 +1,125 @@
+﻿---
+title: SnapshotAzureBlob
+sidebarTitle: SnapshotAzureBlob
+description: A lightweight scheduled job that creates Azure Blob Storage snapshots for every blob in a given container, ensuring point-in-time recovery of critical NuGet gallery storage assets.
+icon: camera
+---
+
+# SnapshotAzureBlob
+
+## Overview
+
+`SnapshotAzureBlob` is a small console-based background job that iterates every blob in a specified Azure Blob Storage container and creates a **point-in-time snapshot** for each blob that does not yet have one. It is designed to run on a schedule (continuously or once) and provides a simple, low-configuration safety net against accidental blob deletion or corruption.
+
+The job targets **.NET Framework 4.7.2** and integrates with the shared `NuGet.Jobs.Common` infrastructure used across all NuGet gallery background jobs.
+
+<Note>
+  A snapshot is only created when a blob has **exactly one entry** in its blob listing (i.e., the base blob itself with no existing snapshot). This makes the job idempotent for blobs that already have at least one snapshot — it will never pile up duplicate snapshots in a single run.
+</Note>
+
+## Role in System
+
+Within the NuGetGallery ecosystem, blob storage containers hold essential artifacts such as package files, statistics exports, and auxiliary search data. `SnapshotAzureBlob` acts as a **data-durability guardrail**: by maintaining at least one snapshot per blob, operations teams can restore a prior version of any blob without needing a full storage account backup.
+
+<CardGroup cols={2}>
+  <Card title="Data Protection" icon="shield-check">
+    Prevents permanent data loss from accidental writes or deletions by preserving a recoverable snapshot of every blob.
+  </Card>
+  <Card title="Scheduled Job" icon="clock">
+    Runs via the shared `JobRunner` loop — can execute once or continuously with a configurable sleep interval.
+  </Card>
+  <Card title="Parallel Execution" icon="bolt">
+    Uses `Parallel.ForEach` to snapshot blobs concurrently, minimising total wall-clock time for large containers.
+  </Card>
+  <Card title="Application Insights" icon="chart-line">
+    Emits structured telemetry through `Microsoft.Extensions.Logging` with reserved event IDs in the 800 range.
+  </Card>
+</CardGroup>
+
+## Key Files / Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point. Instantiates `SnapshotAzureBlobJob` and hands off to `JobRunner.Run()`. |
+| `SnapshotAzureBlobJob.cs` | `SnapshotAzureBlobJob` | Core job logic. Implements `JobBase.Init()` and `JobBase.Run()`. Parses args, connects to Azure Storage, and drives the snapshot loop. |
+| `ArgumentNames.cs` | `ArgumentNames` | Static constants for the two required CLI arguments: `ConnectionString` and `Container`. |
+| `LogEvents.cs` | `LogEvents` | Defines structured `EventId` constants in the reserved 800–802 range for this job. |
+
+## Dependencies
+
+### NuGet Packages
+
+| Package | Purpose |
+|---------|---------|
+| `WindowsAzure.Storage` | Legacy Azure Blob Storage SDK. Provides `CloudStorageAccount`, `CloudBlobClient`, `CloudBlockBlob`, and the synchronous `Snapshot()` API. |
+| `System.ComponentModel.EventBasedAsync` | Provides `IServiceContainer` used by `JobBase.Init()` for service resolution. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | Shared job infrastructure: `JobBase`, `JobRunner`, `JobConfigurationManager`, Application Insights wiring, and logging setup. |
+
+## Runtime Arguments
+
+The job accepts the following command-line arguments passed as `-ArgName value` pairs:
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `-ConnectionString` | Yes | Azure Storage connection string for the account containing the target container. |
+| `-Container` | Yes | Name of the blob container whose blobs should be snapshotted. |
+| `-InstrumentationKey` | Recommended | Application Insights instrumentation key for telemetry. |
+| `-Once` | No | Run a single iteration instead of looping continuously. |
+| `-Sleep` | No | Milliseconds to sleep between continuous iterations (default: 5000). |
+| `-Interval` | No | Seconds between iterations (alternative to `-Sleep`). |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **Snapshot guard logic** — `EnsureOneSnapshot` performs a flat container listing with `BlobListingDetails.None`, then re-queries each blob by name prefix with `BlobListingDetails.Snapshots`. Only when `expandedList.Count() == 1` (base blob present, no snapshots yet) does it call `blob.Snapshot()`. A container that was already snapshotted will produce zero new snapshots on the next run.
+</Note>
+
+<Warning>
+  **Legacy Storage SDK** — The project uses the older `WindowsAzure.Storage` package rather than the current `Azure.Storage.Blobs` SDK. The classic `CloudBlockBlob.Snapshot()` method is synchronous; the `Parallel.ForEach` loop compensates with thread-level concurrency but cannot benefit from async I/O.
+</Warning>
+
+<Warning>
+  **Synchronous `Run()` body** — The `Run()` override returns `Task.FromResult(0)` immediately after calling `EnsureOneSnapshot`, which performs all network I/O synchronously inside `Parallel.ForEach`. This is acceptable for a standalone console job but would block a thread-pool thread in any async-first host.
+</Warning>
+
+<Tip>
+  **Per-blob error isolation** — Each blob's snapshot attempt is wrapped in an individual `try/catch` inside the `Parallel.ForEach` lambda. A failure for one blob logs a `Critical` event (event ID 802) and processing continues for all remaining blobs rather than aborting the run.
+</Tip>
+
+```csharp
+// Core snapshot guard — SnapshotAzureBlobJob.EnsureOneSnapshot
+Parallel.ForEach(blobList, (item) =>
+{
+    var blob = item as CloudBlockBlob;
+    if (blob != null)
+    {
+        var expandedList = container.ListBlobs(
+            prefix: blob.Name,
+            useFlatBlobListing: true,
+            blobListingDetails: BlobListingDetails.Snapshots).ToList();
+
+        if (expandedList.Count() == 1)  // base blob only — no snapshot exists yet
+        {
+            Interlocked.Increment(ref snapshotCount);
+            blob.Snapshot();
+        }
+    }
+});
+```
+
+## Log Events
+
+| Event ID | Name | Severity | When Emitted |
+|----------|------|----------|--------------|
+| 800 | `JobRunFailed` | — | Reserved; surfaced by `JobRunner` on unhandled run failure. |
+| 801 | `JobInitFailed` | — | Reserved; surfaced by `JobRunner` on initialisation failure. |
+| 802 | `SnaphotFailed` | Critical | Emitted per-blob when `blob.Snapshot()` throws an exception. |
+
+<Note>
+  Event ID 802 is named `SnaphotFailed` (single 's' — "Snashot") in the source. This is a typo that has been preserved as-is to avoid breaking any existing Application Insights queries or alerts that filter on the event name string.
+</Note>

@@ -1,0 +1,137 @@
+﻿---
+title: Stats.CDNLogsSanitizer
+sidebarTitle: CDN Logs Sanitizer
+description: A manually-run console tool that reads CDN log blobs from Azure Storage, strips or obfuscates personally identifiable information (client IP addresses), and writes the sanitized logs to a destination Azure Storage container.
+icon: shield-check
+---
+
+## Overview
+
+`Stats.CDNLogsSanitizer` is a .NET Framework 4.7.2 console executable designed to be run on-demand by operators. It reads raw CDN access-log blobs (GZip-compressed, delimited text) from a source Azure Blob Storage container, passes each log line through a configurable pipeline of sanitizers, and writes the cleaned result to a destination Azure Blob Storage container.
+
+The primary motivation is privacy compliance: raw CDN logs captured from services such as Azure CDN or China-region (Mooncake) CDN contain the original client IP address (`c-ip` field). Before those logs are forwarded to analytics pipelines or long-term storage, the IP addresses must be obfuscated so that no personally identifiable data is retained.
+
+<Note>
+  The README notes this tool is **intended to be executed manually**, not as a scheduled background job. It does extend `JsonConfigurationJob` and can be launched via the standard NuGet Jobs runner, but it has no automatic scheduling.
+</Note>
+
+---
+
+## Role in the NuGetGallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="CDN Log Collection" icon="cloud-arrow-down">
+    Upstream jobs (e.g., `Stats.CollectAzureCdnLogs`) collect raw CDN logs into Azure Blob Storage. This tool is the privacy-scrubbing step before those blobs are consumed by downstream analytics.
+  </Card>
+  <Card title="Stats Pipeline" icon="chart-bar">
+    Sits between raw CDN ingestion and the stats import/aggregation jobs. Sanitized blobs can then be safely processed by `Stats.ImportAzureCdnStatistics` and related tools.
+  </Card>
+  <Card title="Mooncake / China CDN" icon="globe">
+    The example configuration targets `core.chinacloudapi.cn`, indicating the tool was created specifically to handle China-region CDN logs that required separate sanitization before analysis.
+  </Card>
+  <Card title="Shared Infrastructure" icon="layers">
+    Reuses `Stats.AzureCdnLogs.Common` for blob source/destination abstractions and lease management, keeping I/O concerns out of the sanitization logic.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|---|---|---|
+| `Program.cs` | `Program` | Entry point; instantiates `Job` and delegates to `JobRunner.RunOnce`. |
+| `Job.cs` | `Job` | Extends `JsonConfigurationJob`; resolves configuration, builds `AzureStatsLogSource`, `AzureStatsLogDestination`, and the sanitizer list, then wires up `Processor`. |
+| `JobConfiguration.cs` | `JobConfiguration` | POCO bound from the `Initialization` JSON section; holds all connection strings, container names, header definition, and tuning parameters. |
+| `Processor.cs` | `Processor` | Core orchestrator; fetches blobs in batches, acquires leases, opens GZip streams, calls `ProcessStream`, then cleans/releases leases. |
+| `LogHeaderMetadata.cs` | `LogHeaderMetadata` | Parses the configurable log header string and delimiter; provides `GetIndex(fieldName)` for column lookup. |
+| `Utils.cs` | `Utils` (extension methods) | `GetFirstIndex` string-array extension used by `LogHeaderMetadata` to locate a named column. |
+| `Sanitizers/ISanitizer.cs` | `ISanitizer` | Single-method interface (`SanitizeLogLine(ref string)`) that all sanitizers implement. |
+| `Sanitizers/ClientIPSanitizer.cs` | `ClientIPSanitizer` | The only built-in sanitizer; locates the `c-ip` column and replaces the raw IP with a value produced by `NuGetGallery.Auditing.Obfuscator.ObfuscateIp`. |
+
+---
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Role |
+|---|---|
+| `NuGet.Jobs.Common` | Provides `JsonConfigurationJob`, `JobRunner`, Key Vault integration, and DI bootstrapping. |
+| `Stats.AzureCdnLogs.Common` | Provides `AzureStatsLogSource`, `AzureStatsLogDestination`, `AzureBlobLeaseManager`, `ILogSource`, `ILogDestination`, `ContentType`, and `ExtensionsUtils.GetSegmentsFromCSV`. |
+
+### NuGet / Framework Dependencies (implicit via project refs)
+
+| Package | Usage |
+|---|---|
+| `Azure.Storage.Blobs` | `BlobServiceClient` used directly in `Job.ValidateAzureCloudStorageAccount`. |
+| `Microsoft.Extensions.Logging` | `ILogger<T>` injected into `Job`, `Processor`, and Azure log infrastructure. |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<JobConfiguration>` for typed config binding. |
+| `Microsoft.Extensions.Configuration` | `IConfigurationRoot` wired through `JsonConfigurationJob`. |
+| `Autofac` | IoC container used by `JsonConfigurationJob` base class (empty override in this project). |
+| `NuGetGallery.Auditing` | `Obfuscator.ObfuscateIp` called by `ClientIPSanitizer` to hash/anonymize IP addresses. |
+
+---
+
+## Configuration Reference
+
+```json
+{
+  "Initialization": {
+    "AzureAccountConnectionStringSource": "<source storage connection string>",
+    "AzureAccountConnectionStringDestination": "<dest storage connection string>",
+    "AzureContainerNameSource": "<source container>",
+    "AzureContainerNameDestination": "<dest container>",
+    "BlobPrefix": "",
+    "LogHeader": "c-ip, timestamp, cs-method, cs-uri-stem, http-ver, sc-status, sc-bytes, c-referer, c-user-agent, rs-duration(ms), hit-miss, s-ip",
+    "LogHeaderDelimiter": ",",
+    "ExecutionTimeoutInSeconds": 345600,
+    "MaxBlobsToProcess": 4
+  }
+}
+```
+
+Launch command:
+
+```bash
+Stats.CDNLogsSanitizer.exe \
+  -Configuration "Settings\chinadev.json" \
+  -InstrumentationKey "<app-insights-key>" \
+  -verbose true
+```
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **Header passthrough**: `Processor.ProcessStream` treats the first line of every log file as a header and writes it to the destination unchanged. All subsequent lines are passed through the sanitizer pipeline. This means the column structure of the log is always preserved.
+</Note>
+
+<Note>
+  **Sanitizer pipeline is a simple `foreach`**: Each `ISanitizer` receives the same `ref string` and mutates it in place. Order matters if multiple sanitizers target overlapping fields. Currently only `ClientIPSanitizer` is registered — adding more sanitizers requires modifying `Job.InitializeJobConfiguration`.
+</Note>
+
+<Warning>
+  **SAS connection string normalization quirk**: `Job.cs` contains the line:
+  ```csharp
+  connectionString.Replace("SharedAccessSignature=?", "SharedAccessSignature=")
+  ```
+  This strips a leading `?` that some SAS token generators prepend to the query string. If this character is absent the replace is a no-op, but it is a silent data fix that operators should be aware of when constructing connection strings.
+</Warning>
+
+<Warning>
+  **Lease-per-blob, no retry logic**: `Processor.ProcessBlobAsync` acquires a blob lease before processing. If the lease cannot be taken (blob already locked by another process), the blob is silently skipped for that run. There is no retry queue or dead-letter mechanism built into this tool.
+</Warning>
+
+<Tip>
+  **Blob prefix filtering**: Set `BlobPrefix` in configuration to target a specific date partition (e.g., `2024/01/15/`) and avoid reprocessing the entire container on every run. Leave it empty to process all unprocessed blobs.
+</Tip>
+
+<Note>
+  **Parallelism is batch-scoped**: `MaxBlobsToProcess` controls how many blobs are fetched per iteration and processed concurrently via `Task.WhenAll`. The loop continues until a batch returns fewer blobs than `MaxBlobsToProcess`, signalling the source is exhausted (or the cancellation token fires).
+</Note>
+
+<Note>
+  **Default timeout is 10 days**: `DefaultExecutionTimeoutInSeconds = 345600`. This unusually high value suggests the tool was designed to run unattended over very large historical log archives without operator supervision.
+</Note>

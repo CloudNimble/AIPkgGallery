@@ -1,0 +1,137 @@
+---
+title: "VerifyMicrosoftPackage"
+sidebarTitle: "VerifyMicrosoftPackage"
+description: "A standalone CLI tool that validates Microsoft NuGet package metadata compliance before packages are pushed to nuget.org."
+icon: "shield-check"
+---
+
+## Overview
+
+`NuGet.VerifyMicrosoftPackage` is a developer-facing command-line tool that Microsoft teams use to catch NuGet package metadata compliance problems **before** pushing to nuget.org. Rather than discovering violations at upload time through server-side security policies, this tool runs the same rule-set locally so teams can fix packaging issues earlier in the release pipeline.
+
+The tool validates `.nupkg` files against a configurable JSON rule set. The built-in default rule set encodes the `MicrosoftTeamSubscription` policy from `NuGetGallery.Services`: required co-owner username `"Microsoft"`, allowed copyright notices in 18 locales, required `authors` field containing only `"Microsoft"`, and mandatory `licenseUrl`/`projectUrl` fields.
+
+<Note>
+  The tool only validates `.nuspec` metadata. It does **not** verify author signatures, package size limits, Authenticode on DLLs, or nuget.org-specific pre-release label rules. Those gaps are documented in the README as future work.
+</Note>
+
+## Role in the NuGetGallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="Server-side mirror" icon="server">
+    The same compliance logic enforced by `MicrosoftTeamSubscription` on the gallery server is exposed here for local use, keeping client and server behaviour in sync.
+  </Card>
+  <Card title="Developer shift-left" icon="arrow-left">
+    Allows Microsoft package authors to run `verify.ps1 *.nupkg` in CI before pushing, surfacing the exact error messages they would see on nuget.org.
+  </Card>
+  <Card title="Distributed as a NuGet tool package" icon="package">
+    Packaged as `NuGet.VerifyMicrosoftPackage` (tools layout) and published to nuget.org. `verify.ps1` downloads it on demand via `nuget.exe install`.
+  </Card>
+  <Card title="Configurable rule sets" icon="sliders">
+    Teams can export the default JSON rule set, customise it, and pass it back via `--rule-set`, enabling policy variations without recompiling.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File path (relative to `src/VerifyMicrosoftPackage/`) | Class / Symbol | Purpose |
+|---|---|---|
+| `Program.cs` | `Program` | Entry point; delegates to `Application.Execute()` and maps exit codes to error states |
+| `Application.cs` | `Application` | Extends `CommandLineApplication`; owns all CLI option parsing, wildcard file expansion, package loading, and compliance reporting |
+| `VerifyMicrosoftPackage.csproj` | — | `net472` exe; references `NuGetGallery.Services` and `Microsoft.Extensions.CommandLineUtils` |
+| `VerifyMicrosoftPackage.nuspec` | — | Packs the `net472` build output into `tools/` for consumption as a NuGet tool package |
+| `verify.ps1` | — | PowerShell bootstrap script; downloads `nuget.exe` and the tool package, then invokes the exe |
+| `Fakes/FakeEntityRepository.cs` | `FakeEntityRepository<T>` | In-memory `IEntityRepository<T>` with no-op mutations; satisfies `PackageService` constructor without a database |
+| `Fakes/FakeEntitiesContext.cs` | `FakeEntitiesContext` | Stub `IEntitiesContext` — all members throw `NotImplementedException`; only the constructor path through `PackageService` is exercised |
+| `Fakes/FakeSecurityPolicyService.cs` | `FakeSecurityPolicyService` | Stub `ISecurityPolicyService`; policy evaluation is not needed at validation time |
+| `Fakes/FakeTelemetryService.cs` | `FakeTelemetryService` | Stub `ITelemetryService`; most methods throw, but `ArePatternSetTfmHeuristicsEnabled` returns `true` to allow TFM parsing |
+| `Fakes/FakeAuditingService.cs` | `FakeAuditingService` | Stub `IAuditingService` |
+| `Fakes/FakeContentObjectService.cs` | `FakeContentObjectService` | Stub `IContentObjectService` |
+| `Fakes/FakeFeatureFlagService.cs` | `FakeFeatureFlagService` | Stub `IFeatureFlagService`; `ArePatternSetTfmHeuristicsEnabled()` returns `true` |
+
+Key types from `NuGetGallery.Services` used at runtime:
+
+| File (in `NuGetGallery.Services/Security/`) | Class | Purpose |
+|---|---|---|
+| `MicrosoftTeamSubscription.cs` | `MicrosoftTeamSubscription` | Defines the canonical Microsoft package policy and the 18-locale copyright allowlist |
+| `RequirePackageMetadataState.cs` | `RequirePackageMetadataState` | JSON-serialisable DTO representing one rule set (authors, copyright, URL requirements, error format) |
+| `RequirePackageMetadataComplianceUtility.cs` | `RequirePackageMetadataComplianceUtility` | Static utility; deserialises a `RequirePackageMetadataState` from `UserSecurityPolicy` values and runs the four compliance checks |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---|---|
+| `Microsoft.Extensions.CommandLineUtils` | CLI argument / option parsing (`CommandLineApplication` base class) |
+| `Newtonsoft.Json` | (transitive via `NuGetGallery.Services`) JSON serialisation of rule sets |
+| `NuGet.Packaging` | `PackageArchiveReader` — reads `.nupkg` zip entries and nuspec |
+
+### Internal Project References
+
+| Project | How it is used |
+|---|---|
+| `NuGetGallery.Services` | Provides `PackageService`, `MicrosoftTeamSubscription`, `RequirePackageMetadataComplianceUtility`, `RequirePackageMetadataState`, `CryptographyService`, and all gallery entity types |
+
+### Framework / BCL
+
+| Assembly | Reason |
+|---|---|
+| `System.Web` | Required by `ISecurityPolicyService` signatures (`HttpContextBase`) even though policy evaluation is never called |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **Fake service wiring pattern.** `Application.GetPackageService()` constructs a real `PackageService` instance by injecting eight fake collaborators. None of the fakes implement actual behaviour — they exist solely to satisfy the constructor. Only the `CreatePackageAsync` code path is exercised, and it only reads from the `PackageArchiveReader`; no database, audit, or telemetry calls are made.
+</Note>
+
+<Note>
+  **Rule set derivation.** The default rule set is not hard-coded in this project. `Application.GetDefaultRuleSet()` instantiates `MicrosoftTeamSubscription` and deserialises its `Policies` collection through `RequirePackageMetadataComplianceUtility.DeserializeState`. This means the tool and the gallery server share exactly the same policy definition — a change to `MicrosoftTeamSubscription` automatically flows into the tool on next build.
+</Note>
+
+<Warning>
+  **`FakeFeatureFlagService.ArePatternSetTfmHeuristicsEnabled()` returns `true` (not `throw`).** This is the only non-throwing stub method in the feature flag fake and is required for `PackageService.CreatePackageAsync` to correctly parse target framework monikers from the `.nuspec`. If this is accidentally changed to throw, package creation will fail at runtime.
+</Warning>
+
+<Note>
+  **Exit code conventions.** The exe returns `0` on full success, `-1` for help/version/bad arguments, `-2` for unexpected exceptions, and the **count of invalid packages** (a positive integer) when validation completes with failures. `verify.ps1` treats any non-zero exit as an error via `Write-Error`.
+</Note>
+
+<Tip>
+  **Custom rule sets.** Run `NuGet.VerifyMicrosoftPackage.exe --rule-set custom.json --write-default-rule-set` to export the default JSON rule set, then edit and pass it back with `--rule-set custom.json` for team-specific overrides without touching gallery code.
+</Tip>
+
+<Note>
+  **Wildcard support is directory-scoped.** Wildcards in the filename portion of a path (e.g., `*.nupkg`) are supported and can be made recursive with `--recursive`. Wildcards or globs in the directory segment are not supported — the directory must be a literal path.
+</Note>
+
+## CLI Reference
+
+```text
+Usage: NuGet.VerifyMicrosoftPackage [arguments] [options]
+
+Arguments:
+  PATHS  One or more file paths to a package (.nupkg).
+
+Options:
+  -v | --version            Show version information.
+  -? | -h | --help          Show help information.
+  --recursive               Evaluate wildcards recursively into child directories.
+  --rule-set                A path to a JSON rule set file.
+  --write-default-rule-set  Write the default rule set to the --rule-set file path.
+```
+
+## Quick Start
+
+```powershell
+# Download and run against all .nupkg files in the current directory
+$url = "https://raw.githubusercontent.com/NuGet/NuGetGallery/master/src/VerifyMicrosoftPackage/verify.ps1"
+Invoke-WebRequest $url -OutFile verify.ps1
+.\verify.ps1 *.nupkg
+
+# Export the default rule set for inspection or customisation
+.\NuGet.VerifyMicrosoftPackage.exe --rule-set default.json --write-default-rule-set
+
+# Validate with a custom rule set
+.\NuGet.VerifyMicrosoftPackage.exe --rule-set custom.json path\to\MyPackage.1.0.0.nupkg
+```

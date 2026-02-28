@@ -1,0 +1,107 @@
+---
+title: NuGet.Services.Status
+sidebarTitle: Services.Status
+description: A shared contract library that defines the component tree model, status enumerations, and service status snapshot type used to represent and communicate NuGet service health.
+icon: activity
+---
+
+## Overview
+
+`NuGet.Services.Status` is a reusable contract library that provides the core domain model for representing the health of NuGet services. It defines a composable, tree-structured model of service components, each of which carries a `ComponentStatus` value (`Up`, `Degraded`, or `Down`). The library is designed to be shared between the backend that produces status information and any consumers that read or display it.
+
+The component model is built around the `IComponent` interface hierarchy. Concrete component types — `TreeComponent`, `ActiveActiveComponent`, `ActivePassiveComponent`, and `LeafComponent` — each implement a different aggregation strategy for computing their own status from their children's statuses. This allows a component tree to automatically bubble up the worst-case (or best-case, depending on deployment topology) status from leaf nodes to the root without requiring manual calculation by callers. Status can also be overridden by directly setting the `Status` property, which takes precedence over the computed value.
+
+The library also defines `ServiceStatus`, a top-level snapshot type that combines the root component tree with a list of timestamped `Event` objects (each carrying one or more `Message` updates). `ServiceStatus` is the type that gets serialized to JSON and published to consumers such as the NuGet status page frontend. The library targets both `net472` and `netstandard2.0` and has a single external dependency on `Newtonsoft.Json` for serialization support.
+
+## Role in System
+
+This library is the shared vocabulary between the `StatusAggregator` backend job and any consumer that reads the resulting status JSON blob. The `StatusAggregator` uses the writable `IComponent` tree to build and update component health during its run, then wraps the result in a `ServiceStatus` and serializes it. Consumers deserialize `ServiceStatus` using `ReadOnlyComponent` (which has a `[JsonConstructor]`-annotated constructor) to get a read-only view.
+
+```
+  StatusAggregator (producer)
+    - builds IComponent tree using concrete Component subclasses
+    - sets ComponentStatus on leaf nodes based on incident data
+    - wraps root in ServiceStatus with Events list
+    - serializes to JSON via Newtonsoft.Json
+            |
+            |  ServiceStatus JSON blob (Azure Blob Storage)
+            v
+  NuGet Status Page (consumer)
+    - deserializes ServiceStatus using ReadOnlyComponent
+    - traverses IReadOnlyComponent tree to render health indicators
+    - displays Events and Messages to users
+```
+
+The `NuGet.Services.Status.Table` project also references this library to use `ComponentStatus` and path utilities when storing intermediate status data in Azure Table Storage.
+
+<CardGroup cols={2}>
+  <Card title="Composable Component Tree" icon="tree-pine">
+    Components are composed into a tree. Parent nodes automatically aggregate child statuses using one of three strategies: worst-case (TreeComponent), best-case (ActiveActiveComponent), or priority-ordered failover (ActivePassiveComponent).
+  </Card>
+  <Card title="Mutable vs. Read-Only Views" icon="eye">
+    The library provides two parallel interface hierarchies: the writable `IComponent` / `Component` types for producers, and the immutable `IReadOnlyComponent` / `ReadOnlyComponent` types for consumers and serialization. `ReadOnlyComponent` wraps an `IComponent` tree on construction.
+  </Card>
+  <Card title="Path-Based Addressing" icon="route">
+    Every component has a slash-delimited `Path` (e.g. `"NuGet/Gallery/V3"`) computed by `ComponentWrapper` and `ReadOnlyComponentWrapper` as components are attached to parents. `ComponentUtility` provides `GetByPath`, `GetByNames`, `GetAllComponents`, and `GetLeastCommonAncestorPath` helpers for tree traversal.
+  </Card>
+  <Card title="Event and Message Model" icon="bell">
+    `ServiceStatus` carries an `IEnumerable<Event>` where each `Event` references an `AffectedComponentPath`, start/end timestamps, and a list of timestamped `Message` objects representing operator updates posted during the incident.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `IComponentDescription.cs` | `IComponentDescription` | Base interface providing `Name`, `Description`, `Status`, and `Path` for any component node |
+| `IComponent.cs` | `IComponent` | Writable component interface; extends `IComponentDescription` and `IRootComponent<IComponent>` with a settable `Status` and a `DisplaySubComponents` flag |
+| `IReadOnlyComponent.cs` | `IReadOnlyComponent` | Read-only variant of `IComponent`; used for deserialized snapshots and consumer-side traversal |
+| `IRootComponent.cs` | `IRootComponent<TComponent>` | Generic interface providing `SubComponents`; exists to share `ComponentUtility` traversal logic between `IComponent` and `IReadOnlyComponent` |
+| `ComponentStatus.cs` | `ComponentStatus` (enum) | Three-value enum: `Up = 0`, `Degraded = 1`, `Down = 2`; integer ordering enables `Min()` aggregation in `ActiveActiveComponent` |
+| `Component.cs` | `Component` (abstract) | Base class for all writable component implementations; wraps child subcomponents in `ComponentWrapper` instances on construction to assign correct paths |
+| `LeafComponent.cs` | `LeafComponent` | Terminal node with no children; `Status` is a simple auto-property with no aggregation logic |
+| `TreeComponent.cs` | `TreeComponent` | Aggregates children equally: `Up` if all are up, `Down` if all are down, `Degraded` otherwise; sets `DisplaySubComponents = true` |
+| `ActiveActiveComponent.cs` | `ActiveActiveComponent` | Returns the minimum (best) status across all children; models redundant deployments where any healthy instance is sufficient |
+| `ActivePassiveComponent.cs` | `ActivePassiveComponent` | Returns `Up` if the first child is up, `Degraded` if any non-first child is up or any child is degraded, `Down` if all are down; models primary/failover topologies |
+| `ComponentWrapper.cs` | `ComponentWrapper` (internal) | Wraps `IComponent` to compute the correct slash-delimited `Path` relative to a parent; used internally by `Component` when constructing the child list |
+| `ReadOnlyComponent.cs` | `ReadOnlyComponent` | Immutable implementation of `IReadOnlyComponent`; has a `[JsonConstructor]` for deserialization and a constructor that copies from an `IComponent` tree, respecting `DisplaySubComponents` |
+| `ReadOnlyComponentWrapper.cs` | `ReadOnlyComponentWrapper` (internal) | Wraps `IReadOnlyComponent` to compute correct `Path` values after deserialization; mirrors `ComponentWrapper` for the read-only hierarchy |
+| `ComponentUtility.cs` | `ComponentUtility` (static) | Extension methods for tree traversal: `GetByPath`, `GetByNames`, `GetAllComponents`, `GetAllVisibleComponents`, `GetLeastCommonAncestorPath`, `GetDeepestVisibleAncestorOfSubComponent` |
+| `ServiceStatus.cs` | `ServiceStatus` | Top-level snapshot type: `LastBuilt`, `LastUpdated`, `ServiceRootComponent` (`IReadOnlyComponent`), and `Events` (`IEnumerable<Event>`) |
+| `Event.cs` | `Event` | Records a downtime event: `AffectedComponentPath`, `StartTime`, nullable `EndTime`, and a collection of `Message` updates |
+| `Message.cs` | `Message` | A single timestamped operator message (`Time`, `Contents`) attached to an `Event` |
+| `Constants.cs` | `Constants` | Defines `ComponentPathDivider = '/'` used by `ComponentUtility` when building and splitting component paths |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Newtonsoft.Json` | JSON serialization and deserialization of `ServiceStatus`, `ReadOnlyComponent`, `Event`, and `Message`; `[JsonConstructor]` and `[JsonIgnore]` attributes are used throughout |
+
+### Internal Project References
+
+None. This library has no internal project dependencies and is designed as a standalone, publishable contract package.
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The `Status` property on all concrete `Component` subclasses follows a nullable-backing-field pattern: if `_status` has been explicitly set, that value is returned directly; otherwise the property computes and returns an aggregated value from `SubComponents`. This means any explicit assignment permanently overrides aggregation until the object is recreated.
+</Note>
+
+<Note>
+`ComponentWrapper` and `ReadOnlyComponentWrapper` are both `internal`. They are created automatically by the base `Component` and `ReadOnlyComponent` constructors when attaching child components. This ensures that `Path` is always correct relative to the parent without requiring callers to manage path construction manually.
+</Note>
+
+<Note>
+`ReadOnlyComponent` respects the `DisplaySubComponents` flag when converting from an `IComponent` tree: if a component has `DisplaySubComponents = false`, its children are excluded from the read-only snapshot entirely. `TreeComponent` sets this flag to `true`; `ActiveActiveComponent` and `ActivePassiveComponent` set it to `false`, hiding their internal redundancy structure from consumers.
+</Note>
+
+<Tip>
+`ComponentUtility.GetLeastCommonAncestorPath` and `GetDeepestVisibleAncestorOfSubComponent` are used by `StatusAggregator` to determine which component in the visible tree should be associated with a given incident, even when the incident targets a hidden sub-component inside an active/passive or active/active group.
+</Tip>
+
+<Warning>
+Because `Component` wraps each child in a new `ComponentWrapper` at construction time, the same `IComponent` instance can be safely referenced in only one parent tree. Attempting to reuse the same component instance in multiple trees is allowed by the design but will result in each copy having an independently computed path — the remarks on `ReadOnlyComponentWrapper` call this out explicitly.
+</Warning>

@@ -1,0 +1,111 @@
+---
+title: NuGet.Services.Build
+sidebarTitle: Services.Build
+description: A shared MSBuild task library that provides duplicate-file detection and Visual Studio installation discovery utilities to support the NuGet Gallery's code-signing and build pipelines.
+icon: hammer
+---
+
+## Overview
+
+`NuGet.Services.Build` is a small, purpose-built MSBuild extension library that ships as both a compiled assembly and as a NuGet package (package ID `NuGet.Services.Build`, version `1.0.0`). Its primary role is to act as a shared component for the repository-wide build and code-signing infrastructure. It is not a runtime service — it is compiled and consumed entirely during the build pipeline.
+
+The project contains two distinct components. The first is `FindDuplicateFiles`, a custom MSBuild `Task` that receives a list of file paths and partitions them into unique files and content-identical duplicates using a three-stage comparison strategy: file size, a SHA-256 hash of the first 1,024 bytes (the "leading hash"), and a full SHA-256 hash of the entire file. This tiered approach avoids reading entire large files unless necessary. The task also supports an optional `SkipAuthenticodeSubjects` parameter that filters out already-signed binaries (identified by their Authenticode certificate subject) from the duplicate list — this is specifically needed for test-signing scenarios where MicroBuild fails if it encounters a file that is already fully signed.
+
+The second component is `VisualStudioSetupConfigurationHelper`, a static helper class that uses the `Microsoft.VisualStudio.Setup.Configuration.Interop` COM API to enumerate all installed Visual Studio instance paths on the build machine. This is used by the PowerShell build infrastructure (`build/common.ps1`) to locate the correct MSBuild executable for a given Visual Studio major version.
+
+<Note>
+The project is intentionally constrained to **C# 5** (`<LangVersion>5</LangVersion>`). This is required because `FindDuplicateFiles.cs` is also consumed directly as raw source by MSBuild's `CodeTaskFactory` (in `build/FindDuplicateFiles.targets`), which only supports C# 5 syntax. The same source file is therefore used in two different compilation modes simultaneously.
+</Note>
+
+## Role in System
+
+```
+build/sign-binaries.proj
+  └─ imports FindDuplicateFiles.targets
+       └─ CodeTaskFactory compiles build/FindDuplicateFiles.cs inline
+            ↕ (same source file, linked via <Compile> Include)
+src/NuGet.Services.Build/NuGet.Services.Build.csproj
+  └─ compiles FindDuplicateFiles.cs as a proper assembly
+  └─ compiles VisualStudioSetupConfigurationHelper.cs
+
+build/sign.microbuild.targets  (imported by every *.csproj)
+  └─ EnumerateFilesToSign target  → collects managed DLLs, PS1 scripts, apphost.exe
+  └─ DedupeFilesToSign target     → calls FindDuplicateFiles task
+  └─ CopySignedFiles target       → copies the signed canonical file back to all duplicate paths
+
+build/sign-binaries.proj  (batch signing entrypoint)
+  └─ BatchSign target → MSBuild-calls EnumerateFilesToSign on every *.csproj
+                      → calls FindDuplicateFiles to consolidate before submitting to MicroBuild
+
+build/sign-packages.proj  (NuGet package signing)
+  └─ GetOutputNupkgs target → collects artifacts/*.nupkg for NuGet Authenticode signing
+```
+
+<CardGroup cols={2}>
+  <Card title="FindDuplicateFiles MSBuild Task" icon="files">
+    Custom `Task` subclass that partitions a file list into `UniqueFiles` and `DuplicateFiles` item groups using size → leading-hash → full-hash comparison. Duplicate items receive a `DuplicateOf` metadata field pointing to the canonical copy.
+  </Card>
+  <Card title="Authenticode Subject Filtering" icon="shield-check">
+    The `SkipAuthenticodeSubjects` parameter (semicolon-delimited) lets the signing pipeline exclude files already signed with the real Microsoft key during test-signing runs, preventing MicroBuild errors caused by re-signing fully-signed assemblies.
+  </Card>
+  <Card title="Dual-mode Source File" icon="code">
+    `FindDuplicateFiles.cs` lives under `build/` and is consumed both as a `CodeTaskFactory` inline task (for build targets that don't reference the assembly) and as a linked `<Compile>` item inside the `NuGet.Services.Build` project (which produces the distributable assembly).
+  </Card>
+  <Card title="VS Setup Discovery" icon="search">
+    `VisualStudioSetupConfigurationHelper.GetInstancePaths()` enumerates all VS installations via COM interop, enabling `build/common.ps1` to locate the appropriate `MSBuild.exe` without hardcoding version-specific paths.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `src/NuGet.Services.Build/NuGet.Services.Build.csproj` | Project | Targets `net472`; links `build/FindDuplicateFiles.cs` and compiles `VisualStudioSetupConfigurationHelper.cs`; references `Microsoft.Build.Framework` and `Microsoft.Build.Utilities.v4.0` as GAC references |
+| `src/NuGet.Services.Build/VisualStudioSetupConfigurationHelper.cs` | `VisualStudioSetupConfigurationHelper` (static class) | Wraps the `SetupConfiguration` COM class to enumerate all Visual Studio installation paths on the current machine |
+| `build/FindDuplicateFiles.cs` | `FindDuplicateFiles` (MSBuild `Task`) | Accepts `Files` item list; outputs `UniqueFiles` and `DuplicateFiles`; performs size → leading-SHA256 → full-SHA256 deduplication; optionally skips Authenticode-signed files by subject name |
+| `build/FindDuplicateFiles.cs` (inner) | `TaskItemInfo` (private class) | Holds per-file state during comparison: `ITaskItem` reference, full path, file size, header hash, and full hash |
+| `build/FindDuplicateFiles.targets` | MSBuild targets file | Registers `FindDuplicateFiles` as a `CodeTaskFactory`-compiled inline task so it can be used without the compiled assembly |
+| `build/sign.microbuild.targets` | MSBuild targets file | Defines `EnumerateFilesToSign`, `DedupeFilesToSign`, and `CopySignedFiles` targets; imported by every project; handles both batch and per-project signing modes |
+| `build/sign-binaries.proj` | MSBuild project | Batch signing entry point; calls `EnumerateFilesToSign` across all `src/**/*.csproj` files, then deduplicates and submits to MicroBuild |
+| `build/sign-packages.proj` | MSBuild project | NuGet package signing; collects `artifacts/*.nupkg` and submits them for `NuGet` Authenticode signing via MicroBuild |
+| `tests/NuGet.Services.Build.Tests/FindDuplicateFilesFacts.cs` | `FindDuplicateFilesFacts` (xUnit) | Tests covering missing files, path-identical duplicates, size-distinct files, leading-byte-distinct files, and content-identical duplicates across file sizes from 0 to 32,768 bytes |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.VisualStudio.Setup.Configuration.Interop` v1.8.24 | COM interop assembly for the Visual Studio Setup Configuration API; used by `VisualStudioSetupConfigurationHelper` to enumerate VS installations |
+
+### Framework / GAC References
+
+| Reference | Purpose |
+|-----------|---------|
+| `Microsoft.Build.Framework` | Provides `ITaskItem`, `IBuildEngine`, and MSBuild event argument types used by `FindDuplicateFiles` |
+| `Microsoft.Build.Utilities.v4.0` | Provides the `Task` base class that `FindDuplicateFiles` extends |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `tests/NuGet.Services.Build.Tests` | xUnit test project; references `NuGet.Services.Build` directly via `<ProjectReference>` |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The three-stage file comparison in `FindDuplicateFiles` is optimized to avoid unnecessary I/O. Files with unique sizes are immediately classified as unique without reading any content. Only files that share a size are read for the 1,024-byte leading hash, and only files that share a leading hash are fully hashed. This mirrors the approach described in the [Stack Overflow answer](https://stackoverflow.com/a/36113168) cited in the source code comments.
+</Note>
+
+<Warning>
+The `CopySignedFiles` target in both `sign.microbuild.targets` and `sign-binaries.proj` copies the signed canonical file back over every path listed in `DuplicateFilesToSign`. If the signing step fails or is skipped, duplicate paths will retain their original unsigned binaries. There is no integrity check after the copy.
+</Warning>
+
+<Tip>
+During test signing (when `$(SignType) == 'test'`), the `SkipAuthenticodeSubjects` property is automatically set to `CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US`. This causes `FindDuplicateFiles` to silently drop any file signed with the real Microsoft production key from the list submitted to MicroBuild, preventing test-signing failures on already-fully-signed assemblies.
+</Tip>
+
+- **Batch vs. per-project signing**: The `BatchSign` property (default `true`) controls whether each project signs its own output after build or defers to `sign-binaries.proj`. In batch mode, `sign.microbuild.targets` sets `SkipEnumerateFilesToSign=true` during the main solution build and only enumerates files when explicitly invoked by `sign-binaries.proj` with `SkipEnumerateFilesToSign=false`.
+- **Web app package signing**: When `$(WebPublishMethod) == 'Package'`, `EnumerateFilesToSign` runs after `PipelineCopyAllFilesToOneFolderForMsdeploy` rather than after `AfterBuild`, and the `PackageUsingManifest` target depends on `CopySignedFiles` so that the web deploy package always contains signed binaries.
+- **Signing certificate codes**: First-party managed assemblies use `Authenticode=Microsoft400` and `StrongName=MsSharedLib72`. Third-party binaries use `Authenticode=3PartySHA2`. NuGet packages use `Authenticode=NuGet`. PowerShell scripts use `Authenticode=Microsoft400` only.
+- **`RepositoryRootDirectory` resolution**: `sign.microbuild.targets` locates the repo root by walking up from the targets file until it finds `build.ps1` using `MSBuild::GetDirectoryNameOfFileAbove`. This allows the targets to glob for all copies of a given output assembly across all project bin directories in the repository.

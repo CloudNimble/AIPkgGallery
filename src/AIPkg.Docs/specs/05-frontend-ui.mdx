@@ -1,0 +1,312 @@
+---
+title: "Frontend UI"
+sidebarTitle: "05 · Frontend UI"
+description: "Blazor SSR + interactive island design, render mode strategy, full page inventory, component architecture, styling conventions, SEO requirements, and performance targets."
+icon: "display"
+---
+
+The AIpkg web UI is built with Blazor SSR (server-side rendering) with selective interactive islands. There are no Razor (`.cshtml`) views, no jQuery, no Bootstrap scripts, and no OWIN startup code. The UI lives entirely within `AIpkg.Server/` alongside the V3 API.
+
+The design philosophy: public-facing pages are statically server-rendered for SEO and performance. Authenticated and data-mutation pages use Interactive Server rendering.
+
+---
+
+## Render Mode Strategy
+
+| Page / Feature | Render Mode | Reason |
+|----------------|-------------|--------|
+| Home page | Static SSR | SEO, CDN-cacheable |
+| Browse / category pages | Static SSR | SEO, performance |
+| Search results | Static SSR + form resubmit | No JS required for basic search |
+| Package detail (read) | Static SSR | SEO critical |
+| Package detail version selector | Interactive Server island | Dynamic without full-page reload |
+| Package upload wizard | Interactive Server | Multi-step, validation-heavy |
+| User profile / account settings | Interactive Server | Authenticated |
+| API key management | Interactive Server | Authenticated |
+| Admin panel | Interactive Server | Internal tool |
+| Login / OAuth callback | Static SSR | Standard auth flow |
+
+<Note>
+  The version selector on the package detail page is implemented as a single Blazor interactive island embedded within an otherwise SSR-rendered page.
+</Note>
+
+---
+
+## Page Inventory
+
+<Tabs>
+  <Tab title="Public Pages">
+    ### Home (`/`)
+    - Hero section with search bar
+    - "Featured" packages (editorially curated or algorithmically ranked)
+    - "New packages" — 6 most recently published
+    - Platform quick-filters: buttons for each APM moniker
+    - Stats: total packages, total downloads, total platforms supported
+
+    ### Search Results (`/search`)
+    - Query: `?q={text}&apm={moniker}&capability={cap}&prerelease={bool}&page={n}`
+    - Filter sidebar: capability checkboxes, APM checkboxes, prerelease toggle
+    - Result cards: icon, id, title, description snippet, capabilities, download count, publish date
+    - Pagination
+    - Sort options: Relevance, Downloads, Recently Updated
+
+    ### Browse by Platform (`/platforms/{moniker}`)
+    - Shows all packages compatible with a given APM (using fallback expansion)
+    - Same card layout as search results
+    - Breadcrumb: Platforms → `{Platform Name}`
+
+    ### Browse by Capability (`/capabilities/{capability}`)
+    - Shows all packages with a given capability
+
+    ### Package Detail (`/packages/{id}`)
+    - Redirects to latest listed version: `/packages/{id}/{version}`
+
+    ### Package Detail — Version (`/packages/{id}/{version}`)
+
+    ```
+    ┌─────────────────────────────────────────────────────┐
+    │  [icon]  git-helpers  1.0.0  ▼ (version selector)  │
+    │          Jane Developer · MIT · 8,432 downloads      │
+    ├───────────────────────────────┬─────────────────────┤
+    │                               │ Install              │
+    │  [README content]             │ ─────────────────── │
+    │                               │ aipkg install       │
+    │                               │   git-helpers       │
+    │                               │                     │
+    │                               │ Capabilities        │
+    │                               │ skill               │
+    │                               │                     │
+    │                               │ Targets             │
+    │                               │ claude-code         │
+    │                               │ copilot-vscode      │
+    │                               │ cursor              │
+    │                               │                     │
+    │                               │ Dependencies        │
+    │                               │ (none)              │
+    │                               │                     │
+    │                               │ Versions            │
+    │                               │ 1.0.0 (current)     │
+    │                               │ 0.9.0               │
+    └───────────────────────────────┴─────────────────────┘
+    ```
+
+    - **README tab:** renders embedded README (sanitized HTML from Markdown)
+    - **Manifest tab:** shows the `.aispec` JSON, syntax-highlighted
+    - **Version history tab:** all versions with dates and download counts
+    - **Version selector:** Blazor interactive island (dropdown, navigates on change)
+    - **Platform install table:** per-APM install path breakdown
+
+    ### Platform List (`/platforms`)
+    - Cards for each canonical APM
+    - Each card: icon/logo, moniker, display name, package count, install path
+
+    ### Statistics (`/stats`)
+    - Total packages, total downloads, total authors
+    - Downloads over time chart (last 30 days)
+    - Top packages by downloads
+    - Downloads by platform chart
+  </Tab>
+  <Tab title="Authenticated Pages">
+    ### Upload Package (`/packages/upload`)
+
+    Multi-step wizard (Interactive Server):
+
+    <Steps>
+      <Step title="Select file">
+        File drop / select `.aipkg` file.
+      </Step>
+      <Step title="Review manifest">
+        Parsed fields shown for confirmation.
+      </Step>
+      <Step title="Additional metadata">
+        Tags, project URL (if not in manifest).
+      </Step>
+      <Step title="Permissions review">
+        Shows any permissions declared in the package.
+      </Step>
+      <Step title="Confirm and publish">
+        Final confirmation; shows progress indicator during upload.
+      </Step>
+    </Steps>
+
+    ### Package Management (`/packages/manage/{id}`)
+    - List of versions with unlist/relist buttons
+    - Package settings: owners, delete requests
+    - Download stats for the package
+
+    ### User Profile (`/account`)
+    - Display name, avatar (from GitHub), email
+    - Linked GitHub account
+    - Notification settings
+
+    ### API Keys (`/account/api-keys`)
+    - List of active keys (masked)
+    - Create new key: name, scopes, expiry, package glob
+    - Revoke key
+    - Copy newly created key (shown once)
+
+    ### Account Packages (`/account/packages`)
+    - All packages owned by the current user
+    - Sortable: by downloads, by date, by name
+  </Tab>
+  <Tab title="Admin Pages">
+    <Warning>
+      All admin pages are role-gated. Non-admin users receive `403 Forbidden`.
+    </Warning>
+
+    ### Admin Dashboard (`/admin`)
+    - Package report queue
+    - User report queue
+    - System health indicators
+
+    ### Admin Package (`/admin/packages/{id}`)
+    - Force-unlist any version
+    - Ownership transfer
+    - Vulnerability flags
+    - Audit log
+
+    ### Admin Users (`/admin/users`)
+    - Search, view, ban users
+  </Tab>
+</Tabs>
+
+---
+
+## Component Architecture
+
+All Blazor components live in `AIpkg.Server/Components/`:
+
+```
+Components/
+├── App.razor
+├── Routes.razor
+├── Layout/
+│   ├── MainLayout.razor
+│   ├── AdminLayout.razor
+│   ├── NavBar.razor
+│   └── Footer.razor
+├── Pages/
+│   ├── Home.razor
+│   ├── Search.razor
+│   ├── PackageDetail.razor
+│   ├── PlatformList.razor
+│   ├── PlatformDetail.razor
+│   ├── Upload.razor
+│   ├── AccountApiKeys.razor
+│   ├── AccountPackages.razor
+│   └── Admin/
+│       ├── Dashboard.razor
+│       └── PackageAdmin.razor
+└── Shared/
+    ├── PackageCard.razor        ← Used in search results, browse
+    ├── VersionSelector.razor    ← Interactive island on package detail
+    ├── ManifestViewer.razor     ← Syntax-highlighted .aispec viewer
+    ├── PlatformBadge.razor      ← APM moniker badge chip
+    ├── CapabilityBadge.razor    ← Capability badge chip
+    ├── PermissionWarning.razor  ← Alert for sensitive permissions
+    ├── SearchBar.razor
+    ├── Pagination.razor
+    └── CopyButton.razor         ← One-click copy (interactive)
+```
+
+---
+
+## Styling
+
+<CardGroup cols={2}>
+  <Card title="Tailwind CSS" icon="paintbrush">
+    Via CDN for prototype; PostCSS build for production. No Bootstrap.
+  </Card>
+  <Card title="No jQuery" icon="ban">
+    All interactive behavior handled by Blazor or vanilla JS minimal helpers.
+  </Card>
+  <Card title="Dark Mode" icon="moon">
+    System preference (`prefers-color-scheme`) via Tailwind `dark:` classes.
+  </Card>
+  <Card title="Lucide Icons" icon="shapes">
+    SVG sprites or inline. Platform logos as SVG files in `wwwroot/img/platforms/`.
+  </Card>
+</CardGroup>
+
+**Color palette** (CSS custom properties):
+
+```css
+--color-primary:    #6d28d9;  /* purple */
+--color-accent:     #10b981;  /* green */
+--color-danger:     #ef4444;
+--color-surface:    #1e1e2e;  /* dark background */
+--color-on-surface: #cdd6f4;
+```
+
+---
+
+## SEO
+
+All public SSR pages must include:
+
+- `<title>{Package ID} · AIpkg.org</title>`
+- `<meta name="description">` from package description
+- Open Graph tags: `og:title`, `og:description`, `og:image` (package icon)
+- Structured data (JSON-LD): `schema.org/SoftwareApplication` for package detail pages
+- Canonical URL
+- `<link rel="alternate" type="application/json">` pointing to V3 registration JSON
+
+**Sitemap:** `/sitemap.xml` — generated endpoint listing all listed packages and platform pages; updated nightly by a background job.
+
+---
+
+## Authentication Flow
+
+<Steps>
+  <Step title="Sign In">
+    User clicks "Sign In" → redirected to `/auth/github`.
+  </Step>
+  <Step title="OAuth Callback">
+    GitHub OAuth callback → session cookie set → redirect to previous page.
+  </Step>
+  <Step title="Sign Out">
+    `POST /auth/logout` (CSRF-protected) → redirect to home.
+  </Step>
+</Steps>
+
+<Note>
+  No username/password login. GitHub is the only provider at MVP. OIDC providers added post-MVP.
+</Note>
+
+---
+
+## Performance Targets
+
+| Page | Target (p95 TTFB) | Cache Strategy |
+|------|-------------------|----------------|
+| Home | < 200ms | CDN cache 60s |
+| Search results | < 300ms | No cache (dynamic) |
+| Package detail | < 200ms | CDN cache 30s |
+| Package download | — | CDN cache forever (versioned URL) |
+| API responses | < 100ms | CDN cache varies |
+
+---
+
+## Accessibility
+
+- WCAG 2.1 AA target
+- All interactive elements keyboard-navigable
+- `aria-label` on icon-only buttons
+- Color contrast ratio ≥ 4.5:1 for normal text
+- Focus indicators visible
+
+---
+
+## What is NOT in the UI
+
+<Warning>
+  The following must not exist in `AIpkg.Server/`:
+</Warning>
+
+- No `.cshtml` Razor views
+- No `_Layout.cshtml` master layout
+- No `@Html.*` helpers
+- No jQuery, Bootstrap JS, or `bundle.config.js`
+- No OWIN `Startup.cs`
+- No SignalR (use Blazor server circuit instead)
+- No Symbol package pages or upload flow

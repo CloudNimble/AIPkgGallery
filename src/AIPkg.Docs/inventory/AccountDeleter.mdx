@@ -1,0 +1,147 @@
+---
+title: AccountDeleter
+sidebarTitle: AccountDeleter
+description: A background job that processes account deletion requests from a Service Bus subscription, evaluates eligibility criteria, deletes the account from the Gallery database, and sends confirmation or notification emails.
+icon: user-x
+---
+
+## Overview
+
+AccountDeleter is a .NET Framework 4.7.2 console application that runs as a long-lived background job (deployed as a Windows service via NSSM). It subscribes to an Azure Service Bus topic and processes `AccountDeleteMessage` messages, each of which carries a username and a named source (e.g., a self-service portal or an admin tool). For each message the job looks up the user in the Gallery database, runs a configurable set of eligibility evaluators to determine whether the account can be deleted automatically, and then either deletes it or sends a "cannot be automatically deleted" notification email to the user.
+
+The job is built on the internal `SubscriptionProcessorJob<T>` base class, which handles the Service Bus subscription lifecycle — starting concurrent message processors, running for a configured duration, and gracefully shutting down. `AccountDeleteMessageHandler` is the single `IMessageHandler<AccountDeleteMessage>` implementation that contains the core orchestration logic. A debug mode (`--Debug` CLI argument) substitutes no-op implementations of the delete service, email service, and user service so that the entire flow can be exercised locally without touching a real database or sending live emails.
+
+The key design decision is that deletion policy is fully data-driven: each named source in configuration carries its own list of `EvaluatorKey` values. The `UserEvaluatorFactory` resolves those keys to concrete `IUserEvaluator` instances and wraps them in an `AggregateEvaluator` that applies AND logic across all evaluators. This means new sources or policies can be added through configuration changes alone, without code changes.
+
+## Role in System
+
+```
+External trigger (self-service portal, admin tool, GDPR workflow)
+        |
+        v
+  Azure Service Bus topic  (AccountDeleteMessage: username + source)
+        |
+        v
+  AccountDeleter job (this project)
+        |
+        +-- UserService.FindByUsername()       --> Gallery SQL database
+        |
+        +-- IUserEvaluatorFactory              --> per-source evaluator chain
+        |       AccountConfirmedEvaluator
+        |       NuGetDeleteEvaluator           --> PackageService (SQL)
+        |       AlwaysAllowEvaluator
+        |       AlwaysRejectEvaluator
+        |
+        +-- IDeleteAccountService.DeleteAccountAsync()  --> Gallery SQL database
+        |       orphan packages unlisted automatically
+        |
+        +-- IMessageService.SendMessageAsync() --> Email Service Bus topic
+                (AccountDeleteEmailBuilder / DisposableEmailBuilder)
+```
+
+<CardGroup cols={2}>
+  <Card title="Source-Driven Policy" icon="sliders">
+    Every message carries a source name. Configuration maps each source to a set of evaluators, success/failure email templates, and a flag controlling whether a success email is sent at all.
+  </Card>
+  <Card title="Evaluator Pipeline" icon="filter">
+    Eligibility is determined by an AND-chained aggregate of `IUserEvaluator` implementations. Built-in evaluators check account confirmation status, package ownership, and organization admin membership.
+  </Card>
+  <Card title="Email Notifications" icon="mail">
+    After deletion (or rejection), the handler sends a templated email to the user with the Gallery owner CC'd. The `{username}` placeholder in templates is replaced at send time by `DisposableEmailBuilder`.
+  </Card>
+  <Card title="Debug Mode" icon="bug">
+    Passing `--Debug` on the command line swaps in `EmptyDeleteAccountService`, `EmptyUserService`, and `DebugMessageService`, which log actions but make no external calls. Audit logs write to the local filesystem instead of Azure Storage.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; creates a `Job` instance and calls `JobRunner.Run()`. |
+| `Job.cs` | `Job : SubscriptionProcessorJob<AccountDeleteMessage>` | Registers all DI services, sets up the Service Bus subscription processor, and configures the two operating modes (normal vs. debug). |
+| `AccountDeleteMessageHandler.cs` | `AccountDeleteMessageHandler : IMessageHandler<AccountDeleteMessage>` | Orchestrates the full delete flow: user lookup, evaluator check, delete call, and email dispatch. Returns `false` on unknown-source errors (message goes back to queue); treats user-not-found as already-done (returns `true`). |
+| `GalleryAccountManager.cs` | `GalleryAccountManager : IAccountManager` | Receives a `User` and a source name, runs the evaluator chain, and delegates to `IDeleteAccountService.DeleteAccountAsync()` with `UnlistOrphans` policy. |
+| `IAccountManager.cs` | `IAccountManager` | Single-method interface (`DeleteAccount(User, string source) -> bool`). |
+| `AccountDeleteUserService.cs` | `AccountDeleteUserService : IUserService` | Minimal `IUserService` implementation that only implements `FindByUsername()` to avoid pulling unneeded Gallery DI registrations into scope. |
+| `Evaluators/IUserEvaluator.cs` | `IUserEvaluator` | Interface with `EvaluatorId` (a GUID) and `CanUserBeDeleted(User)`. |
+| `Evaluators/BaseUserEvaluator.cs` | `BaseUserEvaluator` | Abstract base that assigns a random GUID as `EvaluatorId` at construction time. |
+| `Evaluators/AggregateEvaluator.cs` | `AggregateEvaluator` | Holds a `HashSet<IUserEvaluator>` (deduplicated by `UserEvaluatorComparer`) and returns `true` only if all evaluators pass. |
+| `Evaluators/NuGetDeleteEvaluator.cs` | `NuGetDeleteEvaluator` | Allows deletion when the account is unconfirmed, OR when the user owns no packages and is not an admin of any organization. |
+| `Evaluators/AccountConfirmedEvaluator.cs` | `AccountConfirmedEvaluator` | Rejects deletion if the account is confirmed (inverse of the unconfirmed check in `NuGetDeleteEvaluator`). |
+| `Evaluators/AlwaysAllowEvaluator.cs` | `AlwaysAllowEvaluator` | Always returns `true`; used in configuration for sources that should bypass criteria checks. |
+| `Evaluators/AlwaysRejectEvaluator.cs` | `AlwaysRejectEvaluator` | Always returns `false`; useful for temporarily disabling a source without removing its configuration. |
+| `Evaluators/UserEvaluatorFactory.cs` | `UserEvaluatorFactory : IUserEvaluatorFactory` | Reads the source's `Evaluators` list from `AccountDeleteConfiguration`, resolves each `EvaluatorKey` via a DI-injected factory `Func<EvaluatorKey, IUserEvaluator>`, and returns a composed `AggregateEvaluator`. |
+| `Evaluators/EvaluatorKey.cs` | `EvaluatorKey` (enum) | Defines the four valid evaluator identifiers: `AccountConfirmed`, `AlwaysAllow`, `AlwaysReject`, `NuGetDelete`. |
+| `Messaging/AccountDeleteEmailBuilder.cs` | `AccountDeleteEmailBuilder : IEmailBuilder` | Holds raw subject and message template strings from configuration; substitutes nothing itself (delegation to `DisposableEmailBuilder`). |
+| `Messaging/DisposableEmailBuilder.cs` | `DisposableEmailBuilder : IEmailBuilder` | Wraps a base `IEmailBuilder`, injects resolved `IEmailRecipients`, and replaces the `{username}` placeholder in subject and body. |
+| `Messaging/EmailBuilderFactory.cs` | `EmailBuilderFactory : IEmailBuilderFactory` | Returns a success or failure email builder for a source based on whether deletion succeeded and whether `SendMessageOnSuccess` is configured. Returns `null` for success when the source opts out of success emails. |
+| `Messaging/DebugMessageService.cs` | `DebugMessageService : IMessageService` | No-op `IMessageService` that logs the email subject/body/sender but does not enqueue anything. Used in debug mode. |
+| `Telemetry/AccountDeleteTelemetryService.cs` | `AccountDeleteTelemetryService` | Implements both `IAccountDeleteTelemetryService` and `ISubscriptionProcessorTelemetryService`. Emits Application Insights events (`DeleteResult`, `EmailSent`, `EmailBlocked`, `UnknownSource`, `UserNotFound`, `UnconfirmedUser`) and metrics (`MessageDeliveryLag`, `MessageEnqueueLag`, `MessageHandlerDurationSeconds`, `MessageLockLost`). |
+| `Configuration/AccountDeleteConfiguration.cs` | `AccountDeleteConfiguration` | Root configuration class bound from the `AccountDeleteSettings` section; contains `SourceConfigurations`, `EmailConfiguration`, `TemplateReplacements`, `GalleryStorageConnectionString`, and `RespectEmailContactSetting`. |
+| `Configuration/SourceConfiguration.cs` | `SourceConfiguration` | Per-source policy: `SourceName`, `SendMessageOnSuccess`, `NotifyMailTemplate`, `DeletedMailTemplate`, `Evaluators`. |
+| `Configuration/MailTemplateConfiguration.cs` | `MailTemplateConfiguration` | Holds a `SubjectTemplate` and `MessageTemplate` string pair for one email type. |
+| `Configuration/EmailConfiguration.cs` | `EmailConfiguration` | Service Bus connection info for the email queue, plus `GalleryOwner`, `GalleryNoReplyAddress`, and URL templates for package and support links. |
+| `EmptyDeleteAccountService.cs` | `EmptyDeleteAccountService` | Debug stub that returns `Success = true` without touching the database. |
+| `EmptyIndexingService.cs` | `EmptyIndexingService` | No-op indexing service required by `DeleteAccountService` but irrelevant for this job. |
+| `EmptyFeatureFlagService.cs` | `EmptyFeatureFlagService` | Stub `IFeatureFlagService`; only `ArePatternSetTfmHeuristicsEnabled()` has a real return value (`false`); all others throw. |
+| `Providers/AccountDeleteUrlHelper.cs` | `AccountDeleteUrlHelper : IUrlHelper` | Stub `IUrlHelper` required by Gallery service dependencies; all methods throw `NotImplementedException`. |
+| `Configuration/GalleryConfiguration.cs` | `GalleryConfiguration : IAppConfiguration` | Stub `IAppConfiguration` that satisfies the `SecurityPolicyService` dependency; only `SiteRoot` (returns `""`) and `EnforceDefaultSecurityPolicies` (returns `true`) have real values. |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGetGallery.Services` | Provides `IDeleteAccountService`, `IUserService`, `IPackageService`, `IAuthenticationService`, `SecurityPolicyService`, `AuditingService`, entity types, and the full Gallery DI surface that the delete operation requires. |
+| `Validation.Common.Job` | Provides `SubscriptionProcessorJob<T>`, `ValidationJobBase`, `ISubscriptionProcessor<T>`, `IMessageHandler<T>`, and Service Bus subscription plumbing. |
+
+### Key Transitive Project References (via Validation.Common.Job and NuGetGallery.Services)
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | `JobRunner`, `JobBase`, SQL connection factory infrastructure. |
+| `NuGet.Services.ServiceBus` | `ITopicClient`, `TopicClientWrapper`, `SubscriptionProcessor<T>`, `IBrokeredMessageSerializer<T>`. |
+| `NuGet.Services.Messaging.Email` | `IMessageService`, `AsynchronousEmailMessageService`, `IEmailBuilder`, `IEmailRecipients`, `EmailMessageEnqueuer`. |
+| `NuGetGallery.Core` | Core entity framework context (`EntitiesContext`), `IEntityRepository<T>`, base entity types. |
+| `NuGet.Services.FeatureFlags` | `IFeatureFlagRefresher` (started by the base job on each run). |
+| `NuGet.Services.Logging` | Application Insights `TelemetryClientWrapper`. |
+
+### Key NuGet Package References (transitive)
+
+| Package | Purpose |
+|---------|---------|
+| `Autofac` / `Autofac.Extensions.DependencyInjection` | DI container; Autofac is used alongside `Microsoft.Extensions.DependencyInjection` for `IEntityRepository<T>` registrations via `ContainerBuilder`. |
+| `Azure.Messaging.ServiceBus` | Underlying Azure Service Bus SDK used by `TopicClientWrapper` and subscription processor. |
+| `Microsoft.ApplicationInsights` | Telemetry client for all custom events and metrics. |
+| `Azure.Identity` | MSI (managed identity) authentication for Azure Storage (`CloudBlobClientWrapper.UsingMsi`). |
+| `System.Data.SqlClient` | SQL connection to the Gallery and SupportRequest databases. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The `AccountDeleteMessageHandler` treats `UserNotFoundException` as a successful completion (returns `true`). This is intentional: if a message is redelivered after a partial failure the user may already be gone, and re-queuing the message would cause infinite retries. Only `UnknownSourceException` causes the message to be marked as failed (`false` return), triggering redelivery.
+</Note>
+
+<Warning>
+When `IDeleteAccountService.DeleteAccountAsync()` throws an unhandled exception the entire `HandleAsync` method re-throws, which causes the Service Bus message to be abandoned and redelivered. This means any transient infrastructure failure (database timeout, etc.) will automatically retry — but a systematic bug in the delete path will cause the message to exhaust its delivery count and go to the dead-letter queue.
+</Warning>
+
+<Note>
+The `RespectEmailContactSetting` flag in `AccountDeleteConfiguration` controls whether the handler skips sending a notification email to users who have opted out of contact. When `true` and the user's `EmailAllowed` is `false`, deletion still proceeds but no email is sent. A telemetry event (`EmailBlocked`) is emitted in this case.
+</Note>
+
+<Tip>
+The evaluator system is extensible purely through configuration. To add a new deletion policy for a new source, add a `SourceConfiguration` entry with the desired `Evaluators` list (any combination of the four `EvaluatorKey` values) and matching email templates. No code changes are required unless a brand-new evaluator type is needed.
+</Tip>
+
+<Warning>
+`EmptyFeatureFlagService` throws `NotImplementedException` for every method except `ArePatternSetTfmHeuristicsEnabled()`, which returns `false`. If the `DeleteAccountService` code path ever calls other feature flag methods at runtime this will cause an unhandled exception. This is a known limitation noted in the source: the stub was added specifically to satisfy the `DeleteAccountService` DI graph without pulling in a live feature flag backend.
+</Warning>
+
+- **NSSM deployment**: The `Scripts/` directory contains PowerShell pre/post-deploy scripts and `nssm.exe`. The job is installed as a Windows service using NSSM (Non-Sucking Service Manager), which handles restarts and logging.
+- **Scoped vs. transient DI**: Gallery services (database contexts, repositories, evaluators) are registered as `Scoped` to align with the per-message DI lifetime scope created by `ScopedMessageHandler<T>` in the base framework. Telemetry and message handling infrastructure are registered as `Transient`.
+- **Auditing in debug mode**: In debug mode, `AuditingService` writes to the local filesystem under `<BaseDirectory>/auditing/`. In normal mode, no default `AuditingService` is registered; the code silently skips it unless add-in assemblies in the `add-ins/` directory export an `IAuditingService`.
+- **Add-in pattern**: `Job.GetAddInServices<T>()` scans an `add-ins/` subdirectory for MEF-exported services. This is used exclusively for `IAuditingService` today, allowing audit backends to be deployed as drop-in assemblies without recompiling the job.
+- **Orphan package policy**: Accounts are always deleted with `AccountDeletionOrphanPackagePolicy.UnlistOrphans`. If the deleted user was the sole owner of any package, those packages are automatically unlisted rather than deleted or transferred.

@@ -1,0 +1,106 @@
+﻿---
+title: "SplitLargeFiles"
+sidebarTitle: "SplitLargeFiles"
+description: "Console utility that splits large text or gzip-compressed files into smaller chunks by line count, then optionally uploads the resulting files to Azure Blob Storage."
+icon: "scissors"
+---
+
+## Overview
+
+`SplitLargeFiles` is a .NET 4.7.2 command-line tool in the NuGetGallery repository that solves a practical operational problem: large data files (catalog snapshots, statistics exports, search auxiliary files) are too big to process or transfer in a single pass.
+
+The tool provides two commands:
+
+- **split** — reads a large plain-text or gzip-compressed file, counts its lines, divides them evenly across *N* output files sized near a configurable byte threshold (default 20 MB), and writes each chunk with the same encoding and compression as the source.
+- **upload** — takes a directory of already-split files, uploads each one to an Azure Blob Storage container, and deletes the local copy upon success.
+
+Both commands are designed for use in CI/CD pipelines and administrative runbooks where large files need to be staged, transferred, or processed in smaller batches.
+
+## Role in the System
+
+<CardGroup cols={2}>
+  <Card title="Data Pipeline Staging" icon="database">
+    Prepares oversized export files (e.g., download statistics, package catalog dumps) for downstream consumers that impose blob size or memory limits.
+  </Card>
+  <Card title="Azure Storage Integration" icon="cloud-upload">
+    Acts as a push mechanism into Azure Blob Storage with built-in KeyVault secret injection so connection strings never appear in plain text in scripts.
+  </Card>
+  <Card title="Gzip Transparency" icon="file-zip">
+    Automatically detects gzip magic bytes, decompresses for reading, and re-compresses each output chunk — callers do not need to pre-decompress.
+  </Card>
+  <Card title="Operational Tooling" icon="wrench">
+    Lives alongside other ops utilities in the NuGetGallery monorepo. It is not a library; it is a standalone exe deployed and invoked by runbooks.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class | Purpose |
+|------|-------|---------|
+| `src/SplitLargeFiles/Program.cs` | `Program` | CLI entry point. Dispatches to `ExecuteSplit` or `ExecuteUploadAsync` based on the first argument. Contains all split and upload logic. |
+| `src/SplitLargeFiles/FileProperties.cs` | `FileProperties` | Inspects a `FileStream` to determine file size, gzip status, text encoding (via BOM detection), and exact line count before splitting begins. |
+| `src/SplitLargeFiles/SplitLargeFiles.csproj` | — | .NET 4.7.2 `<OutputType>Exe</OutputType>` project. References `ICSharpCode.SharpZipLib` both as a local DLL hint-path and via NuGet. |
+| `src/SplitLargeFiles/SplitLargeFiles.nuspec` | — | NuSpec packaging descriptor. Packages the `net472` build output into a `bin/` folder for deployment via NuGet artefact feeds. |
+
+## Dependencies
+
+### NuGet Packages
+
+| Package | Purpose |
+|---------|---------|
+| `SharpZipLib` / `ICSharpCode.SharpZipLib` | GZip stream reading (`GZipInputStream`) and writing (`GZipOutputStream`) for transparent compression handling. Referenced both as a local hint-path DLL (`external/ICSharpCode.SharpZipLib.0.86.0/`) and as a NuGet package. |
+| `WindowsAzure.Storage` | Azure Blob Storage client (`CloudStorageAccount`, `CloudBlobClient`, `CloudBlockBlob`) used in the `upload` command. |
+| `Newtonsoft.Json` | Declared as a dependency; not directly used in source but required transitively by `WindowsAzure.Storage`. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `src/NuGet.Services.KeyVault` | Provides `KeyVaultReader`, `KeyVaultConfiguration`, and `SecretInjector` — used to resolve `$$secret$$`-style placeholders in Azure Storage connection strings at runtime via Managed Identity. |
+
+## Split Algorithm
+
+The split command uses a **line-count-based** partitioning strategy rather than a raw byte-split:
+
+```
+fileCount    = ceil(rawFileSize / desiredFileSize)   // default desiredFileSize = 20 MB
+linesPerFile = totalLineCount / fileCount
+```
+
+Each output chunk except the last receives exactly `linesPerFile` lines. The last file absorbs any remainder. Output file names are derived from the input name with a four-digit zero-padded index suffix inserted before the extension (e.g., `data_0000.json.gz`, `data_0001.json.gz`).
+
+**Split usage:**
+```
+split <inputPath> [desiredFileSizeBytes] [indexFormat]
+```
+
+**Upload usage:**
+```
+upload <directory> <pattern> <connectionString> <containerName> [keyVaultName]
+```
+
+## Upload Behaviour
+
+<Note>
+  The upload command deletes each local file immediately after a successful blob upload. If the process is interrupted mid-run, already-uploaded files are gone from disk but any remaining files are left intact and the command exits with a non-zero failure count equal to the number of failures.
+</Note>
+
+The upload command iterates files **non-recursively** using `SearchOption.TopDirectoryOnly`. The blob name is always the bare file name with no sub-path prefix. After all files are processed the exit code equals the number of upload failures, allowing callers to detect partial failures in scripts.
+
+## Notable Patterns and Quirks
+
+<Warning>
+  `ICSharpCode.SharpZipLib` is referenced twice — once via a local hint-path DLL in `external/ICSharpCode.SharpZipLib.0.86.0/` and once as a NuGet `PackageReference`. This dual reference can cause version conflicts at build time if the NuGet-restored version differs from the pinned DLL. The hint-path takes precedence at compile time on .NET Framework.
+</Warning>
+
+<Note>
+  Gzip detection reads the first two magic bytes (`0x1F 0x8B`) and then performs a live decompression probe of the first 128 bytes. A file that has the correct magic bytes but fails to decompress is treated as plain text rather than throwing, preventing false-positive gzip classification.
+</Note>
+
+<Tip>
+  `FileProperties.CountLines` emits progress to stdout every 25,000 lines (a dot) and a full status line every 1,000,000 lines including percentage complete and an estimated time remaining. This makes it practical to monitor long-running scans against multi-gigabyte files in a terminal or log stream.
+</Tip>
+
+- **Encoding preservation**: `StreamReader` is opened with `detectEncodingFromByteOrderMarks: true` on first pass to capture the BOM encoding. The detected `Encoding` instance is then reused for the line-count pass and for every output `StreamWriter`, so the original BOM and code page are faithfully reproduced in every chunk.
+- **Stream rewinding**: `FileProperties.ProcesStream<T>` saves and restores `stream.Position` around every scan pass so the single open `FileStream` is reused across gzip detection, encoding detection, line counting, and final reading without reopening the file.
+- **Target framework**: The project targets `net472` (not .NET Core or .NET 5+). This is consistent with other operational tooling in the NuGetGallery repo that predates the .NET Core migration and relies on `WindowsAzure.Storage` which does not have a modern .NET equivalent in this codebase.

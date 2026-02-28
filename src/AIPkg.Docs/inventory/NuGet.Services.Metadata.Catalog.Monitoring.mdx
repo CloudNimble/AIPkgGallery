@@ -1,0 +1,140 @@
+---
+title: NuGet.Services.Metadata.Catalog.Monitoring
+sidebarTitle: Catalog.Monitoring
+description: Validates that package metadata in the NuGet V3 endpoints (registration, flat container, search) is consistent with the authoritative source in the gallery database and catalog.
+icon: shield-check
+---
+
+## Overview
+
+This library provides the infrastructure for monitoring the correctness of the NuGet V3 package metadata pipeline. It continuously watches the NuGet catalog (the append-only transaction log for all package events) and validates that what each V3 endpoint exposes for a given package matches the authoritative state in the gallery database. When inconsistencies are found, the package's monitoring status is recorded as `Invalid` in Azure Blob Storage so that operators can investigate.
+
+The core flow has two independent phases. First, a `ValidationCollector` walks the catalog index from a durable cursor, batches catalog entries by package identity (using the inherited `SortingIdVersionCollector`), and enqueues `PackageValidatorContext` messages into a storage queue. Second, a `PackageValidator` dequeues those messages and runs all registered `IValidator` implementations against the package by comparing data fetched from the V2 database feed with data fetched from the V3 endpoint. Results are stored as JSON blobs in Azure Storage, partitioned by `PackageState` (Valid, Invalid, Unknown).
+
+The validation system is built around an endpoint abstraction. Each V3 surface (Catalog, Registration, Flat Container, and one or more Search instances) is represented as an `IEndpoint` with its own cursor indicating how far it has processed the catalog. The `AggregateEndpointCursor` combines all endpoint cursors with `min` semantics so the collector only processes catalog entries that every endpoint has already had a chance to ingest. Validators are scoped to their endpoint and can short-circuit via a `ShouldRunAsync` check that compares the database timestamp to the catalog entry timestamp, deferring validation (`RetryLater`) when the catalog entry is stale relative to the database.
+
+## Role in System
+
+```
+Gallery DB ──────────────────────────────────────────────────────────┐
+                                                                      │
+Catalog (append-only log) ──► ValidationCollector ──► StorageQueue   │
+                                    (cursor)                │         │
+                                                            ▼         │
+                                                    PackageValidator  │
+                                                    (dequeues items)  │
+                                                            │         │
+                              ┌─────────────────────────────┘         │
+                              │  ValidationContext                     │
+                              │    ├── V2 source (DB feed) ◄──────────┘
+                              │    └── V3 source (index URL)
+                              │          ├── RegistrationEndpoint
+                              │          ├── FlatContainerEndpoint
+                              │          ├── CatalogEndpoint
+                              │          └── SearchEndpoint(s)
+                              │
+                              ▼
+                    AggregateValidationResult
+                              │
+                              ▼
+                  PackageMonitoringStatusService
+                  (Azure Blob Storage, per PackageState)
+                    valid/{id}/{id}.{version}.json
+                    invalid/{id}/{id}.{version}.json
+                    unknown/{id}/{id}.{version}.json
+```
+
+<CardGroup cols={2}>
+  <Card title="Catalog-Driven Collection" icon="database">
+    The `ValidationCollector` extends `SortingIdVersionCollector` to batch catalog pages by package identity and enqueue validation work items. A durable cursor stored in Azure Blob Storage tracks how far through the catalog the collector has progressed.
+  </Card>
+  <Card title="Endpoint-Scoped Validators" icon="layers">
+    Validators are associated with a specific endpoint type (Catalog, Registration, FlatContainer, or Search) via generic typing. Autofac wires all `IValidator<TEndpoint>` implementations into an `EndpointValidator<TEndpoint>` which runs them in parallel.
+  </Card>
+  <Card title="Timestamp-Gated Execution" icon="clock">
+    Each `Validator` base class compares the catalog entry timestamp against the database timestamp before running. If the catalog entry is older than the database record, validation returns `RetryLater` (recorded as `Unknown`) rather than producing a false negative.
+  </Card>
+  <Card title="State-Partitioned Status Storage" icon="folder-open">
+    `PackageMonitoringStatusService` writes validation results as JSON blobs under state-named folders (`valid/`, `invalid/`, `unknown/`). When a package moves to a new state, the old blob is deleted after the new one is saved to avoid data loss.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Validation/ValidationCollector.cs` | `ValidationCollector` | Extends `SortingIdVersionCollector` to translate catalog batches into `PackageValidatorContext` queue messages |
+| `Validation/ValidationFactory.cs` | `ValidationFactory` | Static factory that builds the Autofac container and resolves `PackageValidator` or `PackageValidatorContextEnqueuer` |
+| `Validation/Test/PackageValidator.cs` | `PackageValidator` | Orchestrates all `IAggregateValidator` instances for a single package; fetches deletion audit entries and creates `ValidationContext` |
+| `Validation/Test/PackageValidatorContextEnqueuer.cs` | `PackageValidatorContextEnqueuer` | Drives the `ValidationCollector` in a loop until the catalog cursor catches up to the endpoint aggregate cursor |
+| `Validation/Test/PackageValidatorContext.cs` | `PackageValidatorContext` | Queue message payload: package identity plus the catalog entries that triggered validation |
+| `Validation/Test/ValidationContext.cs` | `ValidationContext` | Per-validation context providing lazy-loaded metadata from both V2 (database) and V3 sources, plus search query support |
+| `Validation/Test/Validator.cs` | `Validator` / `Validator<T>` | Abstract base for all validators; implements timestamp-gating via `ShouldRunAsync` and normalizes outcomes to `Pass`, `Fail`, `Skip`, or `Pending` |
+| `Validation/Test/AggregateValidator.cs` | `AggregateValidator` | Runs all child `IValidator` implementations in parallel and returns an `AggregateValidationResult` |
+| `Validation/Test/Endpoint/EndpointValidator.cs` | `EndpointValidator<T>` | Concrete `AggregateValidator` scoped to a specific endpoint type |
+| `Validation/Test/Endpoint/AggregateEndpointCursor.cs` | `AggregateEndpointCursor` | Wraps all `IEndpoint` cursors in an `AggregateCursor` (min-semantics) to throttle the collector |
+| `Validation/Test/Endpoint/CatalogEndpoint.cs` | `CatalogEndpoint` | Represents the catalog; uses `MemoryCursor.MaxValue` because all existing catalog entries are always valid to validate against |
+| `Validation/Test/Endpoint/RegistrationEndpoint.cs` | `RegistrationEndpoint` | Reads the Registration blobs cursor URI from `EndpointConfiguration` |
+| `Validation/Test/Endpoint/FlatcontainerEndpoint.cs` | `FlatContainerEndpoint` | Reads the Flat Container blobs cursor URI from `EndpointConfiguration` |
+| `Validation/Test/Endpoint/SearchEndpoint.cs` | `SearchEndpoint` | Aggregates multiple search instance cursors (HTTP or Azure Blob) for a named search service instance |
+| `Validation/Test/Registration/RegistrationExistsValidator.cs` | `RegistrationExistsValidator` | Checks that a package exists (or doesn't) in Registration blobs consistent with the database |
+| `Validation/Test/Registration/RegistrationIdValidator.cs` | `RegistrationIdValidator` | Checks that the package ID in Registration matches the database |
+| `Validation/Test/Registration/RegistrationVersionValidator.cs` | `RegistrationVersionValidator` | Checks that the package version in Registration matches the database |
+| `Validation/Test/Registration/RegistrationListedValidator.cs` | `RegistrationListedValidator` | Checks that the listed/unlisted state in Registration matches the database |
+| `Validation/Test/Registration/RegistrationDeprecationValidator.cs` | `RegistrationDeprecationValidator` | Checks that deprecation metadata (reasons, message, alternate package) in Registration matches the database |
+| `Validation/Test/Registration/RegistrationRequireLicenseAcceptanceValidator.cs` | `RegistrationRequireLicenseAcceptanceValidator` | Checks the `requireLicenseAcceptance` field in Registration against the database |
+| `Validation/Test/FlatContainer/PackageIsRepositorySignedValidator.cs` | `PackageIsRepositorySignedValidator` | Downloads the nupkg from Flat Container and verifies it has a repository countersignature (conditional on `RequireRepositorySignature`) |
+| `Validation/Test/Catalog/PackageHasSignatureValidator.cs` | `PackageHasSignatureValidator` | Checks the catalog leaf JSON for the presence of the `.signature.p7s` entry in `packageEntries` |
+| `Validation/Test/Search/SearchHasVersionValidator.cs` | `SearchHasVersionValidator` | Queries the Search `/query` endpoint and checks that the package version is listed/unlisted consistently with the database |
+| `Status/PackageMonitoringStatus.cs` | `PackageMonitoringStatus` | Result aggregate; derives `PackageState` from the presence of any `Fail` or `Pending` test results |
+| `Status/PackageMonitoringStatusService.cs` | `PackageMonitoringStatusService` | Reads and writes status JSON blobs partitioned by `PackageState`; handles deduplication and concurrent access via `IAccessCondition` |
+| `Status/PackageState.cs` | `PackageState` | Enum: `Valid`, `Invalid`, `Unknown` |
+| `Monitoring/PackageStatusOutdatedCheckSource.cs` | `PackageStatusOutdatedCheckSource<T>` | Abstract cursor-backed source that yields batches of packages to re-check; subclassed for database feed and auditing storage |
+| `Monitoring/DatabasePackageStatusOutdatedCheckSource.cs` | `DatabasePackageStatusOutdatedCheckSource` | Yields packages edited since the last cursor by calling `IGalleryDatabaseQueryService.GetPackagesEditedSince` |
+| `Monitoring/AuditingStoragePackageStatusOutdatedCheckSource.cs` | `AuditingStoragePackageStatusOutdatedCheckSource` | Yields deleted packages sourced from auditing storage `DeletionAuditEntry` blobs; caches fetched entries to reduce storage calls |
+| `Notification/LoggerMonitoringNotificationService.cs` | `LoggerMonitoringNotificationService` | Logs validation outcomes via `ILogger`; the sole implementation of `IMonitoringNotificationService` |
+| `Utility/ContainerBuilderExtensions.cs` | `ContainerBuilderExtensions` | Autofac extension methods that wire validators, endpoints, source repositories, and resource providers into the DI container |
+| `Validation/Test/ValidatorConfiguration.cs` | `ValidatorConfiguration` | Holds `PackageBaseAddress` and `RequireRepositorySignature` flag consumed by validators |
+| `Validation/Test/Endpoint/EndpointConfiguration.cs` | `EndpointConfiguration` | Holds cursor URIs for Registration and Flat Container, plus a named dictionary of `SearchEndpointConfiguration` instances |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Autofac.Extensions.DependencyInjection` | Bridges Autofac with `Microsoft.Extensions.DependencyInjection` to build the validation container |
+| `Microsoft.Extensions.DependencyInjection` | Service collection used alongside Autofac for `ILogger<>` registration |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Metadata.Catalog` (`Catalog/`) | Provides `SortingIdVersionCollector`, `CatalogIndexEntry`, `CollectorHttpClient`, `DeletionAuditEntry`, cursor types (`DurableCursor`, `AggregateCursor`, `HttpReadCursor`, `MemoryCursor`), telemetry, and persistence abstractions used throughout the monitoring pipeline |
+| `NuGet.Services.Storage` | Provides `IStorageQueue<T>` used to pass `PackageValidatorContext` work items between the collector and the validator |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The `Validator.ShouldRunAsync` base method compares the most-recent catalog entry timestamp against the `LastEditedDate` from the gallery database. When the catalog timestamp is less than the database timestamp, validation returns `ShouldRunTestResult.RetryLater`, which is stored as `TestResult.Pending` and rolls up to `PackageState.Unknown`. This prevents false failures when the catalog pipeline is still processing a recent edit.
+</Note>
+
+<Note>
+`ValidationContext` uses `Lazy<Task<T>>` for all metadata fetches so that each data source (database index, database leaf, V3 index, V3 leaf, timestamp) is fetched at most once per validation run, regardless of how many validators request it. Search results are cached in a `ConcurrentDictionary` keyed by the search base URI.
+</Note>
+
+<Warning>
+`PackageMonitoringStatusService.UpdateAsync` writes the new status blob before deleting the old one to avoid data loss if the delete fails. However, this means a package can temporarily appear in two state folders simultaneously. The `GetAsync(FeedPackageIdentity)` method handles this by selecting the status with the latest catalog commit timestamp and deleting the duplicates.
+</Warning>
+
+<Tip>
+`PackageIsRepositorySignedValidator` and `PackageHasSignatureValidator` are both no-ops unless `ValidatorConfiguration.RequireRepositorySignature` is `true`. This flag allows the signature requirements to be rolled out independently of the rest of the monitoring pipeline.
+</Tip>
+
+<Note>
+Search endpoints support multiple cursor sources per named instance. Each `SearchCursorConfiguration` can specify either an HTTP cursor URI or an Azure Blob client. All cursors for a given search instance are combined with `AggregateCursor` (min-semantics), and the overall `AggregateEndpointCursor` takes the minimum across all endpoints, so the collector only advances as fast as the slowest endpoint.
+</Note>
+
+<Warning>
+`RegistrationExistsValidator` contains a known workaround: if a package does not exist in the database but a leaf node exists in V3, the validator logs an informational message and does not fail. This is documented as a known bug (NuGetGallery issue #4475) where Registration leaf nodes are not deleted after a package deletion.
+</Warning>

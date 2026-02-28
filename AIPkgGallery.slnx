@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/Docs/">
+    <Project Path="src\AIPkg.Docs\AIPkg.Docs.docsproj" Type="C#" />
+  </Folder>
+</Solution>

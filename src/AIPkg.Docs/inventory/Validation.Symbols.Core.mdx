@@ -1,0 +1,108 @@
+﻿---
+title: Validation.Symbols.Core
+sidebarTitle: Validation.Symbols.Core
+description: Shared contracts, message types, serializers, and entity services for the NuGet symbols package validation and ingestion pipeline.
+icon: shield-check
+---
+
+# Validation.Symbols.Core
+
+## Overview
+
+`Validation.Symbols.Core` is a shared class library (`NuGet.Jobs.Validation.Symbols.Core`) that provides the foundational building blocks used by the symbols validation and ingestion jobs in the NuGetGallery backend. It defines the message contracts passed over Azure Service Bus, the serialization wrappers around those messages, a ZIP archive utility, and a database entity service for tracking symbol server ingest requests.
+
+The library exists to avoid duplication between the validator job (which validates `.snupkg` content) and the ingester job (which pushes validated symbols to Azure DevOps / VSTS Symbol Server). Both jobs share the same message shapes, serialization logic, and database access patterns, all of which live here.
+
+<Warning>
+This project deals exclusively with **symbol packages** (`.snupkg` files). Symbol package validation has **no applicability to AIPkg** — AIPkg packages do not contain PDB/symbol artifacts and do not interact with any symbol server. This library is documented here for completeness of the NuGetGallery codebase inventory only.
+</Warning>
+
+---
+
+## Role in the NuGetGallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="Symbols Validator Job" icon="circle-check">
+    Consumes `SymbolsValidatorMessage` from a Service Bus queue to validate `.snupkg` ZIP content before ingestion.
+  </Card>
+  <Card title="Symbols Ingester Job" icon="arrow-up-to-line">
+    Consumes `SymbolsIngesterMessage` from a Service Bus queue and pushes validated symbols to VSTS Symbol Server, tracking state via `ISymbolsValidationEntitiesService`.
+  </Card>
+  <Card title="Validation.Common.Job" icon="link">
+    The sole project dependency — provides `IValidationEntitiesContext`, `INuGetValidationRequest`, and Service Bus primitives (`IBrokeredMessageSerializer`).
+  </Card>
+  <Card title="Validation Database" icon="database">
+    `SymbolsValidationEntitiesService` reads and writes to the `SymbolsServerRequests` table via Entity Framework, mapping ingest status to `ValidationStatus` responses.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|------|-------------------|---------|
+| `ISymbolsValidatorMessage.cs` | `ISymbolsValidatorMessage` | Common interface for both validator and ingester messages; carries `ValidationId`, `SymbolsPackageKey`, `PackageId`, `PackageNormalizedVersion`, and `SnupkgUrl`. |
+| `SymbolsValidatorMessage.cs` | `SymbolsValidatorMessage` | Immutable concrete message for the **validator** job. Implements `ISymbolsValidatorMessage`. |
+| `SymbolsValidatorMessageSerializer.cs` | `SymbolsValidatorMessageSerializer` | `IBrokeredMessageSerializer<SymbolsValidatorMessage>` — serializes/deserializes the validator message using schema `SymbolsValidatorMessageData` v1. |
+| `SymbolsIngesterMessage.cs` | `SymbolsIngesterMessage` | Extends the base message contract with a `RequestName` property used when registering the ingest request with VSTS. |
+| `SymbolsIngesterMessageSerializer.cs` | `SymbolsIngesterMessageSerializer` | `IBrokeredMessageSerializer<SymbolsIngesterMessage>` — uses schema `SymbolIngesterMessageData` v1. Note the schema name drops the `s` from "Symbols" — this is a pre-existing inconsistency. |
+| `IZipArchiveService.cs` | `IZipArchiveService` | Interface for reading entries from and extracting files out of a ZIP stream, plus zip-slip vulnerability validation. |
+| `ZipArchiveService.cs` | `ZipArchiveService` | Concrete implementation backed by `System.IO.Compression.ZipArchive` and `NuGet.Packaging.PackageArchiveReader`. Exposes `virtual OnExtract` for testability. |
+| `EntityServices/ISymbolsValidationEntitiesService.cs` | `ISymbolsValidationEntitiesService` | Interface for CRUD operations against the `SymbolsServerRequests` database table. |
+| `EntityServices/SymbolsValidationEntitiesService.cs` | `SymbolsValidationEntitiesService` | EF6-based implementation; handles idempotent inserts via unique-constraint catch, status updates, and request-name generation. Also contains static helpers `CreateFromValidationRequest` and `ToValidationResponse`. |
+| `Settings.cs` | `Settings` | Single utility class: provides a constant temp-directory prefix (`NuGetSymServ`) and `GetWorkingDirectory()` which returns a unique GUID-suffixed path under `Path.GetTempPath()`. |
+
+---
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Source | Purpose |
+|---------|--------|---------|
+| _(none direct)_ | — | All NuGet package dependencies are inherited transitively through `Validation.Common.Job`. |
+
+<Note>
+The `.csproj` declares no direct `<PackageReference>` entries. All NuGet packages — including `NuGet.Services.ServiceBus`, `NuGet.Services.Validation`, `NuGet.Packaging`, `Microsoft.Extensions.Logging.Abstractions`, and `EntityFramework` — flow in via the single project reference below.
+</Note>
+
+### Project References
+
+| Referenced Project | Purpose |
+|--------------------|---------|
+| `Validation.Common.Job` | Provides `IValidationEntitiesContext`, `SymbolsServerRequest`, `SymbolsPackageIngestRequestStatus`, `INuGetValidationRequest`, `IBrokeredMessageSerializer<T>`, `BrokeredMessageSerializer<T>`, `IReceivedBrokeredMessage`, `IBrokeredMessage`, and the `[Schema]` attribute. |
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Idempotent inserts.** `SymbolsValidationEntitiesService.AddSymbolsServerRequestAsync` first queries for an existing record before inserting. If a concurrent writer races in after the query but before the insert, the resulting `DbUpdateException` from the unique constraint is caught and the existing record is re-fetched and returned. This makes the method safe to call multiple times for the same request.
+</Note>
+
+<Note>
+**Zip-slip protection.** `ZipArchiveService.Extract` computes the fully resolved destination path for every archive entry and asserts it starts with the fully resolved target directory. Entries that would escape the target directory throw `InvalidDataException`. A second layer of protection is provided by `ValidateZipAsync`, which delegates to `PackageArchiveReader.ValidatePackageEntriesAsync` from `NuGet.Packaging`.
+</Note>
+
+<Warning>
+**Schema name inconsistency.** The ingester message serializer registers under the schema name `SymbolIngesterMessageData` (singular "Symbol"), while the validator uses `SymbolsValidatorMessageData` (plural "Symbols"). This discrepancy is baked into the persisted Service Bus message envelopes and cannot be changed without a coordinated migration of all in-flight messages.
+</Warning>
+
+<Note>
+**Stream position reset.** Both `ReadFilesFromZipStream` and `ExtractFilesFromZipStream` reset the stream position to `0` after reading, so callers can reuse the same stream for subsequent operations without re-seeking manually.
+</Note>
+
+<Note>
+**`OnExtract` is virtual.** `ZipArchiveService.OnExtract` is marked `virtual` specifically to allow test subclasses to override extraction behavior without actually writing to disk, enabling unit tests that stay entirely in-memory.
+</Note>
+
+<Note>
+**Request name format.** `SymbolsValidationEntitiesService.CreateSymbolServerRequestNameFromValidationRequest` produces names in the format `{PackageKey}_{ValidationId}`. This string is also stored as `SymbolsIngesterMessage.RequestName` so the ingester and entities service use a consistent key when looking up or registering VSTS ingest requests.
+</Note>
+
+---
+
+## Target Framework
+
+This library targets **`net472`** (full .NET Framework 4.7.2). It is not cross-platform and is not intended for .NET Core or .NET 5+ workloads.

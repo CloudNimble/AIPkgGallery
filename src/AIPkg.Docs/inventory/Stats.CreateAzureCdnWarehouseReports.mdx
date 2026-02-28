@@ -1,0 +1,123 @@
+---
+title: "Stats.CreateAzureCdnWarehouseReports"
+sidebarTitle: "CreateAzureCdnWarehouseReports"
+description: "A scheduled job that queries the NuGet Gallery SQL database and publishes aggregated statistics reports (gallery totals) as JSON blobs to Azure Blob Storage."
+icon: "chart-bar"
+---
+
+## Overview
+
+`Stats.CreateAzureCdnWarehouseReports` is a .NET Framework 4.7.2 console application that runs as a NuGet Jobs scheduled worker. Its sole responsibility is to produce the **`stats-totals.json`** report — a lightweight JSON snapshot of the NuGet Gallery's aggregate package counts — and write it to one or more Azure Blob Storage containers.
+
+The report captures three values:
+
+```json
+{
+  "downloads": 0,
+  "uniquePackages": 12345,
+  "totalPackages": 98765,
+  "lastUpdateDateUtc": "2024-01-01T00:00:00Z"
+}
+```
+
+<Note>
+  The `downloads` field is present in the JSON model (`GalleryTotalsData`) but is **not populated by the SQL query** in this job. It remains `0` in the emitted report. Download counts are sourced from a different pipeline.
+</Note>
+
+The SQL query runs under **Snapshot Isolation** against the Gallery database, counting only packages that are both listed and not deleted:
+
+```sql
+SELECT
+  (SELECT COUNT(DISTINCT [PackageRegistrationKey]) FROM Packages p WITH (NOLOCK)
+          WHERE p.Listed = 1 AND p.Deleted = 0) AS UniquePackages,
+  (SELECT COUNT([Key]) FROM Packages WITH (NOLOCK) WHERE Listed = 1 AND Deleted = 0) AS TotalPackages
+```
+
+---
+
+## Role in the System
+
+<CardGroup cols={2}>
+  <Card title="Statistics Pipeline" icon="database">
+    Sits at the reporting end of the NuGet statistics pipeline. Upstream jobs (CDN log processing, warehouse ETL) feed the Gallery database; this job surfaces summary counts for public consumption.
+  </Card>
+  <Card title="Gallery Front-End Feed" icon="globe">
+    The `stats-totals.json` blob is read by the NuGet Gallery web application to display headline numbers (total packages, unique packages) on the site homepage and API endpoints.
+  </Card>
+  <Card title="Multi-Target Publishing" icon="copy">
+    Supports writing the same report to a **primary** CDN storage account and an optional **secondary** storage account, enabling mirroring across environments without running the job twice.
+  </Card>
+  <Card title="Scheduled Execution" icon="clock">
+    Bootstrapped via `NuGet.Jobs.JobRunner`, which handles scheduling, logging lifecycle, and Application Insights integration inherited from the shared jobs framework.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point. Instantiates `CreateAzureCdnWarehouseReportsJob` and delegates to `JobRunner.Run()`. |
+| `CreateAzureCdnWarehouseReportsJob.cs` | `CreateAzureCdnWarehouseReportsJob` | Core job class. Reads configuration, sets up `BlobServiceClient` instances (with optional MSI auth), builds the `StorageContainerTarget` list, and orchestrates report generation. |
+| `GalleryTotalsReport.cs` | `GalleryTotalsReport` | Opens a snapshot-isolated SQL connection to the Gallery DB, executes the aggregate query, serializes the result as JSON, and uploads the blob to each target container. |
+| `GalleryTotalsData.cs` | `GalleryTotalsData` | Plain data transfer object. JSON-serializable model with `downloads`, `uniquePackages`, `totalPackages`, and `lastUpdateDateUtc`. |
+| `ReportBase.cs` | `ReportBase` | Abstract base for report classes. Holds shared infrastructure: logger, target list, SQL connection factory, and `GetBlobContainer()` helper that ensures the container exists. |
+| `ReportNames.cs` | `ReportNames` | Constants: blob name `stats-totals` and file extension `.json`. |
+| `StorageContainerTarget.cs` | `StorageContainerTarget` | Value object pairing a `BlobServiceClient` with a container name, used to express write destinations. |
+| `ApplicationInsightsHelper.cs` | `ApplicationInsightsHelper` | Thin wrapper around `TelemetryClient`. Emits two metrics per run: report generation time (ms) and a report-processed counter. Flushes immediately after each call. |
+| `Configuration/CreateAzureCdnWarehouseReportsConfiguration.cs` | `CreateAzureCdnWarehouseReportsConfiguration` | Strongly-typed configuration POCO bound from JSON config. Holds storage account strings, container names, optional secondary account, and SQL command timeout. |
+
+---
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `NuGet.Versioning` | Shared NuGet versioning utilities (transitive requirement of the jobs framework). |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | Provides `JobRunner`, `JsonConfigurationJob`, `GalleryDbConfiguration`, `StorageMsiConfiguration`, and the `QueryWithRetryAsync` Dapper extension used for resilient SQL execution. |
+| `Stats.AzureCdnLogs.Common` | Shared statistics infrastructure; pulled in as a project reference though its types are not directly referenced in this project's source — likely a transitive dependency requirement. |
+
+### Framework / SDK Implicit Dependencies
+
+| Dependency | Notes |
+|------------|-------|
+| `Azure.Storage.Blobs` | Azure SDK v12 blob client. Configured with exponential retry (5 retries, 10 s base delay, 30 s network timeout). |
+| `Microsoft.ApplicationInsights` | Telemetry tracking for report generation time and processed counts. |
+| `Autofac` | IoC container wired through `JsonConfigurationJob`; `ConfigureAutofacServices` is a no-op in this job. |
+| `Microsoft.Extensions.DependencyInjection` | Used to resolve `IOptionsSnapshot<>`, `TokenCredential`, and `StorageMsiConfiguration`. |
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **Managed Identity support** — Storage account authentication detects whether `StorageMsiConfiguration.UseManagedIdentity` is set. When true, a `TokenCredential` is resolved from DI and used with the blob endpoint URI; otherwise, the value in config is treated as a connection string. Both paths share the same retry policy.
+</Note>
+
+<Note>
+  **Dual-write for gallery totals** — The `AdditionalGalleryTotalsStorageAccount` / `AdditionalGalleryTotalsStorageContainerName` configuration pair is optional. When provided, the report is written to both accounts independently, with per-target error isolation (one failure does not abort the other write).
+</Note>
+
+<Warning>
+  **SQL command timeout** defaults to **1800 seconds (30 minutes)**. This is intentionally large to accommodate slow query execution on a heavily loaded warehouse database. The timeout is configurable via `CommandTimeOut` in the job configuration JSON.
+</Warning>
+
+<Warning>
+  **`downloads` field is always 0** in the emitted `stats-totals.json`. The `GalleryTotalsData` model has the property and JSON serialization attribute, but the SQL query only selects `UniquePackages` and `TotalPackages`. Any consumer relying on `downloads` from this endpoint will receive a zero value.
+</Warning>
+
+<Tip>
+  The blob is uploaded with `ContentType: application/json` via `BlobHttpHeaders`, making it directly browser-accessible and CDN-cacheable without additional configuration.
+</Tip>
+
+<Tip>
+  Deployment packaging is handled via `Stats.CreateAzureCdnWarehouseReports.nuspec`, which bundles the compiled binaries alongside PowerShell deploy scripts (`PreDeploy.ps1`, `PostDeploy.ps1`, `Functions.ps1`) and `nssm.exe` for Windows service installation.
+</Tip>

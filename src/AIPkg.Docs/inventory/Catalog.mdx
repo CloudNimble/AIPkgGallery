@@ -1,0 +1,141 @@
+---
+title: "Catalog"
+sidebarTitle: "Catalog"
+description: "A dual-mode library that both writes the NuGet V3 package metadata catalog to Azure Blob Storage and provides cursor-driven collector infrastructure for downstream services to read and react to catalog changes."
+icon: "book-open"
+---
+
+## Overview
+
+`NuGet.Services.Metadata.Catalog` is the shared library that owns the NuGet V3 catalog protocol end-to-end. The catalog is an append-only, time-ordered log of every package lifecycle event (publish, edit, delete) stored as a hierarchy of JSON-LD documents in Azure Blob Storage. This library covers both sides of that protocol: a writer stack that produces the catalog and a collector stack that lets other services consume it.
+
+On the write side, `AppendOnlyCatalogWriter` batches `CatalogItem` objects, serializes them as RDF graphs framed into JSON-LD (using dotNetRDF and json-ld.net, both net472-only), and commits them to storage. Each commit produces leaf documents for individual package events, updates the current page (`page0.json`, `page1.json`, …), and rewrites the root `index.json`. Pages are capped at a configurable `MaxPageSize`; when a page fills, the writer starts the next numbered page and sets an aggressive cache-control header on the now-finished previous page.
+
+On the read side, `CommitCollector` and its subclasses (`DnxCatalogCollector`, `IconsCollector`, `SortingCollector`) walk the index, fetch pages, and call `OnProcessBatchAsync` for each time-stamped batch of `CatalogCommitItem` records. Progress is tracked by a cursor — either an in-memory `MemoryCursor`, a blob-backed `DurableCursor`, or an HTTP-readable `HttpReadCursor` — so that each collector can resume from exactly where it left off across restarts. Cursors record an exclusive lower bound (`front`) and an inclusive upper bound (`back`), and commits within a batch share a timestamp so the cursor never advances partially through an atomic commit.
+
+## Role in System
+
+```
+Gallery DB (SQL)
+      |
+      | GalleryDatabaseQueryService (Db2Catalog job calls this)
+      v
+PackageCatalogItemCreator
+      |  downloads .nupkg, reads .nuspec + vulnerability/deprecation rows
+      v
+AppendOnlyCatalogWriter  ──writes──►  Azure Blob Storage
+      |                               index.json (CatalogRoot)
+      |                               page0.json, page1.json … (CatalogPages)
+      |                               <id>/<version>.json (leaf documents)
+      |
+      └── (public V3 catalog endpoint: https://api.nuget.org/v3/catalog0/index.json)
+
+Azure Blob Storage (catalog)
+      |
+      |  CollectorBase / CommitCollector  (cursor: DurableCursor in its own blob)
+      |
+      ├──► DnxCatalogCollector  → writes flat-container layout (.nupkg + .nuspec)
+      ├──► IconsCollector       → copies/extracts package icons to icon storage
+      └──► SortingCollector     → base for search-index update collectors (Ng job)
+```
+
+<CardGroup cols={2}>
+  <Card title="Append-Only Writer" icon="pen-line">
+    `AppendOnlyCatalogWriter` maintains a numbered page series in blob storage. When the current page would exceed `MaxPageSize`, a new page is started. The finished page receives an aggressive cache-control value only after the root index is safely updated, preventing stale-cache issues on retry.
+  </Card>
+  <Card title="Cursor-Driven Collectors" icon="clock">
+    Every collector holds a `front` cursor (exclusive minimum) and a `back` cursor (inclusive maximum). The cursor value is persisted to a blob after each successfully processed commit timestamp, enabling safe resume after failure without reprocessing already-handled events.
+  </Card>
+  <Card title="JSON-LD / RDF Representation" icon="code">
+    Catalog leaves are RDF graphs serialized to JSON-LD using embedded context files (`Catalog.json`, `Container.json`, `PackageDetails.json`). Nuspec XML is transformed to RDF triples via an embedded XSLT (`nuspec.xslt`). The schema URIs live in `http://schema.nuget.org/schema#` and `http://schema.nuget.org/catalog#`.
+  </Card>
+  <Card title="Icon Pipeline" icon="image">
+    `IconsCollector` + `IconProcessor` handle both embedded icons (extracted from the .nupkg zip) and external icon URLs (fetched via HTTP, size-capped at 1 MB). Content type is determined by magic-byte inspection (PNG, JPEG, GIF, ICO, SVG) rather than file extension or HTTP headers.
+  </Card>
+  <Card title="Flat-Container (DNX) Writer" icon="folder-open">
+    `DnxCatalogCollector` drives `DnxMaker` to maintain the flat-container resource: for each `PackageDetails` leaf it copies the .nupkg and writes the .nuspec; for each `PackageDelete` leaf it removes the corresponding blobs and updates the per-package version list JSON.
+  </Card>
+  <Card title="Gallery DB Bridge" icon="database">
+    `GalleryDatabaseQueryService` bridges the SQL Gallery database to the catalog write path. It queries `Packages`, `PackageDeprecations`, `VulnerablePackageVersionRanges`, and `PackageVulnerabilities` in a single parameterized query with control-break logic to accumulate multiple vulnerability rows per package version.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `CatalogWriterBase.cs` | `CatalogWriterBase` (abstract) | Core commit loop: saves leaf items in parallel, calls abstract `SavePages`, then saves the root index. Handles RDF graph load/save and cache-control updates. |
+| `AppendOnlyCatalogWriter.cs` | `AppendOnlyCatalogWriter` | Concrete writer; manages page numbering (`page0`, `page1`, …), page overflow, and marks the catalog root with `AppendOnlyCatalog` and `Permalink` types. |
+| `CollectorBase.cs` | `CollectorBase` (abstract) | Base for all readers; owns the `HttpClient` lifecycle, cursor loading, and delegates to `FetchAsync`. |
+| `CommitCollector.cs` | `CommitCollector` (abstract) | Extends `CollectorBase`; fetches index and page JSON, groups items into batches by commit timestamp, advances the `front` cursor after each successful batch, and calls `OnProcessBatchAsync`. |
+| `CatalogCommitItem.cs` | `CatalogCommitItem` | Represents one entry within a catalog page: carries the item URI, commit timestamp, `PackageIdentity`, and type flags (`IsPackageDetails`, `IsPackageDelete`). |
+| `PackageCatalogItem.cs` | `PackageCatalogItem` | Builds the RDF content graph for a `PackageDetails` leaf: transforms nuspec XML, adds gallery-specific predicates (published, listed, created, lastEdited, packageHash, deprecation, vulnerabilities). |
+| `PackageCatalogItemCreator.cs` | `PackageCatalogItemCreator` | Downloads the .nupkg from Azure Blob or HTTP, extracts the nuspec, and constructs a `PackageCatalogItem`. Preferred path is server-side blob read; HTTP fallback is used when the blob is not available. |
+| `DeleteCatalogItem.cs` | `DeleteCatalogItem` | Catalog item representing a `PackageDelete` event. |
+| `Schema.cs` | `Schema` (static) | All RDF type URIs (`PackageDetails`, `PackageDelete`, `CatalogRoot`, `CatalogPage`, …) and predicate URIs used throughout the library. |
+| `DurableCursor.cs` | `DurableCursor` | Persists the cursor value as a JSON blob in Azure Storage (`{ "value": "2024-01-01T00:00:00.0000000Z" }`). |
+| `AggregateCursor.cs` | `AggregateCursor` | Combines multiple `ReadCursor` instances, returning the minimum value — used to set the `back` cursor to the slowest downstream consumer. |
+| `CatalogIndexReader.cs` | `CatalogIndexReader` | Reads the catalog index and all pages in parallel to enumerate every `CatalogIndexEntry` (used by tooling that needs a full snapshot rather than incremental processing). |
+| `Helpers/GalleryDatabaseQueryService.cs` | `GalleryDatabaseQueryService` | SQL queries against the Gallery database for `GetPackagesCreatedSince`, `GetPackagesEditedSince`, and `GetPackageOrNull`. Uses a single parameterized sub-query with outer joins for deprecation and vulnerability data. |
+| `Helpers/CatalogWriterHelper.cs` | `CatalogWriterHelper` (static) | Orchestrates the full write cycle: downloads package metadata in parallel, groups by timestamp, calls `AppendOnlyCatalogWriter.Commit`, and advances the cursor. |
+| `Helpers/Db2CatalogCursor.cs` | `Db2CatalogCursor` | Encapsulates the SQL cursor parameters (`ByCreated` / `ByLastEdited`) used by `GalleryDatabaseQueryService`. |
+| `Dnx/DnxMaker.cs` | `DnxMaker` | Writes flat-container layout: copies .nupkg to storage, serializes .nuspec, and maintains the per-package `index.json` version list. |
+| `Dnx/DnxCatalogCollector.cs` | `DnxCatalogCollector` | `CommitCollector` that drives `DnxMaker`; groups items by package ID key for parallel processing within a batch. |
+| `Icons/IconProcessor.cs` | `IconProcessor` | Handles the icon copy/delete/extract operations. Determines image type from magic bytes; enforces 1 MB size cap on external icons. |
+| `Icons/IconsCollector.cs` | `IconsCollector` | `CommitCollector` for icon synchronization; uses a result cache (`IIconCopyResultCache`) to avoid re-fetching icons that were already successfully processed. |
+| `Downloads/DownloadsV1Reader.cs` | `DownloadsV1Reader` (static) | Streaming parser for the `downloads.v1.json` format (`[["PackageId", ["1.0.0", 123], …], …]`). |
+| `Downloads/DownloadsV1JsonClient.cs` | `DownloadsV1JsonClient` | Reads `downloads.v1.json` from an Azure Blob and exposes it as `DownloadData`. |
+| `Persistence/AzureStorage.cs` | `AzureStorage` | Primary `IStorage` implementation backed by Azure Blob Storage. Supports optional gzip compression, server-side copy, throttling, and optimistic concurrency via ETags. |
+| `Persistence/Storage.cs` | `Storage` (abstract) | Base storage contract with `SaveAsync`, `LoadAsync`, `DeleteAsync`, `ListAsync`, and `UpdateCacheControlAsync`. |
+| `JsonLdIntegration/JsonLdWriter.cs` | `JsonLdWriter` | Serializes an RDF `IGraph` to JSON-LD (net472 only, depends on json-ld.net). |
+| `context/Catalog.json` | — | Embedded JSON-LD `@context` document for catalog root/page resources. |
+| `xslt/nuspec.xslt` | — | XSLT that transforms a NuGet `.nuspec` XML document into RDF/XML triples consumed by dotNetRDF. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Azure.Storage.Blobs` | Azure Blob Storage client used by `AzureStorage` and `DownloadsV1JsonClient`. |
+| `dotNetRDF` | RDF graph manipulation (triple store, SPARQL-like queries) — net472 target only. |
+| `NuGet.StrongName.json-ld.net` | JSON-LD framing and compaction used to produce the final JSON-LD output — net472 only. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Protocol.Catalog` | Provides `ICatalogClient`, `CatalogLeafItem`, and related catalog protocol types consumed by `DnxCatalogCollector` and `IconsCollector`. |
+| `NuGet.Services.Configuration` | Token credential helpers used in `ServiceCollectionExtensions` to authenticate the `BlobClient`. |
+| `NuGet.Services.Logging` | `ITelemetryService` abstraction and telemetry constants; every major operation is instrumented. |
+| `NuGet.Services.Sql` | `ISqlConnectionFactory` used by `GalleryDatabaseQueryService` to open connections to the Gallery database. |
+| `NuGet.Services.Storage` | `IThrottle`, `IBlobServiceClientFactory`, and storage-level abstractions shared across services. |
+| `NuGetGallery.Core` | Shared Gallery types including `IThrottle`, path utilities, and `IAzureStorage`. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The library targets both `net472` and `netstandard2.1`. The catalog **write** path (JSON-LD serialization, RDF graph construction, `AppendOnlyCatalogWriter`, `PackageCatalogItem`, `JsonLdWriter`, `AzureStorage`) is compiled **only for net472** because dotNetRDF and json-ld.net are not netstandard2.1-compatible. The read/collector path compiles for both targets.
+</Note>
+
+<Warning>
+`CatalogWriterBase` uses dotNetRDF's `Options.InternUris = false` at construction time. This is a global static setting in dotNetRDF that affects the entire process. If multiple writers are constructed concurrently the behavior is undefined. In practice the writer is always instantiated on the main job thread before any parallel work begins.
+</Warning>
+
+<Note>
+**Cursor safety contract**: `CommitCollector.FetchAsync` advances the `front` cursor to a commit timestamp only after all items in that timestamp's batch have been successfully processed. If two consecutive batches share the same timestamp, the cursor does not advance between them — it advances only when the timestamp changes or after the final batch. This prevents partial progress through an atomic catalog commit.
+</Note>
+
+<Tip>
+The `DurableCursor` persists its value as an ISO 8601 round-trip string (`"O"` format specifier) in a small JSON blob (`{ "value": "..." }`). The blob uses `no-store` cache-control so that consumers always read the live value from storage and are not served a cached intermediate position.
+</Tip>
+
+<Note>
+**Catalog page cache-control timing**: `AppendOnlyCatalogWriter` deliberately does not set the final (aggressive) `Cache-Control` value on a completed page until after the root `index.json` has been saved. This prevents CDN edge nodes from caching a "finished" page before the index acknowledges it, which would otherwise leave consumers unable to discover new pages if the index write fails.
+</Note>
+
+- **Nuspec-to-RDF via XSLT**: Rather than a hand-written nuspec parser, `PackageCatalogItem` calls `Utils.CreateNuspecGraph` which applies `nuspec.xslt` (embedded resource) to convert nuspec XML into RDF/XML. dotNetRDF then loads that RDF/XML into an in-memory graph for further triple assertions.
+- **`GetListed` sentinel date**: A package with `Published = 1900-01-01T00:00:00Z` (`Constants.UnpublishedDate`) is treated as unlisted. The `listed` predicate in the catalog leaf reflects this convention rather than any separate boolean column.
+- **Icon magic-byte detection**: `IconProcessor.DetermineContentType` checks raw bytes — PNG (`89 50 4E 47`), JPEG (`FF D8 FF`), ICO (`00 00 01 00`), GIF87a/89a headers — in descending popularity order before falling back to SVG text heuristic. The HTTP `Content-Type` header from the external source is intentionally ignored.
+- **`AggregateCursor` minimum semantics**: When multiple downstream collectors share a single catalog (e.g., DNX and search), an `AggregateCursor` wrapping all their individual cursors is used as the `back` cursor for the writer, so the writer does not advance past what the slowest reader has consumed.
+- **`StringInterner` in `CatalogIndexReader`**: When reading all pages in parallel to build a full snapshot, package ID and version strings are interned via a lock-free `ConcurrentDictionary`-based `StringInterner` to reduce memory pressure from duplicate strings across thousands of catalog entries.

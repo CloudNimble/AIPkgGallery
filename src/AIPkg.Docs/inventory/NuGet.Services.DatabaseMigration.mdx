@@ -1,0 +1,95 @@
+---
+title: NuGet.Services.DatabaseMigration
+sidebarTitle: DatabaseMigration
+description: Core shared library that drives Entity Framework code-first database migrations for all NuGet Gallery SQL databases, including Gallery, Validation, SupportRequest, and CatalogValidation.
+icon: database
+---
+
+## Overview
+
+`NuGet.Services.DatabaseMigration` is a small but critical shared library that provides the **reusable scaffolding for running Entity Framework code-first migrations** against NuGet's family of SQL Server databases. It is not itself an executable — it defines the job base class, the context interfaces, and the migration execution/validation logic that every concrete migration runner inherits from.
+
+The library ships as an internal NuGet package (versioned with `GalleryPackageVersion`) and is consumed by the `DatabaseMigrationTools` executable project, which wires up the actual EF `DbMigrator` instances for each database target.
+
+<Note>
+This library targets **net472** (full .NET Framework), aligning with the legacy EF6 / `System.Data.SqlClient` stack used by NuGet Gallery's existing SQL layer. It is intentionally not migrated to EF Core.
+</Note>
+
+## Role in the NuGetGallery Ecosystem
+
+```
+DatabaseMigrationTools (exe)
+  ├── Program.cs              ← entry point, wires MigrationContextFactory + Job
+  ├── MigrationContextFactory ← implements IMigrationContextFactory
+  ├── GalleryDbMigrationContext
+  ├── ValidationDbMigrationContext
+  ├── SupportRequestDbMigrationContext
+  └── CatalogValidationDbMigrationContext
+           │
+           └──► NuGet.Services.DatabaseMigration  (this library)
+                    ├── Job                        ← runs migration logic
+                    ├── IMigrationContext
+                    ├── IMigrationContextFactory
+                    ├── BaseDbMigrationContext
+                    └── MigrationTargetDatabaseArgumentNames
+```
+
+<CardGroup cols={2}>
+  <Card title="Consumer: DatabaseMigrationTools" icon="wrench">
+    The sole consumer of this library. Provides concrete `*DbMigrationContext` implementations and `MigrationContextFactory`, then calls `JobRunner.RunOnce` followed by a 30-second `Thread.Sleep` to flush Application Insights telemetry before process exit.
+  </Card>
+  <Card title="Job Infrastructure: NuGet.Jobs.Common" icon="gear">
+    `JsonConfigurationJob` handles JSON-based configuration loading, Autofac DI wiring, and structured logging. `Job` overrides `Init`, `Run`, `ConfigureAutofacServices`, and `ConfigureJobServices`.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Job.cs` | `Job` | Main job entry point. Reads the `MigrationTargetDatabase` argument, creates the context via the factory, validates migration history, logs the SQL script, and calls `DbMigrator.Update()`. |
+| `IMigrationContext.cs` | `IMigrationContext` | Contract for a migration context: exposes `SqlConnection`, `SqlConnectionAccessToken`, and a `Func<DbMigrator>` factory delegate. Extends `IDisposable`. |
+| `IMigrationContextFactory.cs` | `IMigrationContextFactory` | Single-method factory: `CreateMigrationContextAsync(string targetDb, IServiceProvider)`. Enables DI-friendly context creation without coupling the job to concrete EF types. |
+| `BaseDbMigrationContext.cs` | `BaseDbMigrationContext` | Concrete base that holds `SqlConnection`, `SqlConnectionAccessToken`, and `GetDbMigrator`. Includes `SetSqlConnectionAccessToken()` to re-apply the Microsoft Entra ID token if the connection was closed and re-opened. |
+| `MigrationTargetDatabaseArgumentNames.cs` | `MigrationTargetDatabaseArgumentNames` | Static string constants for the four valid `MigrationTargetDatabase` argument values: `GalleryDatabase`, `SupportRequestDatabase`, `ValidationDatabase`, `CatalogValidationDatabase`. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `EntityFramework` | EF6 `DbMigrator`, `MigratorScriptingDecorator`, and migration infrastructure |
+| `System.Data.SqlClient` | `SqlConnection` for direct SQL Server connectivity |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | Provides `JsonConfigurationJob`, `JobConfigurationManager`, and `JobRunner` |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Migration validation before apply.** Before calling `migrator.Update()`, `Job` compares the database's applied migration history (`GetDatabaseMigrations`) against the local code migrations (`GetLocalMigrations`). A mismatch throws `InvalidOperationException`, preventing an out-of-order or corrupt migration from being applied silently.
+</Note>
+
+<Warning>
+**Skipped Gallery migration file.** The migration `201304262247205_CuratedPackagesUniqueIndex` exists in the database history but has no corresponding local file. The validation loop hard-codes a skip for this entry when targeting `GalleryDatabase`.
+</Warning>
+
+<Warning>
+**Validation checks are partially disabled.** The guards that throw when `databaseMigrations` or `localMigrations` are empty are commented out, referencing [NuGet/Engineering#6225](https://github.com/NuGet/Engineering/issues/6225). An empty migration list will silently pass validation.
+</Warning>
+
+<Note>
+**Microsoft Entra ID (AAD) token refresh.** `BaseDbMigrationContext.SetSqlConnectionAccessToken()` checks `SqlConnection.State` before re-applying the access token. EF6's `DbMigrator` may internally close and reopen connections, so the token must be refreshed to avoid authentication failures on reconnect.
+</Note>
+
+<Note>
+**SQL script logging.** Before executing, `Job` uses `MigratorScriptingDecorator` to generate and log the full T-SQL that will be applied. This produces an audit trail in Application Insights / the job log without requiring a separate dry-run step.
+</Note>
+
+<Tip>
+The separation between this library and `DatabaseMigrationTools` means the core migration logic can be unit-tested in isolation without referencing the full Gallery or Validation assemblies.
+</Tip>

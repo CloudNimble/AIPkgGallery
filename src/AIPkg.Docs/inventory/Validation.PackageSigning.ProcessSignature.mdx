@@ -1,0 +1,114 @@
+﻿---
+title: Validation.PackageSigning.ProcessSignature
+sidebarTitle: ProcessSignature
+description: Queue-based Service Bus job that validates and strips cryptographic signatures on NuGet packages, operating as both a processor (before repo-signing) and a validator (after repo-signing).
+icon: shield-check
+---
+
+## Overview
+
+`Validation.PackageSigning.ProcessSignature` is a .NET Framework 4.7.2 console executable that runs as a long-lived Azure Service Bus subscription listener. Its sole responsibility is to validate the cryptographic signatures embedded in `.nupkg` files. It is the authoritative service that decides whether a package's author signature is trustworthy, whether an existing repository signature is acceptable, and whether the package must be stripped and re-signed before being made available to consumers.
+
+The job has two distinct operating modes controlled by a single boolean field in the incoming Service Bus message:
+
+- **Processor mode** (`RequireRepositorySignature = false`): Run before the repository-signing step. Strips unacceptable repository signatures and rejects bad author signatures. The package blob **may** be modified.
+- **Validator mode** (`RequireRepositorySignature = true`): Run after the repository-signing step. Repeats all the same checks and additionally requires a valid repository signature to be present. The package blob must **not** change.
+
+Because it is a stateless Service Bus consumer, multiple instances can run in parallel without coordination.
+
+## Role in the NuGetGallery Ecosystem
+
+```
+Orchestrator (PackageSignatureProcessor)
+    │  Service Bus message (RequireRepositorySignature=false)
+    ▼
+ProcessSignature job  ──► strips bad repo sigs ──► Validation DB + Gallery DB + Blob Storage
+    │
+    └── queue-back ──► Orchestrator
+         │
+         ▼  (repo-signing happens here)
+         │
+Orchestrator (PackageSignatureValidator)
+    │  Service Bus message (RequireRepositorySignature=true)
+    ▼
+ProcessSignature job  ──► full sig validation ──► Validation DB + Gallery DB + Blob Storage
+    └── queue-back ──► Orchestrator ──► package goes Available
+```
+
+The job sits at two checkpoints in the validation pipeline managed by `NuGet.Services.Validation.Orchestrator`. It reads and writes to three external stores: the **Validation SQL DB** (validator state, package signatures, certificate chain), the **Gallery SQL DB** (certificate display metadata, package signing certificate fingerprint), and **Azure Blob Storage** (raw DER-encoded certificate files and the modified `.nupkg` when signatures are stripped).
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|------|-------------------|---------|
+| `Program.cs` | `Program` | Entry point; delegates to `JobRunner.RunOnce`. |
+| `Job.cs` | `Job` | Extends `SubscriptionProcessorJob<SignatureValidationMessage>`; wires all DI registrations including Azure Storage, Gallery DB, certificate store, and all validator services. |
+| `SignatureValidationMessageHandler.cs` | `SignatureValidationMessageHandler` | Service Bus message handler; downloads the `.nupkg`, dispatches to `ISignatureValidator`, persists result to the Validation DB, and sends an optional queue-back message to the orchestrator. |
+| `SignatureValidator.cs` | `SignatureValidator` | Core orchestration logic: rejects ZIP64 packages, routes to unsigned or signed package paths, strips unacceptable repository signatures, validates author/repo signature integrity and trust, and calls `SignaturePartsExtractor` on success. Contains the private `Context` inner class that tracks mutable per-message state. |
+| `SignatureFormatValidator.cs` | `SignatureFormatValidator` | Thin wrapper around the NuGet client `PackageSignatureVerifier`. Exposes four verification modes: minimal, author-only, repository-only, and full (all signatures). |
+| `MinimalSignatureVerificationProvider.cs` | `MinimalSignatureVerificationProvider` | A no-op `ISignatureVerificationProvider` used as a first-pass format probe — confirms the signature is *readable* without doing trust or integrity checks. |
+| `SignaturePartsExtractor.cs` | `SignaturePartsExtractor` | Extracts the full certificate chain (end certs + parent certs + timestamps) from the accepted signature and persists them to the Validation DB and Blob Storage. Also updates human-readable certificate fields (Subject, Issuer, Expiration) in the Gallery DB. |
+| `SignatureValidatorResult.cs` | `SignatureValidatorResult` | Value object carrying `ValidationStatus`, a list of `IValidationIssue`, and an optional `.nupkg` URI (only set when the package blob was modified). |
+| `Storage/IPackageSigningStateService.cs` | `IPackageSigningStateService` | Abstraction for reading/writing `PackageSigningStatus` (Unsigned / Valid / Invalid) to the Validation DB. |
+| `Storage/PackageSigningStateService.cs` | `PackageSigningStateService` | EF-backed implementation of `IPackageSigningStateService`. |
+| `Telemetry/ITelemetryService.cs` | `ITelemetryService` | Tracks duration and outcome of repository-signature stripping operations via Application Insights. |
+| `Configuration/ProcessSignatureConfiguration.cs` | `ProcessSignatureConfiguration` | Configuration POCO; key settings are `AllowedRepositorySigningCertificates`, `V3ServiceIndexUrl`, `StripValidRepositorySignatures`, `CommitRepositorySignatures`, and `MaxCertificateStringLength`. |
+| `Configuration/SasDefinitionConfiguration.cs` | `SasDefinitionConfiguration` | Holds the Key Vault SAS definition name used to generate READ+DELETE SAS tokens for modified `.nupkg` blobs. |
+
+## Dependencies
+
+### NuGet Packages (via `Validation.Common.Job` and transitive references)
+
+| Package | Purpose |
+|---------|---------|
+| `NuGet.Packaging` | `SignedPackageArchive`, `PackageSignatureVerifier`, `PrimarySignature`, `RepositoryCountersignature`, and all NuGet client signing APIs |
+| `Autofac` / `Autofac.Extensions.DependencyInjection` | DI container and integration with `Microsoft.Extensions.DependencyInjection` |
+| `Azure.Storage.Blobs` | Blob storage client for certificate files and modified `.nupkg` uploads |
+| `Microsoft.Extensions.DependencyInjection` | Service registration and scoped lifetime management |
+| `Microsoft.Extensions.Options.ConfigurationExtensions` | Strongly-typed configuration binding (`IOptionsSnapshot<T>`) |
+| `System.Formats.Asn1` | ASN.1 parsing used by signing infrastructure |
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `NuGet.Services.Validation.Orchestrator` | Provides `SubscriptionProcessorJob<T>`, `PackageSignatureProcessor`, `PackageSignatureValidator`, `IProcessorPackageFileService`, `ProcessorPackageFileService`, and the orchestrator DI bootstrapping |
+| `Validation.Common.Job` | Base `SubscriptionProcessorJob<T>`, `IValidatorStateService`, `ValidatorStateService`, `IFileDownloader`, `CertificateStore`, `AzureStorageFactory` |
+| `Validation.PackageSigning.Core` | `IPackageSigningStateService`, `PackageSigningStatus`, `PackageSignature` entities, `ICertificateStore` |
+| `NuGet.Services.ServiceBus` | `ISubscriptionProcessor<T>`, `IBrokeredMessageSerializer<T>`, `SignatureValidationMessage`, `SignatureValidationMessageSerializer` |
+| `NuGet.Services.Storage` | `AzureStorage`, `BlobServiceClientFactory`, `AzureStorageFactory` |
+| `NuGet.Jobs.Common` | `JobRunner`, base job infrastructure |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Two-pass validation design**: The same executable handles both the pre-signing processor pass and the post-signing validator pass. The only difference is the `RequireRepositorySignature` flag on the incoming Service Bus message. This avoids duplicating signature validation logic across two separate services.
+</Note>
+
+<Note>
+**Repository signature stripping**: When a package arrives with a repository signature whose V3 service index URL or signing certificate does not match the configured allow-list, the job rewrites the `.nupkg` blob using `SignedPackageArchiveUtility.RemoveRepositorySignaturesAsync` and uploads it with a READ+DELETE SAS token. The orchestrator then uses this new URL for the subsequent repository-signing step.
+</Note>
+
+<Warning>
+**Dead-letter path for our own bad repo signatures**: If a package already has a `PackageSigningState` record in the DB (meaning it was previously processed) *and* its repository signature fails verification, the job throws an `InvalidOperationException` rather than silently stripping the signature. This causes the Service Bus message to dead-letter and triggers an on-call alert. Cases 1–2 (customer tampering) are handled by stripping; cases 3–4 (our own signing failure) must not be silently recovered.
+</Warning>
+
+<Warning>
+**`StripValidRepositorySignatures` is a break-glass flag**: When `ProcessSignatureConfiguration.StripValidRepositorySignatures = true`, even *valid* repository signatures are stripped on the pre-signing pass so that a fresh repository signature is applied. This should never be enabled in steady-state; it exists only for emergency re-signing scenarios.
+</Warning>
+
+<Note>
+**Certificate extraction is one-way immutable for author signatures**: `SignaturePartsExtractor` enforces that the end-certificate thumbprint and timestamp value for an *author* `PackageSignature` record can never change once written (`allowSignatureChanges: false`). Repository signature records are replaceable (`allowSignatureChanges: true`) because the repo signing certificate can rotate.
+</Note>
+
+<Note>
+**`MinimalSignatureVerificationProvider` is intentionally a no-op**: The minimal verification pass uses a provider that always returns `Valid`. Its purpose is purely to exercise the NuGet client's signature-format parsing so that any `SignatureException` is caught and translated into a user-facing `ClientSigningVerificationFailure` rather than propagating as an unhandled exception.
+</Note>
+
+<Tip>
+**Queue-back optimization**: After persisting the terminal validation status, the handler optionally enqueues a `CheckValidator` message back to the orchestrator's Service Bus topic (guarded by `IFeatureFlagService.IsQueueBackEnabled()`). Without this, the orchestrator discovers completion only on its next polling cycle. With it, latency is reduced to near-real-time.
+</Tip>
+
+<Note>
+**Idempotency via `IValidatorStateService`**: On receipt of a message, the handler immediately checks the Validation DB. If the record is missing or in `NotStarted` state the message is retried (returns `false`). If the record is already in a terminal state the message is consumed without re-running validation (returns `true`). This makes the handler safe to receive duplicate messages.
+</Note>

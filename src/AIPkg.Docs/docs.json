@@ -1,0 +1,144 @@
+{
+  "colors": {
+    "dark": "#3CD0E2",
+    "light": "#419AC5",
+    "primary": "#419AC5"
+  },
+  "name": "AIPkg.Docs",
+  "navigation": {
+    "pages": [
+      {
+        "group": "Getting Started",
+        "icon": "stars",
+        "pages": [
+          "index",
+          "why-aipkg",
+          "quickstart"
+        ]
+      },
+      {
+        "group": "Specifications",
+        "icon": "book-open",
+        "pages": [
+          "specs/index",
+          "specs/01-aipkg-format",
+          "specs/02-platform-targeting",
+          "specs/03-metadata-schema",
+          "specs/04-server-infrastructure",
+          "specs/05-frontend-ui",
+          "specs/06-sdk-tooling",
+          "specs/07-docs-platform",
+          "specs/08-migration-plan"
+        ]
+      },
+      {
+        "group": "Legacy (NuGetGallery)",
+        "icon": "box-archive",
+        "pages": [
+          "legacy/index",
+          "legacy/Azure-Search-indexes",
+          "legacy/Deploying/index",
+          "legacy/Emails",
+          "legacy/Frontend",
+          "legacy/Search-auxiliary-files",
+          "legacy/Search-version-list-resource",
+          "legacy/Using-AAD",
+          {
+            "group": "Inventory: Core Systems",
+            "icon": "server",
+            "pages": [
+              "inventory/index",
+              "inventory/NuGetGallery",
+              "inventory/NuGetGallery.Core",
+              "inventory/NuGetGallery.Services",
+              "inventory/NuGet.Services.AzureSearch",
+              "inventory/NuGet.Services.SearchService.Core",
+              "inventory/Microsoft.PackageManagement.Search.Web",
+              "inventory/NuGet.Jobs.Auxiliary2AzureSearch",
+              "inventory/NuGet.Jobs.Catalog2AzureSearch",
+              "inventory/NuGet.Jobs.Db2AzureSearch",
+              "inventory/Catalog",
+              "inventory/Ng",
+              "inventory/NuGet.Jobs.Catalog2Registration",
+              "inventory/NuGet.Services.V3",
+              "inventory/NuGet.Protocol.Catalog",
+              "inventory/NuGet.Services.Validation.Orchestrator",
+              "inventory/NuGet.Services.Validation",
+              "inventory/NuGet.Services.Validation.Issues",
+              "inventory/Validation.Common.Job",
+              "inventory/Validation.PackageSigning.Core",
+              "inventory/Validation.PackageSigning.ProcessSignature",
+              "inventory/Validation.PackageSigning.RevalidateCertificate",
+              "inventory/Validation.PackageSigning.ValidateCertificate",
+              "inventory/NuGet.Services.Entities",
+              "inventory/NuGet.Services.Sql",
+              "inventory/NuGet.Services.DatabaseMigration",
+              "inventory/DatabaseMigrationTools",
+              "inventory/NuGet.Services.Contracts",
+              "inventory/NuGet.Services.KeyVault",
+              "inventory/NuGet.Services.Storage",
+              "inventory/NuGet.Services.ServiceBus",
+              "inventory/NuGet.Services.Messaging",
+              "inventory/NuGet.Services.Messaging.Email",
+              "inventory/NuGet.Services.Logging",
+              "inventory/NuGet.Services.FeatureFlags",
+              "inventory/NuGet.Services.Cursor",
+              "inventory/NuGet.Jobs.Common",
+              "inventory/NuGet.Services.Configuration",
+              "inventory/Common"
+            ]
+          },
+          {
+            "group": "Inventory: Supplemental Systems",
+            "icon": "wrench",
+            "pages": [
+              "inventory/Stats.CollectAzureChinaCDNLogs",
+              "inventory/Stats.CDNLogsSanitizer",
+              "inventory/Stats.AzureCdnLogs.Common",
+              "inventory/Stats.Warehouse",
+              "inventory/Stats.CreateAzureCdnWarehouseReports",
+              "inventory/Stats.PostProcessReports",
+              "inventory/Stats.AggregateCdnDownloadsInGallery",
+              "inventory/PackageLagMonitor",
+              "inventory/NuGet.Services.GitHub",
+              "inventory/GitHubVulnerabilities2Db",
+              "inventory/GitHubVulnerabilities2v3",
+              "inventory/VerifyGitHubVulnerabilities",
+              "inventory/NuGet.Jobs.GitHubIndexer",
+              "inventory/GalleryTools",
+              "inventory/Gallery.Maintenance",
+              "inventory/Gallery.CredentialExpiration",
+              "inventory/AccountDeleter",
+              "inventory/NuGet.SupportRequests.Notifications",
+              "inventory/VerifyMicrosoftPackage",
+              "inventory/NuGet.Services.Revalidate",
+              "inventory/ArchivePackages",
+              "inventory/CopyAzureContainer",
+              "inventory/SnapshotAzureBlob",
+              "inventory/SplitLargeFiles",
+              "inventory/PackageHash",
+              "inventory/NuGet.Services.Status",
+              "inventory/NuGet.Services.Status.Table",
+              "inventory/NuGet.Services.Incidents",
+              "inventory/StatusAggregator",
+              "inventory/NuGetCDNRedirect",
+              "inventory/NuGet.Services.Metadata.Catalog.Monitoring",
+              "inventory/NuGet.Services.CatalogValidation",
+              "inventory/Validation.Symbols.Core",
+              "inventory/Validation.Symbols",
+              "inventory/Validation.ContentScan.Core",
+              "inventory/Validation.ScanAndSign.Core",
+              "inventory/Bootstrap",
+              "inventory/NuGet.Services.Owin",
+              "inventory/NuGet.Services.Build",
+              "inventory/NuGet.Services.Testing.Entities",
+              "inventory/NuGet.Services.Licenses"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "maple"
+}

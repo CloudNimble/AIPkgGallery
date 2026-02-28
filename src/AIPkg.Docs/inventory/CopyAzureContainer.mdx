@@ -1,0 +1,106 @@
+---
+title: "CopyAzureContainer"
+sidebarTitle: "CopyAzureContainer"
+description: "A .NET Framework console job that backs up Azure Blob Storage containers from one storage account to another, using the Azure Storage SDK for container lifecycle management and AzCopy v10 for the actual data transfer."
+icon: "copy"
+---
+
+## Overview
+
+`CopyAzureContainer` is a scheduled backup job that copies one or more source Azure Blob Storage containers into a destination storage account. For each source container it creates a timestamped backup container (e.g. `catalog-2025010800`), prunes backups older than a configurable retention window, and uploads AzCopy operation logs back to the destination storage for auditability.
+
+The job is intentionally minimal: it has no web surface, no database, and no queue. It runs once per invocation, processes containers sequentially, then exits.
+
+<CardGroup cols={2}>
+  <Card title="Primary purpose" icon="database">
+    Point-in-time container backups for NuGetGallery blob storage assets (packages, catalog, flat-container, etc.)
+  </Card>
+  <Card title="Retention policy" icon="clock">
+    Backup containers older than `BackupDays` are automatically deleted on each run, keeping the destination storage tidy.
+  </Card>
+  <Card title="Transfer engine" icon="arrow-right-arrow-left">
+    AzCopy v10 (`azcopy copy --recursive`) performs the actual blob transfer; the Azure Storage SDK only manages container lifecycle.
+  </Card>
+  <Card title="Auth flexibility" icon="key">
+    Supports SAS tokens, Managed Identity (system- or user-assigned), and interactive `azcopy login` for local development.
+  </Card>
+</CardGroup>
+
+## Role in the NuGetGallery System
+
+NuGetGallery stores package content, the V3 catalog, and auxiliary files in Azure Blob Storage. `CopyAzureContainer` runs as a Windows Scheduled Task (registered by `PostDeploy.ps1` under the name `Nuget\BackupV3Job`) to maintain rolling point-in-time copies of those containers in a separate destination storage account. These snapshots serve as a disaster-recovery mechanism.
+
+## Key Files and Classes
+
+| File | Class / Symbol | Purpose |
+|------|---------------|---------|
+| `Program.cs` | `Program` | Entry point; constructs `CopyAzureContainerJob` and delegates to `JobRunner.Run()` |
+| `CopyAzureContainerJob.cs` | `CopyAzureContainerJob` | Core job logic: init, run loop, container create/delete, AzCopy orchestration, log upload |
+| `Configuration/CopyAzureContainerConfiguration.cs` | `CopyAzureContainerConfiguration` | Strongly-typed config POCO bound from the `CopyAzureContainer` appsettings section |
+| `AzureContainerInfo.cs` | `AzureContainerInfo` | Per-source-container descriptor: account name, container name, optional SAS token |
+| `LogEvents.cs` | `LogEvents` | Structured log event IDs 700–705 for critical failure paths |
+| `Scripts/Functions.ps1` | `Install-AzCopy`, `Install-BackupV3Task` | Downloads AzCopy v10 from `aka.ms/downloadazcopy-v10-windows`; registers the Windows Scheduled Task |
+| `Scripts/PostDeploy.ps1` | — | Deployment entry point: installs AzCopy and registers the scheduled task on the host VM |
+
+## Dependencies
+
+### NuGet Packages
+
+| Package | Purpose |
+|---------|---------|
+| `WindowsAzure.Storage` | `BlobServiceClient` / `BlobContainerClient` for container create, delete, and list |
+| `Azure.Identity` | `ManagedIdentityCredential`, `DefaultAzureCredential`, `AzureSasCredential` for auth |
+| `Microsoft.Extensions.Logging` | Structured logging via `ILogger` and `EventId` |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<CopyAzureContainerConfiguration>` config binding |
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `NuGet.Jobs.Common` | Base class `JsonConfigurationJob`, `JobRunner`, Key Vault config provider |
+
+## Configuration Reference
+
+```json
+{
+  "CopyAzureContainer": {
+    "BackupDays": 14,
+    "DestStorageAccountName": "destinationstorage",
+    "DestStorageSasValue": "<dest-sas-token>",
+    "SourceContainers": [
+      {
+        "StorageAccountName": "sourcestorage",
+        "StorageSasToken": "<source-sas-token>",
+        "ContainerName": "catalog"
+      }
+    ]
+  },
+  "Storage_UseManagedIdentity": false
+}
+```
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Dual-client strategy.** The Azure Storage SDK is used exclusively for container lifecycle (create, delete, list). Actual blob copying is delegated entirely to the `azcopy.exe` child process via `System.Diagnostics.Process`. The job has no in-process visibility into individual blob transfer progress — it relies on AzCopy's exit code and log files.
+</Note>
+
+<Note>
+**Timestamped container naming.** Backup container names use the format `{sourceContainerName}-{yyyyMMddHH}` (UTC, hour-precision). Running the job multiple times within the same UTC hour hits the same destination container; blobs are re-copied on top via `CreateIfNotExistsAsync`.
+</Note>
+
+<Warning>
+**AzCopy must be manually installed.** The binary is not bundled in the repository. Developers must run `Scripts/InstallAzCopy.ps1` before running locally, and deployment must ensure `azcopy.exe` is present at the hardcoded relative path `tools\azcopy\azCopy.exe`. A missing binary causes a runtime `Process.Start` failure.
+</Warning>
+
+<Warning>
+**`BackupDays` defaults to `-1` (retention disabled).** If `BackupDays` is omitted from configuration it defaults to `-1`, which disables deletion entirely. Old backup containers accumulate indefinitely unless the setting is explicitly provided with a positive value.
+</Warning>
+
+<Tip>
+**Local development auth.** In `DEBUG` builds, if no SAS tokens are configured the job calls `azcopy login` interactively. This code path is compiled out in `RELEASE` builds, where MSI is assumed.
+</Tip>
+
+<Note>
+**Log upload is best-effort.** After each copy, the job runs a second AzCopy process to upload `*.log` files to a `logs/{destContainer}` path in destination storage. Failures here are logged at `Error` severity (not `Critical`) and do not block subsequent container copies.
+</Note>

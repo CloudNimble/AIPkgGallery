@@ -1,0 +1,139 @@
+---
+title: "NuGet.Services.Storage"
+sidebarTitle: "Services.Storage"
+description: "Shared server-side storage abstraction for NuGet services — blobs, queues, leases, and local file I/O behind a uniform URI-addressed interface."
+icon: "database"
+---
+
+## Overview
+
+`NuGet.Services.Storage` is a shared infrastructure library that provides a **uniform, URI-addressed storage abstraction** used across all NuGet back-end services. It hides the differences between Azure Blob Storage, Azure Queue Storage, and the local file system behind common interfaces (`IStorage`, `IStorageQueue`, `IBlobLeaseService`), allowing service code to remain storage-agnostic and easily testable.
+
+The library also bundles:
+- An **aggregate (fan-out) storage** pattern for writing to a primary store while simultaneously mirroring to one or more secondary stores.
+- **Azure Blob lease** primitives for distributed locking.
+- **Typed queue messaging** with pluggable JSON serialization.
+
+<CardGroup cols={2}>
+  <Card title="Blob Storage" icon="cloud">
+    Azure Block Blob read/write/delete with optional gzip compression, metadata, and server-side copy.
+  </Card>
+  <Card title="Queue Storage" icon="list">
+    Azure Storage Queue integration with typed message serialization and approximate-count support.
+  </Card>
+  <Card title="Blob Leases" icon="lock">
+    Distributed locking via Azure Blob lease API — acquire, renew, and release with 15–60 s TTL.
+  </Card>
+  <Card title="File Storage" icon="folder">
+    Local file-system backend implementing the same `IStorage` interface, used for local development and testing.
+  </Card>
+</CardGroup>
+
+---
+
+## Role in the NuGetGallery System
+
+This library sits at the infrastructure layer, consumed by catalog workers, search indexers, package processing pipelines, and other back-end jobs. Nothing in this library is web-request-specific; it is purely a server-side concern.
+
+```
+NuGet.Services.*  (catalog, search, jobs)
+        │
+        ▼
+NuGet.Services.Storage   ← this library
+        │
+        ▼
+Azure.Storage.Blobs / Azure.Storage.Queues / Local FileSystem
+```
+
+- Services depend on `IStorage` / `IStorageFactory` — **never** on `AzureStorage` directly — enabling local-file substitution in unit tests.
+- `AggregateStorage` lets catalog publishing write to multiple CDN origins in a single logical call.
+- `BlobLeaseService` is used by job schedulers to prevent concurrent execution of singleton jobs.
+
+---
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|------|-------------------|---------|
+| `IStorage.cs` | `IStorage` | Core storage interface: Save, Load, Delete, List, Copy, SetMetadata |
+| `Storage.cs` | `Storage` | Abstract base — wraps `On*` hooks with logging, stats counters, and URI helpers |
+| `AzureStorage.cs` | `AzureStorage` | Azure Blob Storage implementation; supports gzip compression, path prefixes, access-policy init |
+| `AzureStorageFactory.cs` | `AzureStorageFactory` | Factory that instantiates `AzureStorage` from connection string / URI / container config |
+| `AggregateStorage.cs` | `AggregateStorage` | Fan-out decorator — saves/deletes to primary and all secondaries in parallel via `Task.WhenAll` |
+| `AggregateStorageFactory.cs` | `AggregateStorageFactory` | Factory for `AggregateStorage`; wires primary + secondary factories |
+| `FileStorage.cs` | `FileStorage` | Local disk implementation of `IStorage`; used for dev/test scenarios |
+| `FileStorageFactory.cs` | `FileStorageFactory` | Factory for `FileStorage` |
+| `BlobLeaseService.cs` | `BlobLeaseService` | Distributed lock using Azure Blob leases; auto-creates the lock blob if missing |
+| `IBlobLeaseService.cs` | `IBlobLeaseService` | Interface for TryAcquire, Renew, Release operations |
+| `BlobLeaseResult.cs` | `BlobLeaseResult` | Result value object: `IsSuccess` + `LeaseId` |
+| `BlobServiceClientFactory.cs` | `BlobServiceClientFactory` | Creates `BlobServiceClient` from connection string, `TokenCredential`, or anonymous |
+| `BlobServiceClientAuthType.cs` | `BlobServiceClientAuthType` | Enum: `Anonymous`, `TokenCredential`, `ConnectionString` |
+| `AzureStorageQueue.cs` | `AzureStorageQueue` | Azure Queue implementation of `IStorageQueue`; 5-minute visibility timeout |
+| `IStorageQueue.cs` | `IStorageQueue` / `IStorageQueue<T>` | Raw-string and typed queue interfaces: AddAsync, GetNextAsync, RemoveAsync, GetMessageCount |
+| `StorageQueue.cs` | `StorageQueue<T>` | Typed queue adapter wrapping `IStorageQueue` + `IMessageSerializer<T>` |
+| `StorageContent.cs` | `StorageContent` | Abstract blob payload: `ContentType`, `CacheControl`, `GetContentStream()` |
+| `StreamStorageContent.cs` | `StreamStorageContent` | `StorageContent` backed by a `Stream` |
+| `StringStorageContent.cs` | `StringStorageContent` | `StorageContent` backed by a `string` |
+| `JTokenStorageContent.cs` | `JTokenStorageContent` | `StorageContent` backed by a Newtonsoft `JToken` |
+| `StorageListItem.cs` | `StorageListItem` | Blob listing result: URI, last-modified, metadata dictionary |
+| `StorageConstants.cs` | `StorageConstants` | String constants for `CacheControl` and `ContentType` property names |
+| `JsonMessageSerializer.cs` | `JsonMessageSerializer<T>` | Queue message serializer using `Newtonsoft.Json` |
+| `TypedMessageSerializer.cs` | `TypedMessageSerializer<T>` | Queue message serializer with type discriminator support |
+| `IMessageSerializer.cs` | `IMessageSerializer<T>` | Serialize / Deserialize contract for queue message bodies |
+| `CloudBlobStorageExtensions.cs` | _(extension methods)_ | Miscellaneous extension helpers for blob storage operations |
+
+---
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Azure.Storage.Blobs` | Azure Block Blob client (upload, download, copy, lease, metadata) |
+| `Azure.Storage.Queues` | Azure Storage Queue client |
+| `Azure.Data.Tables` | Azure Table Storage (referenced but available for future/extended use) |
+| `Azure.Identity` | `TokenCredential` implementations (Managed Identity, DefaultAzureCredential) |
+| `Microsoft.Extensions.Logging.Abstractions` | `ILogger<T>` used throughout for structured logging |
+| `Newtonsoft.Json` | JSON serialization for `JTokenStorageContent` and `JsonMessageSerializer<T>` |
+| `System.Text.Json` | Available for STJ-based serialization paths |
+
+### Internal Project References
+
+None — this is a leaf library with no internal project dependencies. It is consumed by other projects in the solution.
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Template Method Pattern** — `Storage` (abstract base) implements all public interface methods and delegates to protected `OnSave`, `OnLoad`, `OnDelete`, `OnCopyAsync` hooks. Subclasses only override the hooks. This guarantees consistent logging, exception wrapping, and operation counters (`SaveCount`, `LoadCount`, `DeleteCount`) across all backends.
+</Note>
+
+<Note>
+**Automatic gzip compression** — `AzureStorage` has a `CompressContent` boolean property. When set, `OnSave` wraps the content stream in a `GZipStream` before uploading and sets `Content-Encoding: gzip`. On load, the encoding header is inspected and the stream is transparently decompressed.
+</Note>
+
+<Warning>
+**AggregateStorage copy and SetMetadata are not implemented.** Both `OnCopyAsync` and `SetMetadataAsync` throw `NotImplementedException` on `AggregateStorage`. Code that fans out to secondary stores cannot currently use server-side blob copy or metadata mutation.
+</Warning>
+
+<Warning>
+**FileStorage has partial implementation gaps.** `ListTopLevelAsync`, `OnCopyAsync`, and `SetMetadataAsync` all throw `NotImplementedException` on `FileStorage`. It is intended only for local development, not production use.
+</Warning>
+
+<Note>
+**Blob lease TTL constraint** — `BlobLeaseService` enforces Azure's hard limits: lease duration must be between 15 and 60 seconds inclusive. If the blob targeted for the lease does not exist and `createBlobsWhenMissing` is `true` (the default), the service creates an empty zero-byte blob to serve as the lock resource.
+</Note>
+
+<Tip>
+**Auth flexibility in `BlobServiceClientFactory`** — The factory supports three authentication modes selected at construction time: connection string, `TokenCredential` (Managed Identity / service principal), or anonymous. This makes it straightforward to swap auth strategies per environment without changing consumer code.
+</Tip>
+
+<Note>
+**Queue visibility timeout is hardcoded to 5 minutes** in `AzureStorageQueue`. After `GetNextAsync` is called, the message becomes invisible to other consumers for 5 minutes. Callers must call `RemoveAsync` within that window or the message will reappear.
+</Note>
+
+<Tip>
+**URI-relative addressing** — All storage operations use absolute `Uri` values resolved via `ResolveUri(string relativeUri)`. The base address always has a trailing `/` enforced at construction time, so relative paths concatenate safely without double-slash issues.
+</Tip>

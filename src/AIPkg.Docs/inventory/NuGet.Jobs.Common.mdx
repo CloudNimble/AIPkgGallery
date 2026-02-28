@@ -1,0 +1,129 @@
+---
+title: NuGet.Jobs.Common
+sidebarTitle: Jobs.Common
+description: Shared infrastructure library that provides the job execution loop, configuration loading, secret injection, SQL connection management, and storage helpers used by all NuGet Gallery background jobs.
+icon: layers
+---
+
+## Overview
+
+`NuGet.Jobs.Common` is the foundational shared library for every NuGet Gallery background job. It defines the two base classes that all jobs inherit from (`JobBase` and `JsonConfigurationJob`), the static `JobRunner` that drives the execution loop, and the `JobConfigurationManager` that parses command-line arguments and injects Key Vault secrets into them.
+
+The library follows a clear two-tier job model. Older jobs inherit directly from `JobBase` and receive configuration through the command-line argument dictionary (`IDictionary<string, string>`). Newer jobs inherit from `JsonConfigurationJob`, which extends `JobBase` by loading a JSON configuration file, building a full Autofac + Microsoft.Extensions.DependencyInjection container, and automatically registering any configured SQL databases on every initialization. Both tiers share the same `JobRunner` execution loop.
+
+A key design decision throughout the library is that Key Vault secret injection is transparent: connection strings and other sensitive values are stored in configuration with `$$secretName$$` placeholders, and the `SecretReaderFactory` / `SecretInjector` pair resolves those placeholders at runtime before any consumers see them. Key Vault secrets are cached for up to six hours (in the `JsonConfigurationJob` path) or at a configurable refresh interval (in the `JobRunner` path), reducing per-iteration latency.
+
+## Role in System
+
+```
+Job executable (e.g. NuGet.Jobs.Ng, NuGet.Jobs.Auxiliary2AzureSearch)
+        │
+        ▼
+   JobRunner.Run() / RunOnce()
+        │  parses args, initializes Application Insights & logging
+        │
+        ▼
+   JobBase.Init()  ◄─── implemented by JsonConfigurationJob
+        │  loads JSON config, builds DI container, registers databases
+        │
+        ▼
+   JobBase.Run()   ◄─── implemented by each concrete job
+        │  actual job logic (querying, processing, writing)
+        │
+   ┌────┴──────────────────────────────┐
+   │  NuGet.Jobs.Common helpers         │
+   │  • JobConfigurationManager         │  arg parsing + secret injection
+   │  • SqlRetryUtility / DapperExt     │  resilient SQL execution
+   │  • StorageAccountHelper            │  MSI-aware blob/table clients
+   │  • FeatureFlagRefresher            │  background flag refresh loop
+   └───────────────────────────────────┘
+```
+
+<CardGroup cols={2}>
+  <Card title="Execution Loop" icon="refresh-cw">
+    `JobRunner` drives an optional continuous while-loop with a configurable sleep interval and re-initialization threshold. It wires up Application Insights heartbeats, reports a `JobLoopExitCode` health property, and enforces TLS 1.2.
+  </Card>
+  <Card title="Configuration & Secrets" icon="key">
+    `JobConfigurationManager` parses `-argName value` CLI pairs into a case-insensitive dictionary, then wraps it in a `SecretDictionary` that injects Key Vault secrets on first read. `JsonConfigurationJob` extends this to load a JSON file through a secret-injecting `IConfigurationRoot`.
+  </Card>
+  <Card title="Database Registration" icon="database">
+    `JobBase.RegisterDatabase` creates an `AzureSqlConnectionFactory` and optionally runs a fast-fail connectivity test (`SELECT CURRENT_USER`). `JsonConfigurationJob` auto-registers all five well-known databases (Gallery, Statistics, SupportRequest, Validation, CatalogValidation) when their connection strings are present.
+  </Card>
+  <Card title="Storage & Feature Flags" icon="cloud">
+    `StorageAccountHelper` creates MSI-aware `CloudBlobClientWrapper`, `BlobServiceClient`, and `TableServiceClient` instances. `FeatureFlagRefresher` runs a background task that keeps the `IFeatureFlagCacheService` up-to-date at a configurable interval.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `JobRunner.cs` | `JobRunner` (static) | Top-level entry point. Parses args, configures Application Insights and Serilog, runs the job loop with sleep/reinitialize logic, reports heartbeat health. |
+| `JobBase.cs` | `JobBase` (abstract) | Base class for all jobs. Owns the SQL connection factory registry, exposes `RegisterDatabase`, `CreateSqlConnectionAsync`, `OpenSqlConnectionAsync`, and global telemetry dimensions. |
+| `JsonConfigurationJob.cs` | `JsonConfigurationJob` (abstract) | Extends `JobBase`. Loads a JSON config file with Key Vault secret injection, builds an Autofac + MEDI container, auto-registers configured databases, and exposes hooks for job-specific DI setup. |
+| `Configuration/JobConfigurationManager.cs` | `JobConfigurationManager` (static) | Parses `-name value` / `-switch` CLI pairs into a case-insensitive dictionary; wraps it with `SecretDictionary` for transparent Key Vault injection. |
+| `Configuration/JobArgumentNames.cs` | `JobArgumentNames` (static) | Centralised string constants for every recognized CLI argument (loop control, database names, Key Vault, Application Insights, Service Bus, CDN, etc.). |
+| `Configuration/IDbConfiguration.cs` | `IDbConfiguration` | Single-property interface (`ConnectionString`) used as a generic type constraint for typed database registrations. |
+| `Configuration/GalleryDbConfiguration.cs` | `GalleryDbConfiguration` | Typed config class for the Gallery database; analogous classes exist for Statistics, SupportRequest, Validation, CatalogValidation, ServiceBus, and ValidationStorage. |
+| `Configuration/FeatureFlagConfiguration.cs` | `FeatureFlagConfiguration` | Holds the feature flag storage connection string and refresh interval (default 1 minute). |
+| `SecretReader/SecretReaderFactory.cs` | `SecretReaderFactory` | Reads Key Vault arguments (`-VaultName`, `-UseManagedIdentity`, `-CertificateThumbprint`, etc.) and constructs either a `CachingSecretReader` backed by `KeyVaultReader` or an `EmptySecretReader` when no vault is configured. |
+| `DelegateSqlConnectionFactory.cs` | `DelegateSqlConnectionFactory<T>` | `ISqlConnectionFactory<T>` implementation that wraps a `Func<Task<SqlConnection>>` delegate; registered into the DI container so job services can receive typed connection factories. |
+| `SqlRetryUtility.cs` | `SqlRetryUtility` (static) | Retries SQL operations up to 10 times on specific `SqlException` numbers (deadlock, lock timeout, OOM). Distinguishes read-only retries (adds client timeout -2) from write retries. |
+| `Extensions/DapperExtensions.cs` | `DapperExtensions` (static) | Extension methods on `SqlConnection` (`QueryWithRetryAsync`, `ExecuteScalarWithRetryAsync`) that call `SqlRetryUtility.RetryReadOnlySql` transparently. |
+| `StorageAccountExtensions.cs` | `StorageAccountHelper` (static) | Extension methods for `IServiceCollection` and `ContainerBuilder` that create MSI-aware `CloudBlobClientWrapper`, `BlobServiceClient`, `BlobServiceClientFactory`, and `TableServiceClient`; handles `DefaultAzureCredential` in debug builds vs `ManagedIdentityCredential` in release. |
+| `StorageMsiConfiguration.cs` | `StorageMsiConfiguration` | Carries `UseManagedIdentity` and `ManagedIdentityClientId` flags consumed by `StorageAccountHelper`. |
+| `StorageHelpers.cs` | `StorageHelpers` (static) | Generates normalized Azure Blob paths for packages (`{id}.{version}.nupkg`), package backups (`packages/{id}/{version}/{hash}.nupkg`), and ReadMe blobs (`pending/` and `active/` folders). |
+| `FeatureFlags/FeatureFlagRefresher.cs` | `FeatureFlagRefresher` | `IFeatureFlagRefresher` implementation. Starts a background `Task` that calls `IFeatureFlagCacheService.RunAsync`; uses a `SemaphoreSlim` to prevent concurrent start/stop races. Skips startup if no connection string is configured. |
+| `FeatureFlags/FeatureFlagTelemetryService.cs` | `FeatureFlagTelemetryService` | `IFeatureFlagTelemetryService` implementation that forwards feature flag telemetry events to Application Insights. |
+| `LoggerDiagnosticsService.cs` | `LoggerDiagnosticsService` | `IDiagnosticsService` implementation backed by `ILoggerFactory`; creates named `LoggerDiagnosticsSource` instances used by the Gallery storage layer. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Autofac.Extensions.DependencyInjection` | Bridges Autofac container with `Microsoft.Extensions.DependencyInjection` for `JsonConfigurationJob` service provider construction. |
+| `Azure.Data.Tables` | `TableServiceClient` used by `StorageAccountHelper.CreateTableServiceClient`. |
+| `Dapper.StrongName` | Lightweight SQL micro-ORM; `DapperExtensions` adds retry-aware wrapper methods around `QueryAsync` and `ExecuteScalarAsync`. |
+| `Microsoft.Extensions.DependencyInjection` | Core DI abstractions (`IServiceCollection`, `IServiceProvider`). |
+| `Microsoft.Extensions.Options.ConfigurationExtensions` | `IOptionsSnapshot<T>` and configuration binding used throughout typed config classes. |
+| `System.Data.SqlClient` | ADO.NET SQL client used by `SqlRetryUtility`, `DelegateSqlConnectionFactory`, and `JobBase`. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Configuration` | Provides `ConfigurationRootSecretReaderFactory`, `CachingSecretReaderFactory`, `AddInjectedJsonFile`, and `NonCachingOptionsSnapshot<T>`. |
+| `NuGet.Services.FeatureFlags` | Provides `IFeatureFlagCacheService`, `IFeatureFlagClient`, `FeatureFlagClient`, and `FeatureFlagOptions`. |
+| `NuGet.Services.Logging` | Provides `ApplicationInsights.Initialize`, `LoggingSetup`, `JobPropertiesTelemetryInitializer`, and `ApplicationInsightsConfiguration`. |
+| `NuGet.Services.Sql` | Provides `AzureSqlConnectionFactory`, `ISqlConnectionFactory`, and `ICachingSecretInjector`. |
+| `NuGet.Services.Storage` | Provides `CloudBlobClientWrapper`, `AzureStorage`, `BlobServiceClientFactory`, and `ICloudBlobClient`. |
+| `NuGetGallery.Core` | Provides `IDiagnosticsService`, `ITelemetryClient`, `TelemetryClientWrapper`, `GalleryCloudBlobContainerInformationProvider`, and `IFeatureFlagStorageService`. |
+| `NuGet.Services.Messaging.Email` *(net472 only)* | Provides `MessageServiceConfiguration` for jobs that send email notifications. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Two-tier job inheritance.** `JobBase` is the minimal contract (`Init` + `Run`). `JsonConfigurationJob` is the modern path and adds JSON config loading, a full DI container, and automatic database registration. Concrete jobs should inherit `JsonConfigurationJob` unless they have a specific reason to use the older argument-dictionary pattern directly via `JobBase`.
+</Note>
+
+<Note>
+**Re-initialization is per-iteration by default.** `JobRunner` calls `job.Init(...)` on every loop iteration unless `-ReinitializeAfterSeconds` is supplied. In `JsonConfigurationJob.Init`, the previous `IServiceProvider` is disposed before a new one is built, so secret values and configuration are fully refreshed on each initialization cycle.
+</Note>
+
+<Warning>
+**Database connectivity is tested eagerly on first init.** `RegisterDatabase` (and `RegisterDatabaseIfConfigured`) runs `SELECT CONCAT(CURRENT_USER, '/', SYSTEM_USER)` synchronously during `Init`. If the database is unreachable the job will fail to initialize and the `JobRunner` will log `JobUninitialized` and increment the exit code. Subsequent iterations skip the connectivity test (`testDatabaseConnections` is set to `false` after the first call).
+</Warning>
+
+<Warning>
+**`SqlRetryUtility` does not reopen connections.** The retry loop catches specific `SqlException` numbers (deadlock 1205, lock timeout 1222, OOM 701, etc.) but does not reconnect. Exception class 20 or higher (which require connection teardown) must not be added to the retry lists without reworking the implementation.
+</Warning>
+
+<Tip>
+**MSI vs. connection-string storage auth is build-conditional.** `StorageAccountHelper` compiles different credential paths for `DEBUG` (`DefaultAzureCredential`, allowing `az login` for local development) vs. `Release` (`ManagedIdentityCredential`). This means the same source supports both local developer workflows and production MSI-secured deployments without code changes.
+</Tip>
+
+<Tip>
+**Key Vault is optional.** When `-VaultName` is absent from the command-line arguments, `SecretReaderFactory` returns an `EmptySecretReader`, and no Key Vault calls are made. This allows jobs to run locally with plain-text connection strings without any Azure authentication setup.
+</Tip>

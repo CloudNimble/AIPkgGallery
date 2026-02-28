@@ -1,0 +1,134 @@
+---
+title: NuGetGallery.Core
+sidebarTitle: NuGetGallery.Core
+description: Multi-targeting shared library (net472 + netstandard2.1) that provides the Gallery database context, Azure Blob Storage wrappers, file storage abstractions, core package and symbol package services, auditing infrastructure, and packaging helpers used by both the web application and out-of-process jobs.
+icon: layers
+---
+
+# NuGetGallery.Core
+
+## Overview
+
+`NuGetGallery.Core` is a shared class library that sits at the foundation of the NuGetGallery ecosystem. It targets **both `net472` and `netstandard2.1`**, which allows it to be consumed by the ASP.NET MVC web application (net472) and by cross-platform .NET jobs and validators (netstandard2.1 / .NET 6+) without code duplication.
+
+The library provides:
+
+- The **Entity Framework `EntitiesContext`** (Gallery SQL Server database) and the `IEntityRepository<T>` / `IReadOnlyEntityRepository<T>` generic repository abstractions.
+- A complete **Azure Blob Storage abstraction layer** (`ICloudBlobClient`, `ICloudBlobContainer`, `ISimpleCloudBlob`, `CloudBlobCoreFileStorageService`) that allows tests and alternative environments to use file-system stubs.
+- **Core service contracts and implementations** for packages, symbol packages, license files, README files, and certificates that are needed by multiple processes (the web app, validation jobs, and tooling).
+- A **structured auditing system** (`IAuditingService`, `AuditRecord` subclasses, `CloudAuditingService`) that writes tamper-evident JSON audit records to blob storage.
+- **Packaging helpers** (`PackageMetadata`, `ManifestValidator`, `PackageIdValidator`, `PackageStreamMetadata`) for reading and validating `.nupkg` content server-side.
+- **Cryptography utilities** (`CryptographyService`) for hashing package streams (SHA-512).
+- **Feature flag plumbing** (`IRevalidationStateService`) and revalidation state management.
+
+<Note>
+Several features are **target-framework conditional**. On `net472`, the project adds OData `Microsoft.Data.Services.Client` support and Azure SDK v11-era configuration helpers. On `netstandard2.1`, it pulls in `Azure.Storage.Blobs` (v12 SDK), `Azure.Identity`, and `System.Text.Json`. The two target frameworks compile the same source files unless `#if` guards or `Condition` attributes on `ItemGroup` nodes select different implementations.
+</Note>
+
+## Role in the NuGetGallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="Consumed by: NuGetGallery" icon="globe">
+    The web application inherits `EntitiesContext`, all blob wrappers, `ICorePackageService`, `ICoreFileStorageService`, and the auditing infrastructure. The web-layer `PackageFileService` extends `CorePackageFileService`.
+  </Card>
+  <Card title="Consumed by: NuGetGallery.Services" icon="layers">
+    The services layer builds on top of `ICorePackageService` and `ICoreFileStorageService`, extending them with higher-level upload, deprecation, rename, and vulnerability workflows.
+  </Card>
+  <Card title="Consumed by: Validation Jobs" icon="shield-check">
+    The Validation Orchestrator and individual validators reference `ICorePackageService`, `ICoreFileStorageService`, and the blob abstractions on `netstandard2.1` to manipulate package blobs without taking a dependency on the full web assembly.
+  </Card>
+  <Card title="Consumed by: CLI Tools" icon="terminal">
+    Tools such as `GalleryTools`, `DatabaseMigrationTools`, and `RevalidateCertificate` reference the Core library to access the Gallery database and blob storage with a shared, consistent abstraction.
+  </Card>
+</CardGroup>
+
+## Database Layer
+
+`EntitiesContext` is the Entity Framework 6 `DbContext` for the Gallery SQL Server database. Key design points:
+
+- **Migrations are permanently disabled** via `Database.SetInitializer<EntitiesContext>(null)` in the static constructor. Schema changes are applied exclusively by `DatabaseMigrationTools`.
+- **Read-only mode** is enforced at the context level: `SaveChanges` / `SaveChangesAsync` throw `ReadOnlyModeException` when `ReadOnly = true`. All read-only replicas and diagnostics scenarios use `ReadOnlyEntitiesContext`.
+- **`GalleryDbContextFactory`** implements `IDbContextFactory<EntitiesContext>` so EF tooling can create an `EntitiesContext` instance without requiring a running application. The static `GalleryEntitiesContextFactory` delegate allows the web application to inject its own connection factory (e.g., using an MSI token).
+- **Query hints** are supported via `IEntitiesContext.WithQueryHint(string)` — a scope that injects SQL query hints (e.g., `NOLOCK`, index hints) through `QueryHintInterceptor`.
+- **`ObjectMaterializedInterceptingDbContext`** base class fires interception callbacks after EF materializes entities, enabling download count injection (`DownloadCountObjectMaterializedInterceptor`) without modifying entity types.
+
+## Key Files and Classes
+
+| File Path | Class / Interface | Purpose |
+|-----------|-------------------|---------|
+| `Entities/EntitiesContext.cs` | `EntitiesContext` | EF6 `DbContext` for the Gallery database. Exposes `DbSet<T>` properties for all entities; configures indexes and relationships via `OnModelCreating`. |
+| `Entities/IEntitiesContext.cs` | `IEntitiesContext` | Interface contract for the writable context; consumed by all services that need to persist changes. |
+| `Entities/IReadOnlyEntitiesContext.cs` | `IReadOnlyEntitiesContext` | Restricts callers to `IQueryable<T>` reads; used by the read replica path. |
+| `Entities/EntityRepository.cs` | `EntityRepository<T>` | Generic EF repository; wraps `DbSet<T>` with `CommitChangesAsync`, `InsertOnCommit`, `DeleteOnCommit`. |
+| `Services/CloudBlobCoreFileStorageService.cs` | `CloudBlobCoreFileStorageService` | Core Azure Blob implementation of `ICoreFileStorageService`. Lazily initializes containers, polls for cross-region copy completion (up to 10 min), generates SAS URIs, and handles `If-None-Match` / `If-Match` conditional requests. |
+| `Services/ICoreFileStorageService.cs` | `ICoreFileStorageService` | Primary file storage abstraction: upload, download, delete, URI generation, SAS generation, server-side copy, conditional access. |
+| `Services/CorePackageFileService.cs` | `CorePackageFileService` | Implements `ICorePackageFileService`; manages `.nupkg` blob paths in the `packages`, `validation`, `backup`, and `uploads` containers using `CoreConstants.Folders` names. |
+| `Services/CorePackageService.cs` | `CorePackageService` | Implements `ICorePackageService`; handles `UpdatePackageStreamMetadataAsync`, `UpdatePackageStatusAsync`, `UpdateIsLatestAsync`, and certificate association (`UpdatePackageSigningCertificateAsync`). |
+| `Services/CoreSymbolPackageService.cs` | `CoreSymbolPackageService` | Implements `ICoreSymbolPackageService`; mirrors `CorePackageService` for `.snupkg` symbol packages. |
+| `Services/CoreLicenseFileService.cs` | `CoreLicenseFileService` | Reads/writes license files from the flat container blob path used by V3 clients. |
+| `Services/CoreReadmeFileService.cs` | `CoreReadmeFileService` | Reads/writes README files; shared between the web app (display) and validation jobs (storage). |
+| `Services/CryptographyService.cs` | `CryptographyService` | Computes SHA-512 hashes of package streams and generates random tokens for API keys and email confirmation. |
+| `Services/GalleryCloudBlobContainerInformationProvider.cs` | `GalleryCloudBlobContainerInformationProvider` | Maps `CoreConstants.Folders.*` folder name strings to Azure container names and their public/private access policy. |
+| `Services/RevalidationStateService.cs` | `RevalidationStateService` | Reads and writes `RevalidationState` JSON from blob storage — used by revalidation jobs to checkpoint their progress. |
+| `Auditing/AuditingService.cs` | `AuditingService` (abstract) | Base class; serializes `AuditRecord` instances to JSON (with `StringEnumConverter`) and delegates to `SaveAuditRecordAsync(string, ...)`. |
+| `Auditing/CloudAuditingService.cs` | `CloudAuditingService` | Writes audit records as timestamped blobs under `{resourceType}/{path}/{action}/{timestamp}-{actor}.audit.v1.json` in the `auditing` container. |
+| `Auditing/AggregateAuditingService.cs` | `AggregateAuditingService` | Fan-outs audit writes to multiple `IAuditingService` instances (e.g., Cloud + local file in dev). |
+| `Auditing/PackageAuditRecord.cs` | `PackageAuditRecord` | Captures package push, delete, unlist, relist, and reflow events with package ID, version, action, and actor. |
+| `Auditing/UserAuditRecord.cs` | `UserAuditRecord` | Captures user registration, credential add/remove, password change, and account deletion events. |
+| `Packaging/PackageMetadata.cs` | `PackageMetadata` | Parsed representation of a `.nuspec`; blocks server-side reserved metadata elements (`created`, `packageHash`, `published`, etc.) that must only be set by the V3 pipeline. |
+| `Packaging/ManifestValidator.cs` | `ManifestValidator` | Validates `.nuspec` well-formedness; checks for duplicate metadata elements, restricted elements, and schema version compatibility. |
+| `Packaging/PackageIdValidator.cs` | `PackageIdValidator` | Validates package ID format (regex) and length; shared between the upload path and the push API. |
+| `Packaging/PackageStreamMetadata.cs` | `PackageStreamMetadata` | Value object carrying `Hash`, `HashAlgorithm`, and `Size` — computed from the raw package stream and stored on the `Package` entity. |
+| `CoreConstants.cs` | `CoreConstants` | Canonical string constants for blob folder names, file extensions, content types, and HTTP header names used across all consuming projects. |
+
+## Dependencies
+
+### Internal Project References (net472 only)
+
+| Project | Role |
+|---------|------|
+| `NuGet.Services.Entities` | EF entity types (`Package`, `PackageRegistration`, `User`, `Certificate`, `SymbolPackage`, etc.) consumed by `EntitiesContext` |
+| `NuGet.Services.FeatureFlags` | `IFeatureFlagService` interface and blob-backed implementation (net472 path) |
+| `NuGet.Services.Messaging.Email` | Email message contracts referenced by auditing records on net472 |
+| `NuGet.Services.Validation` | `PackageValidationSet`, `PackageValidation`, and validation status enums |
+| `NuGet.Services.Validation.Issues` | Typed validation issue classes referenced by audit records |
+
+### Key NuGet Package Dependencies
+
+| Package | Target | Purpose |
+|---------|--------|---------|
+| `Azure.Storage.Blobs` | netstandard2.1 | Azure Blob Storage SDK v12 (`BlobServiceClient`, `BlobContainerClient`, `BlobClient`) |
+| `Azure.Core` / `Azure.Identity` | netstandard2.1 | `TokenCredential` and managed identity support for blob auth |
+| `EntityFramework` | both | EF6 ORM for Gallery SQL Server database |
+| `NuGet.Packaging` | both | `PackageArchiveReader`, `NuspecReader` for reading `.nupkg` content |
+| `Microsoft.Extensions.Caching.Memory` | netstandard2.1 | `IMemoryCache` used by the typosquatting cache service helper |
+| `System.Text.Json` | netstandard2.1 | JSON serialization for revalidation state and feature flag blobs |
+| `System.Formats.Asn1` | netstandard2.1 | ASN.1 parsing for certificate thumbprint handling |
+| `Microsoft.Data.Services.Client` | net472 | OData client for legacy data service integration |
+| `Microsoft.WindowsAzure.ConfigurationManager` | net472 | Legacy Azure SDK configuration helpers |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Lazy container initialization.** `CloudBlobCoreFileStorageService` uses a `ConcurrentDictionary<string, ICloudBlobContainer>` to cache initialized container references. The first request to any folder name triggers `GetContainerAsync`, which creates the container if `_initializeContainer=true`. Subsequent calls return the cached reference without a round-trip.
+</Note>
+
+<Note>
+**Server-side blob copy with polling.** `CopyFileAsync` uses the Azure blob server-side copy API and polls at 500 ms intervals for up to 10 minutes (`MaxCopyDuration`). This pattern is used when promoting a validated package from the `validation` container to the public `packages` container without streaming bytes through the application server.
+</Note>
+
+<Warning>
+**`EntitiesContext` migrations are permanently off.** The static constructor calls `Database.SetInitializer<EntitiesContext>(null)`. Any developer who inadvertently calls `Database.Migrate()` or enables `CreateDatabaseIfNotExists` will get a runtime exception or, worse, no-op silently. All DDL changes must go through `DatabaseMigrationTools`.
+</Warning>
+
+<Note>
+**Conditional target-framework compilation.** The `.csproj` uses `Condition="'$(TargetFramework)' == 'net472'"` and `Condition="'$(TargetFramework)' == 'netstandard2.1'"` on `ItemGroup` nodes rather than `#if` preprocessor guards for most of the TFM-specific differences. This keeps source files clean but means the project's dependency graph differs between the two compilation targets.
+</Note>
+
+<Tip>
+**Auditing is fire-and-forget safe.** `AggregateAuditingService` catches and logs exceptions from individual `IAuditingService` implementations so that an audit write failure never bubbles up to the caller and does not roll back a business operation. Audit records are best-effort; correctness of the package operation takes priority.
+</Tip>
+
+<Warning>
+**`PackageMetadata` blocks reserved nuspec elements.** On upload, `PackageMetadata` strips any element whose name appears in `RestrictedMetadataElements` (e.g., `created`, `packageHash`, `published`, `verbatimVersion`). These fields are computed server-side by the V3 catalog pipeline; allowing authors to inject them would corrupt the catalog feed.
+</Warning>

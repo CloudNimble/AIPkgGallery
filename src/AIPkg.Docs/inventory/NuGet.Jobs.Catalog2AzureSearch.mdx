@@ -1,0 +1,153 @@
+---
+title: "NuGet.Jobs.Catalog2AzureSearch"
+sidebarTitle: "Catalog2AzureSearch"
+description: "Background job that continuously tails the NuGet V3 catalog and propagates package events to the Azure Search search and hijack indexes."
+icon: "rss"
+---
+
+## Overview
+
+`NuGet.Jobs.Catalog2AzureSearch` is a continuously-running singleton Windows service that keeps the two Azure Search indexes — the "search" index and the "hijack" index — up to date by tailing the [NuGet V3 catalog resource](https://docs.microsoft.com/en-us/nuget/api/catalog-resource). Every iteration of the job loads a durable catalog cursor from Azure Blob Storage, fetches all new catalog commits since that cursor value (bounded by an optional dependency cursor), processes the changed package IDs in parallel, and then advances the cursor once all Azure Search index actions have been pushed.
+
+The job maintains a **per-package-ID version list** alongside each package in Azure Blob Storage. This version list records which versions exist and whether each is listed and SemVer-2.0.0-compliant. The version list is the source of truth used to determine which of the four search-filter variants (`Default`, `IncludePrerelease`, `IncludeSemVer2`, `IncludePrereleaseAndSemVer2`) needs to be updated for a given package, and what the "latest" version should be for each filter after the catalog event is applied.
+
+When a catalog event removes or unlists the currently indexed latest version of a package — a "downgrade latest" scenario — the job fetches fresh catalog leaf metadata from the [package registration resource](https://docs.microsoft.com/en-us/nuget/api/registration-base-url-resource) to find the new latest listed version. The job also includes a fix-up path that handles a known Azure Search service-side bug where a `Merge` operation fails with HTTP 404; in that case the affected package IDs are re-queued with full `MergeOrUpload` actions so the missing documents are recreated correctly.
+
+## Role in the System
+
+```
+NuGet V3 Catalog  ──────────►  Catalog2AzureSearch job
+(catalog0/index)               │
+                               │  reads / writes cursor.json
+                               │  reads / writes version lists
+                               ▼
+                         Azure Blob Storage
+                               │
+                               │  pushes index actions
+                               ▼
+                    ┌──────────────────────┐
+                    │  Azure Search        │
+                    │  ├── search-000      │  (per search-filter variant docs)
+                    │  └── hijack-000      │  (per normalized-version docs)
+                    └──────────────────────┘
+                               │
+                               ▼
+                    NuGet.Services.SearchService
+                    (serves search API to clients)
+```
+
+The job depends on an upstream registration cursor (`DependencyCursorUrls`) so that it does not index catalog leaves before the registration blobs needed for "downgrade latest" lookups are available. It must be bootstrapped by `NuGet.Jobs.Db2AzureSearch`, which performs the initial full population of both indexes and the version-list blobs.
+
+<CardGroup cols={2}>
+  <Card title="Catalog Tail Processing" icon="rss">
+    Polls the NuGet V3 catalog for new commits, deduplicates items to the latest leaf per package identity, and processes all changed package IDs in parallel up to `MaxConcurrentBatches` workers.
+  </Card>
+  <Card title="Dual-Index Architecture" icon="layers">
+    Produces separate document types for the "search" index (one document per package ID per search-filter variant) and the "hijack" index (one document per normalized package version), each updated with a precisely scoped partial-merge action.
+  </Card>
+  <Card title="Version List State Store" icon="database">
+    Reads and writes a per-package JSON version list in Blob Storage using ETags for optimistic concurrency. The version list drives all decisions about which search documents need updating and what the new latest version is for each search filter.
+  </Card>
+  <Card title="Resilient Error Handling" icon="shield">
+    Retries up to three times on access-condition failures from concurrent version-list writers, and applies a document fix-up path to recover from Azure Search 404-on-Merge bugs by converting failed Merge actions to MergeOrUpload with full metadata.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; delegates to `JobRunner.Run` |
+| `Job.cs` | `Job : AzureSearchJob<Catalog2AzureSearchCommand>` | Registers DI configuration sections for `Catalog2AzureSearchConfiguration`, `CommitCollectorConfiguration`, `AzureSearchJobConfiguration`, and `AzureSearchConfiguration` |
+| `Catalog2AzureSearch/Catalog2AzureSearchCommand.cs` | `Catalog2AzureSearchCommand` | Orchestrator; initializes the front (durable) and back (dependency) cursors, optionally creates blob containers and indexes, then runs the collector |
+| `Catalog2AzureSearch/AzureSearchCollectorLogic.cs` | `AzureSearchCollectorLogic` | `ICommitCollectorLogic` implementation; deduplicates catalog items per identity, fans out to `MaxConcurrentBatches` workers to build index actions, then pushes them via `IBatchPusher` with up to three retry attempts |
+| `Catalog2AzureSearch/CatalogIndexActionBuilder.cs` | `CatalogIndexActionBuilder` | Core logic; reads the version list, applies catalog changes, determines change type per search filter, fetches owners when needed, and produces `IndexActions` for both indexes |
+| `Catalog2AzureSearch/CatalogLeafFetcher.cs` | `CatalogLeafFetcher` | Resolves "downgrade latest" scenarios by consulting the package registration index and fetching catalog leaf metadata for candidate versions in parallel |
+| `Catalog2AzureSearch/DocumentFixUpEvaluator.cs` | `DocumentFixUpEvaluator` | Detects Azure Search 404-on-Merge failures and replaces the affected item list with fresh `MergeOrUpload` entries sourced from the registration and version-list data |
+| `Catalog2AzureSearch/Catalog2AzureSearchConfiguration.cs` | `Catalog2AzureSearchConfiguration` | Configuration POCO; extends `AzureSearchJobConfiguration` with `Source`, `DependencyCursorUrls`, `RegistrationsBaseUrl`, `MaxConcurrentCatalogLeafDownloads`, `HttpClientTimeout`, and `CreateContainersAndIndexes` |
+| `Catalog2AzureSearch/LatestCatalogLeaves.cs` | `LatestCatalogLeaves` | Result container returned by `CatalogLeafFetcher`; separates fetched `PackageDetailsCatalogLeaf` entries into `Available` and `Unavailable` (deleted) sets |
+| `VersionList/VersionLists.cs` | `VersionLists` | In-memory representation of a package's version list; applies `VersionListChange` events and computes the resulting `IndexChanges` for both indexes |
+| `VersionList/SearchFilters.cs` | `SearchFilters` (enum, `[Flags]`) | The four variants — `Default`, `IncludePrerelease`, `IncludeSemVer2`, `IncludePrereleaseAndSemVer2` — that correspond to the four search index documents per package ID |
+| `VersionList/SearchIndexChangeType.cs` | `SearchIndexChangeType` (enum) | Classifies the required update as `AddFirst`, `UpdateLatest`, `DowngradeLatest`, `UpdateVersionList`, or `Delete` |
+| `BatchPusher.cs` | `BatchPusher` | Queues search and hijack index actions, flushes them in batches up to `AzureSearchBatchSize`, splits oversized requests automatically, and writes updated version lists in parallel after each batch is confirmed |
+| `IndexActions.cs` | `IndexActions` | Container that pairs the list of `IndexDocumentsAction` objects for each index with the `ResultAndAccessCondition<VersionListData>` used to write the version list atomically |
+| `Scripts/Functions.ps1` | — | PowerShell helpers for installing and uninstalling the job as a Windows service via NSSM |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.AzureSearch` | All `Catalog2AzureSearch` command and logic implementations, `BatchPusher`, `IndexBuilder`, `BlobContainerBuilder`, `VersionListDataClient`, document builders, and DI registration |
+| `NuGet.Services.Metadata.Catalog` (via `Catalog/`) | `CommitCollector`, `DurableCursor`, `HttpReadCursor`, `AggregateCursor`, `MemoryCursor`, `IStorageFactory`, catalog schema definitions |
+| `NuGet.Services.V3` | `CommitCollectorHost`, `CommitCollectorUtility`, `ICollector`, `ICommitCollectorLogic`, and the V3 DI bootstrapping layer |
+
+### NuGet Package References (from `NuGet.Services.AzureSearch`)
+
+| Package | Purpose |
+|---------|---------|
+| `Azure.Search.Documents` | `SearchIndexClient`, `IndexDocumentsAction<T>`, `IndexDocumentsBatch<T>`, `RequestFailedException` — the Azure AI Search SDK used to push document batches |
+| `Azure.Identity` | `ManagedIdentityCredential`, `DefaultAzureCredential` — Managed Identity and API-key credential options for authenticating to Azure Search |
+| `Azure.Storage.Blobs` | `BlobServiceClient` — used to log storage account URIs and to build blob container clients |
+| `Microsoft.Rest.ClientRuntime` | `ServiceClientTracing` — REST call tracing infrastructure used by `ServiceClientTracingLogger` |
+| `System.Text.Json` / `System.Text.Encodings.Web` | Custom JSON serialization for index documents |
+
+## Configuration Reference
+
+```json
+{
+  "Catalog2AzureSearch": {
+    "AzureSearchBatchSize": 1000,
+    "MaxConcurrentBatches": 4,
+    "MaxConcurrentVersionListWriters": 8,
+    "MaxConcurrentCatalogLeafDownloads": 64,
+    "SearchServiceName": "<azure-search-resource-name>",
+    "SearchServiceApiKey": "<admin-key>",
+    "SearchIndexName": "search-000",
+    "HijackIndexName": "hijack-000",
+    "StorageConnectionString": "<blob-storage-connection-string>",
+    "StorageContainer": "v3-azuresearch-000",
+    "StoragePath": "",
+    "Source": "https://api.nuget.org/v3/catalog0/index.json",
+    "HttpClientTimeout": "00:10:00",
+    "DependencyCursorUrls": [
+      "https://nugetgallery.blob.core.windows.net/v3-registration5-semver1/cursor.json"
+    ],
+    "RegistrationsBaseUrl": "https://api.nuget.org/v3/registration5-gz-semver2/",
+    "GalleryBaseUrl": "https://www.nuget.org/",
+    "FlatContainerBaseUrl": "https://api.nuget.org/",
+    "CreateContainersAndIndexes": false
+  }
+}
+```
+
+## Notable Patterns and Implementation Details
+
+<Warning>
+This job is a singleton. Only one instance must run per Azure Search resource at any given time. Running multiple instances against the same resource will cause conflicting version-list ETag writes and data inconsistency.
+</Warning>
+
+<Note>
+**Search index documents are per-package-ID, per-search-filter.** A single package ID produces up to four separate search index documents — one for each `SearchFilters` variant. Each document represents the "latest" version of that package as seen by a client using that particular filter combination. The hijack index, by contrast, has one document per normalized package version across all IDs.
+</Note>
+
+<Note>
+**Version list writes use optimistic concurrency (ETags).** `BatchPusher` calls `TryReplaceAsync` on the version list blob after each confirmed Azure Search batch. If a concurrent write invalidates the ETag, the affected package IDs are returned as failures and the catalog batch is retried from the beginning for those IDs — up to three attempts before raising an exception.
+</Note>
+
+<Tip>
+**Batch splitting on HTTP 413.** `BatchPusher.IndexAsync` detects `RequestEntityTooLarge` (HTTP 413) responses and automatically splits the batch in half, recursively retrying each half. This handles cases where a small number of unusually large documents cause an otherwise valid batch to exceed the Azure Search request size limit.
+</Tip>
+
+<Note>
+**Owner data is fetched opportunistically during `AddFirst` and `UpdateLatest` changes.** `CatalogIndexActionBuilder` only calls `IDatabaseAuxiliaryDataFetcher.GetOwnersOrEmptyAsync` when at least one search document requires an `AddFirst`, `UpdateLatest`, or `DowngradeLatest` change. If the change is only `UpdateVersionList` or `Delete`, owners are omitted from the pushed document to avoid unnecessary database reads.
+</Note>
+
+<Warning>
+**The `DowngradeLatest` loop is bounded.** When a "downgrade latest" is detected, `CatalogIndexActionBuilder.GetIndexChangesAsync` iterates to fetch metadata for the new candidate latest versions. The loop is capped at `SearchFiltersCount` (4) attempts. If the loop cannot resolve all versions with metadata within that limit — which can occur when all remaining versions are unlisted or deleted — it throws `InvalidOperationException` to prevent infinite recursion.
+</Warning>
+
+<Note>
+**`CreateContainersAndIndexes` is off by default.** Setting `CreateContainersAndIndexes: true` causes the job to create the blob container and both Azure Search indexes if they do not already exist before the collector runs. This option is intended for development environments only; production indexes must be created and configured separately, typically by `Db2AzureSearch`.
+</Note>

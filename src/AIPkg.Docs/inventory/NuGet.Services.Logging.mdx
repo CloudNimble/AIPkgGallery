@@ -1,0 +1,132 @@
+---
+title: NuGet.Services.Logging
+sidebarTitle: Services.Logging
+description: Shared server-side logging library that wires Serilog and Application Insights together and provides NuGet-specific telemetry enrichers, initializers, and processors for all NuGet services.
+icon: chart-no-axes-combined
+---
+
+## Overview
+
+`NuGet.Services.Logging` is the centralized logging and telemetry infrastructure library shared across NuGet backend services and the gallery web application. It unifies two telemetry pipelines — structured logging via Serilog and metrics/traces via Azure Application Insights — into a single, consistent setup that any NuGet service can adopt with a few method calls. The entry point is `LoggingSetup`, which builds a pre-configured Serilog `LoggerConfiguration` and produces an `ILoggerFactory` wired to both the Serilog pipeline and, when an instrumentation key is provided, the Application Insights sink. `System.Diagnostics.Trace` listeners are also redirected into Serilog so that legacy trace-based logging in third-party libraries flows through the same pipeline.
+
+The library also provides a complete Application Insights telemetry customization layer. `ApplicationInsights.Initialize` constructs a `TelemetryConfiguration` that deliberately avoids the deprecated `TelemetryConfiguration.Active` singleton and instead returns an `ApplicationInsightsConfiguration` object — a disposable wrapper holding both the `TelemetryConfiguration` and a `DiagnosticsTelemetryModule` — that callers own and manage explicitly. Six telemetry initializers and one Serilog enricher stamp every telemetry item and log event with contextual metadata including machine name, cloud role, deployment ID, deployment label, job name, instance name, and build-time assembly metadata (branch, commit ID, build date). Two telemetry processors — one for requests and one for exceptions — adjust Application Insights behavior to match NuGet's specific conventions.
+
+The project targets both `net472` and `netstandard2.0`. The `ExceptionTelemetryProcessor` is excluded from the `netstandard2.0` build because it depends on `System.Web.HttpException`, which is only available on .NET Framework.
+
+## Role in System
+
+`NuGet.Services.Logging` is a leaf dependency consumed by higher-level service projects. It references only `NuGet.Services.Contracts` (for the `ITelemetryClient` interface) and third-party packages, so it introduces no circular dependencies.
+
+```
+NuGet.Services.Contracts   (defines ITelemetryClient interface)
+        |
+        v
+NuGet.Services.Logging     (implements ITelemetryClient, configures Serilog + App Insights)
+        |
+        +-- NuGetGallery                  (gallery web app)
+        |
+        +-- NuGetGallery.Services         (gallery service layer)
+        |
+        +-- NuGet.Jobs.Common             (shared background job infrastructure)
+        |
+        +-- NuGet.Services.Metadata.Catalog  (catalog processing pipeline)
+```
+
+<CardGroup cols={2}>
+  <Card title="Unified Logging Bootstrap" icon="play">
+    `LoggingSetup.CreateDefaultLoggerConfiguration` and `CreateLoggerFactory` provide a one-call setup that enables Serilog enrichers (machine name, process ID, log context, assembly metadata), an optional console sink, an optional Application Insights sink, and a `SerilogTraceListener` that captures `System.Diagnostics.Trace` output.
+  </Card>
+  <Card title="Application Insights Initialization" icon="settings">
+    `ApplicationInsights.Initialize` produces a self-contained `ApplicationInsightsConfiguration` that avoids the deprecated `TelemetryConfiguration.Active` singleton, wires up `TelemetryModules` from `ApplicationInsights.config` if present, and configures a `DiagnosticsTelemetryModule` with an optional heartbeat interval.
+  </Card>
+  <Card title="Telemetry Enrichers and Initializers" icon="tag">
+    Six `ITelemetryInitializer` implementations stamp every Application Insights telemetry item with NuGet-specific context: machine name, cloud role/instance, deployment ID, deployment label, job name and instance name, and build-time assembly metadata (branch, commit, build date).
+  </Card>
+  <Card title="Telemetry Processors" icon="filter">
+    `RequestTelemetryProcessor` allows specific HTTP response codes to be declared successful regardless of Application Insights defaults. `ExceptionTelemetryProcessor` (net472 only) converts `HttpException` items with status codes below 500 into trace telemetry to reduce noise in exception analysis.
+  </Card>
+  <Card title="ITelemetryClient Wrapper" icon="layers">
+    `TelemetryClientWrapper` implements `ITelemetryClient` (from `NuGet.Services.Contracts`) by delegating to the Application Insights `TelemetryClient`. All calls are wrapped in try/catch so that telemetry failures never propagate to the caller.
+  </Card>
+  <Card title="Duration Metrics" icon="timer">
+    `DurationMetric` and `DurationMetric<TProperties>` are `IDisposable` types that start a `Stopwatch` on construction and emit an elapsed-seconds metric via `ITelemetryClient` on disposal, enabling `using`-block timing of any operation. The extension method `TrackDuration` on `ITelemetryClient` provides a fluent API for creating them.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `LoggingSetup.cs` | `LoggingSetup` | Static factory with `CreateDefaultLoggerConfiguration` (Serilog setup with enrichers) and `CreateLoggerFactory` (wires Serilog to `ILoggerFactory` and optionally to Application Insights; adds `SerilogTraceListener` to `System.Diagnostics.Trace`). |
+| `ApplicationInsights.cs` | `ApplicationInsights` | Static factory with `Initialize(string)` and `Initialize(string, TimeSpan)` overloads. Creates a `TelemetryConfiguration` via `TelemetryConfiguration.CreateDefault()`, registers `TelemetryContextInitializer`, initializes all `TelemetryModules` from config, and sets up `DiagnosticsTelemetryModule`. |
+| `ApplicationInsightsConfiguration.cs` | `ApplicationInsightsConfiguration` | Disposable wrapper returned by `ApplicationInsights.Initialize`. Holds `TelemetryConfiguration` and `DiagnosticsTelemetryModule` as public properties; `Dispose` flushes both in order. |
+| `TelemetryClientWrapper.cs` | `TelemetryClientWrapper` | Implements `ITelemetryClient` by delegating to `TelemetryClient`. All `TrackException`, `TrackMetric`, and `Flush` calls suppress exceptions so telemetry errors are never fatal. The timestamped `TrackMetric` overload constructs a `MetricTelemetry` directly to preserve the caller-supplied timestamp. |
+| `DurationMetric.cs` | `DurationMetric`, `DurationMetric<TProperties>` | `IDisposable` helpers that record operation duration in seconds. The generic variant accepts a typed properties object and a serialization delegate, evaluated lazily on disposal. |
+| `NuGetAssemblyMetadata.cs` | `NuGetAssemblyMetadata` | Reads `AssemblyInformationalVersionAttribute` and `AssemblyMetadataAttribute` entries (`Branch`, `CommitId`, `BuildDateUtc`) from a given `Assembly` at construction time. |
+| `NuGetAssemblyMetadataEnricher.cs` | `NuGetAssemblyMetadataEnricher` | Serilog `ILogEventEnricher` that stamps log events with a structured `NuGetStartingAssemblyMetadata` property. Caches the `LogEventProperty` after first use and skips enrichment when no metadata is present. |
+| `Extensions/TelemetryClientExtensions.cs` | `TelemetryClientExtensions` | Extension methods on `ITelemetryClient` for creating `DurationMetric` instances via `TrackDuration`. |
+| `Extensions/NuGetAssemblyMetadataEnricherExtensions.cs` | `NuGetAssemblyMetadataEnricherExtensions` | Extends Serilog's `LoggerEnrichmentConfiguration` with `WithNuGetAssemblyMetadata(Assembly)` for use in `LoggerConfiguration` fluent chains. |
+| `Extensions/DiagnosticsTelemetryModuleExtensions.cs` | `DiagnosticsTelemetryModuleExtensions` | Adds `AddOrSetHeartbeatProperty` to `DiagnosticsTelemetryModule`, which tries `AddHeartbeatProperty` first and falls back to `SetHeartbeatProperty` if the property already exists. |
+| `TelemetryInitializers/TelemetryContextInitializer.cs` | `TelemetryContextInitializer` | Sets `Device.Id`, `Cloud.RoleInstance`, `Device.OperatingSystem`, `Cloud.RoleName`, and `Component.Version` on every telemetry item from `Environment.MachineName` and the entry assembly name/version. All reads are guarded with try/catch. |
+| `TelemetryInitializers/AzureWebAppTelemetryInitializer.cs` | `AzureWebAppTelemetryInitializer` | Strips the `-staging` suffix from `Cloud.RoleName` so that production and staging deployment slots are treated as the same role in Application Insights. Must be added last in the initializer list to override the built-in Azure Web App initializer. |
+| `TelemetryInitializers/SupportPropertiesTelemetryInitializer.cs` | `SupportPropertiesTelemetryInitializer` | Abstract base for initializers that add a single name/value string property to every `ISupportProperties` telemetry item. Skips items that already contain the property to handle repeated initializer invocations correctly. |
+| `TelemetryInitializers/MachineNameTelemetryInitializer.cs` | `MachineNameTelemetryInitializer` | Extends `SupportPropertiesTelemetryInitializer` to add `MachineName` from `Environment.MachineName`; returns empty string on failure. |
+| `TelemetryInitializers/DeploymentIdTelemetryEnricher.cs` | `DeploymentIdTelemetryEnricher` | Extends `SupportPropertiesTelemetryInitializer` to add `CloudDeploymentId` from a caller-supplied value. |
+| `TelemetryInitializers/DeploymentLabelEnricher.cs` | `DeploymentLabelEnricher` | Extends `SupportPropertiesTelemetryInitializer` to add `DeploymentLabel` from a caller-supplied value. |
+| `TelemetryInitializers/JobPropertiesTelemetryInitializer.cs` | `JobPropertiesTelemetryInitializer` | Stamps every `ISupportProperties` telemetry item with `JobName`, `InstanceName`, and zero or more caller-supplied global dimensions. |
+| `TelemetryInitializers/KnownOperationNameEnricher.cs` | `KnownOperationNameEnricher` | For `RequestTelemetry` items, checks whether the operation name appears in a caller-supplied allow-list and, if so, copies it to a `KnownOperation` property to enable low-cardinality aggregation. |
+| `TelemetryInitializers/NuGetAssemblyMetadataTelemetryInitializer.cs` | `NuGetAssemblyMetadataTelemetryInitializer` | Application Insights counterpart to `NuGetAssemblyMetadataEnricher`. Stamps `ISupportProperties` telemetry items with `AssemblyInformationalVersion`, `Branch`, `CommitId`, and `BuildDateUtc` properties, skipping any that are already set. |
+| `TelemetryProcessors/RequestTelemetryProcessor.cs` | `RequestTelemetryProcessor` | Allows callers to populate `SuccessfulResponseCodes` with HTTP status codes that should be marked `Success = true` on `RequestTelemetry` regardless of what Application Insights would decide by default. |
+| `TelemetryProcessors/ExceptionTelemetryProcessor.cs` | `ExceptionTelemetryProcessor` (net472 only) | Intercepts `ExceptionTelemetry` wrapping an `HttpException` with a status code below 500 and converts it to a `TraceTelemetry` at `Warning` severity, preserving all context properties and the serialized exception JSON. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.ApplicationInsights` | Core Application Insights SDK: `TelemetryClient`, `TelemetryConfiguration`, `ITelemetryInitializer`, `ITelemetryProcessor`, `DiagnosticsTelemetryModule`, and all telemetry data contract types. |
+| `Microsoft.Extensions.Logging` | `ILoggerFactory` abstraction that `LoggingSetup.CreateLoggerFactory` returns, enabling integration with ASP.NET Core and generic host DI. |
+| `Serilog.Extensions.Logging` | Bridges Serilog into `Microsoft.Extensions.Logging` via `loggerFactory.AddSerilog()`. |
+| `Serilog.Sinks.ApplicationInsights` | Serilog sink that forwards structured log events to Application Insights as trace telemetry. |
+| `Serilog.Sinks.Console` | Optional console sink enabled by `withConsoleLogger = true` in `CreateDefaultLoggerConfiguration`. |
+| `Serilog.Enrichers.Environment` | Provides `Enrich.WithMachineName()` used in `CreateDefaultLoggerConfiguration`. |
+| `Serilog.Enrichers.Process` | Provides `Enrich.WithProcessId()` used in `CreateDefaultLoggerConfiguration`. |
+| `SerilogTraceListener` | A `TraceListener` implementation that routes `System.Diagnostics.Trace` calls into Serilog; added by `CreateLoggerFactory` if not already registered. |
+| `Newtonsoft.Json` | Used in `ExceptionTelemetryProcessor` (net472) to serialize `HttpException` details into the `exception` property of converted trace telemetry. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Contracts` | Provides the `ITelemetryClient` interface that `TelemetryClientWrapper` implements and that `DurationMetric` and `TelemetryClientExtensions` accept. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+`ApplicationInsights.Initialize` uses `TelemetryConfiguration.CreateDefault()` rather than `new TelemetryConfiguration()` or `TelemetryConfiguration.Active`. `CreateDefault()` reads the `ApplicationInsights.config` file if one is present, preserving any module or channel configuration defined there, while still returning a fresh instance that the caller owns. `TelemetryConfiguration.Active` is deprecated and is never set.
+</Note>
+
+<Note>
+All six telemetry initializers that extend `SupportPropertiesTelemetryInitializer` or implement `ITelemetryInitializer` directly use `ISupportProperties` instead of the deprecated `telemetry.Context.Properties` API. This is required because the context-level properties bag is marked obsolete in newer Application Insights SDK versions, and some telemetry types (such as `MetricTelemetry`) do not populate it at all.
+</Note>
+
+<Warning>
+`ExceptionTelemetryProcessor` is compiled only for `net472`. It references `System.Web.HttpException` and is excluded from the `netstandard2.0` target via a conditional `<Compile Remove>` in the project file. Services running on .NET Core or .NET 5+ cannot use this processor.
+</Warning>
+
+<Warning>
+`AzureWebAppTelemetryInitializer` must be registered last in the Application Insights telemetry initializer list. The Azure Web App Role Environment initializer (registered automatically by the SDK) sets `Cloud.RoleName` to the hostname, which includes the `-staging` suffix for staging slots. If `AzureWebAppTelemetryInitializer` runs before that initializer, the suffix will not yet be present and will not be stripped.
+</Warning>
+
+<Tip>
+`KnownOperationNameEnricher` addresses a cardinality problem specific to NuGet Gallery's web.config-based URL rewrites: before ASP.NET resolves a route, the operation name can be the verbatim URL path including filled-in parameters, making it unsuitable as a metric dimension. By copying only allow-listed operation names to the `KnownOperation` property, dashboards and alerts can safely group by `KnownOperation` without risking high-cardinality aggregation issues.
+</Tip>
+
+<Tip>
+`DurationMetric` and `DurationMetric<TProperties>` are designed for `using` blocks. The timer starts in the constructor and the metric is emitted in `Dispose`, so the measured duration equals the lifetime of the `using` scope. The generic variant defers property serialization to disposal time, which means properties on the object can be mutated during the operation and the final values will be captured in the emitted metric.
+</Tip>
+
+<Note>
+The assembly metadata stamped by `NuGetAssemblyMetadataEnricher` and `NuGetAssemblyMetadataTelemetryInitializer` (`Branch`, `CommitId`, `BuildDateUtc`) is injected into the entry assembly at build time by a PowerShell script in the NuGetGallery build pipeline via `AssemblyMetadataAttribute`. When running locally without a CI build, these attributes will typically be absent and the enrichers will silently skip stamping.
+</Note>

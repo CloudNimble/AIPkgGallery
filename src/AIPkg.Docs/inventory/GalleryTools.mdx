@@ -1,0 +1,107 @@
+---
+title: GalleryTools
+sidebarTitle: GalleryTools
+description: A command-line executable providing manual one-time and maintenance operations for the NuGet Gallery database and infrastructure.
+icon: wrench
+---
+
+## Overview
+
+GalleryTools is a .NET Framework 4.7.2 console application that exposes a suite of administrative subcommands for performing maintenance tasks against the NuGet Gallery SQL database and related Azure storage. It is not a background job or service — operators run it on demand, passing explicit flags to control its behavior. Configuration is supplied via `App.config` (database connection string, Azure Storage connection strings, and optional Key Vault settings).
+
+The project's primary workload is the family of **backfill commands**, which retroactively populate database columns from package data (`.nuspec` or `.nupkg` files) stored in the NuGet V3 flat container. Because these operations can span the entire package catalog, the backfill base class implements a cursor-based checkpoint system using local text files (`cursor.txt` and `monitoring_cursor.txt`) so a run can be stopped and resumed safely. Progress and errors are written to `errors.txt` in the working directory.
+
+Beyond backfill, the tool provides utilities for hashing legacy API keys, bulk-reflowing package metadata, applying organization tenant policies, verifying API key hashes, correcting `IsLatest` flags, and bulk-managing reserved namespaces. Each command is registered in `Program.cs` and resolves its dependencies from an Autofac container built against the same `DefaultDependenciesModule` used by the main gallery application.
+
+## Role in System
+
+```
+Operator (CLI)
+     |
+     v
+GalleryTools.exe <command> [options]
+     |
+     +---> NuGetGallery SQL Database (EntitiesContext / EF6)
+     |
+     +---> NuGet V3 Flat Container (HTTP: .nuspec / .nupkg)
+     |         (discovered via NuGet V3 service index)
+     |
+     +---> NuGetGallery & GitHubVulnerabilities2Db assemblies
+               (shared services: PackageService, SecurityPolicyService,
+                ReservedNamespaceService, ReflowPackageService, etc.)
+```
+
+GalleryTools is a pure operator tool. It has no inbound network surface, no scheduler, and no Azure WebJob harness. All commands are synchronous from the operator's perspective (blocking `GetAwaiter().GetResult()` calls wrap async logic) and are intended to be run by a developer or site reliability engineer against a target environment.
+
+<CardGroup cols={2}>
+  <Card title="Backfill Framework" icon="database">
+    An abstract generic base class (`BackfillCommand<TMetadata>`) handles cursor management, CSV serialization, parallel HTTP downloads, and batched EF6 commits. Concrete subcommands override only metadata extraction and DB update logic.
+  </Card>
+  <Card title="Cursor-Based Resumability" icon="rotate-ccw">
+    All long-running operations write a locked `cursor.txt` after each batch and an unlocked `monitoring_cursor.txt` for out-of-band progress inspection. On restart, the cursor is read and processing continues from where it left off.
+  </Card>
+  <Card title="V3 Service Discovery" icon="search">
+    The `ServiceDiscoveryClient` fetches the NuGet V3 service index JSON and resolves the `PackageBaseAddress/3.0.0` endpoint at runtime. The resolved URL is used to construct `.nuspec` and `.nupkg` download URIs.
+  </Card>
+  <Card title="Autofac DI" icon="layers">
+    Commands bootstrap an Autofac container using `DefaultDependenciesModule` from the main NuGetGallery assembly. This gives commands access to the same services (package service, security policy service, etc.) as the gallery itself.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; registers all subcommands with `Microsoft.Extensions.CommandLineUtils` and dispatches execution |
+| `Commands/BackfillCommand.cs` | `BackfillCommand<TMetadata>` (abstract) | Generic base class implementing the full collect/update/updateSpecific lifecycle, cursor management, CSV I/O, parallel downloads, and batched DB commits |
+| `Commands/BackfillRepositoryMetadataCommand.cs` | `BackfillRepositoryMetadataCommand` | Backfills `RepositoryUrl` and `RepositoryType` columns from `.nuspec` repository metadata |
+| `Commands/BackfillDevelopmentDependencyMetadataCommand.cs` | `BackfillDevelopmentDependencyCommand` | Backfills the `DevelopmentDependency` boolean flag from nuspec |
+| `Commands/BackfillTfmMetadataCommand.cs` | `BackfillTfmMetadataCommand` | Backfills `SupportedFrameworks` by inspecting `.nupkg` file lists; uses `MetadataSourceType.Nupkg` and `Knapcode.MiniZip` for HTTP range-request ZIP reading |
+| `Commands/HashCommand.cs` | `HashCommand` | One-time migration: upgrades active V1/V2 API key credentials to the V3 hashed format in batches of 100; supports `--whatif` mode |
+| `Commands/ReflowCommand.cs` | `ReflowCommand` | Bulk re-triggers the gallery reflow operation for a supplied list of packages with configurable batch size and sleep duration between batches |
+| `Commands/ApplyTenantPolicyCommand.cs` | `ApplyTenantPolicyCommand` | Applies the `RequireOrganizationTenantPolicy` (Microsoft Entra ID tenant restriction) to a list of organization accounts |
+| `Commands/VerifyApiKeyCommand.cs` | `VerifyApiKeyCommand` | Offline verification tool: checks whether a clear-text API key matches one or more hashed credential values without touching the database |
+| `Commands/UpdateIsLatestCommand.cs` | `UpdateIsLatestCommand` | Iterates all package registrations and calls `UpdateIsLatestAsync` to correct `IsLatest`, `IsLatestStable`, and SemVer2 equivalents; requires an explicit connection string argument |
+| `Commands/ReserveNamespacesCommand.cs` | `ReserveNamespacesCommand` | Bulk adds or removes package ID namespace reservations from a text file; supports prefix (`*`) vs. exact-match semantics and a `--unreserve` rollback flag |
+| `Utils/ServiceDiscoveryClient.cs` | `ServiceDiscoveryClient` | Lightweight NuGet V3 service index client with a 5-minute in-memory cache; resolves resource endpoints by `@type` |
+| `App.config` | — | Operator-supplied configuration: SQL connection string, Azure Storage connection strings, Key Vault settings |
+| `Gallery.GalleryTools.nuspec` | — | NuSpec for packaging the tool's compiled output as a deployable artifact |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Knapcode.MiniZip` | Reads `.nupkg` ZIP central directory entries via HTTP range requests, avoiding full package download during TFM backfill |
+| `CsvHelper` | Serializes and deserializes `PackageMetadata` records to/from the intermediate flat files used by the backfill collect and update phases |
+| `Microsoft.Extensions.CommandLineUtils` | Provides the command-line application model, subcommand registration, and option parsing used by `Program.cs` and all commands |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGetGallery` | Provides `EntitiesContext`, `DefaultDependenciesModule`, and all gallery domain services (`PackageService`, `ReflowPackageService`, `SecurityPolicyService`, `ReservedNamespaceService`, `CorePackageService`, authentication infrastructure, etc.) |
+| `GitHubVulnerabilities2Db` | Referenced as a project dependency; makes its Autofac modules available for container registration |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The backfill commands use a two-phase workflow intentionally separated into distinct CLI invocations. The `-c` (collect) phase writes metadata to a CSV file; the `-u` (update) phase reads it and applies DB changes. The README explicitly warns against combining both phases in a single production run because the job has been observed to hang on large datasets.
+</Note>
+
+<Note>
+The HTTP client used by `BackfillCommand` sets a custom `User-Agent` header that matches the pattern skipped by the NuGet statistics ingestion pipeline (`AppInsights` suffix). This ensures that millions of package file downloads during a backfill run are not counted as real user traffic in download statistics.
+</Note>
+
+<Warning>
+`UpdateIsLatestCommand` loads all package registrations into memory in a single `ToList()` call before iterating. The command's own description warns operators to create a database backup before running it, as it commits a change per registration without a dry-run mode.
+</Warning>
+
+<Tip>
+All file-based progress mechanisms (`cursor.txt`, `.completed`, `.progress`) allow any command to be safely interrupted and restarted. The backfill cursor is a locked file handle held for the duration of the run; `monitoring_cursor.txt` is written unlocked so operators can `cat` it to observe progress without interfering with the job.
+</Tip>
+
+<Note>
+`BackfillTfmMetadataCommand` overrides `SourceType` to `MetadataSourceType.Nupkg`, which triggers the `FetchMetadataAsync` path. This uses `Knapcode.MiniZip`'s `HttpZipProvider` to read only the ZIP central directory over HTTP (range requests), then passes the file list to `IPackageService.GetSupportedFrameworks`. Malformed portable TFMs are silently skipped at two separate try/catch boundaries to maximize yield from the catalog.
+</Note>

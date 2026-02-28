@@ -1,0 +1,123 @@
+---
+title: GitHubVulnerabilities2v3
+sidebarTitle: GitHubVulnerabilities2v3
+description: Background job that reads GitHub Advisory Database vulnerability data via GraphQL and publishes it as NuGet V3 vulnerability JSON feeds to Azure Blob Storage.
+icon: shield-check
+---
+
+## Overview
+
+`GitHubVulnerabilities2v3` is a console EXE background job that polls the GitHub Advisory Database via GitHub's v4 GraphQL API and produces a set of publicly accessible JSON files — consumed by the NuGet V3 protocol — that describe which NuGet packages have known security vulnerabilities. The output is written to an Azure Blob Storage container (`v3-vulnerabilities` by default) and structured as an index plus base/update pair that NuGet clients can efficiently fetch and cache.
+
+The job is cursor-driven: a `DurableCursor` stored as a `cursor.json` blob in Azure Blob Storage tracks the last-processed `DateTimeOffset`. On each run the job checks whether the cursor is stale (older than `DaysBeforeBaseStale`, default 30 days). If it is stale, the cursor is reset to Unix epoch, causing the next run to perform a full regeneration of the base feed. Otherwise the job performs an incremental update, appending only new/changed advisories to an update file while leaving the base file intact.
+
+The output storage layout follows an index-plus-base-plus-update pattern aligned with the NuGet V3 vulnerability resource specification. The index file (`index.json`) points to the current `vulnerability.base.json` and `vulnerability.update.json` blobs, which are stored under timestamp-named folders so that old URLs remain addressable. All output files can be gzip-compressed (controlled by `GzipFileContent`, default `true`) and carry configurable HTTP `Cache-Control` headers.
+
+## Role in System
+
+```
+GitHub Advisory DB (GraphQL API)
+         │
+         ▼
+  AdvisoryQueryService          ← paginated GraphQL polling (up to 100 advisories/page)
+  AdvisoryQueryBuilder          ← builds securityAdvisories / securityAdvisory queries
+         │
+         ▼
+  AdvisoryCollector             ← cursor-gated loop; drives query + ingest
+         │
+         ▼
+  AdvisoryIngestor              ← maps SecurityAdvisory → PackageVulnerability
+  GitHubVersionRangeParser      ← converts GitHub range syntax to NuGet VersionRange
+         │
+         ▼
+  BlobStorageVulnerabilityWriter
+         │
+         ├── RunMode.Update      → writes vulnerability.update.json; updates index.json
+         └── RunMode.Regenerate  → writes vulnerability.base.json + new update stub; rewrites index.json
+         │
+         ▼
+  Azure Blob Storage (v3-vulnerabilities container)
+  ├── index.json
+  ├── {timestamp}/vulnerability.base.json
+  └── {timestamp}/{timestamp}/vulnerability.update.json
+```
+
+<CardGroup cols={2}>
+  <Card title="Data Source" icon="github">
+    GitHub Advisory Database polled via the v4 GraphQL API using a Bearer token and a configurable `User-Agent`.
+  </Card>
+  <Card title="Data Sink" icon="cloud">
+    Azure Blob Storage — publicly readable V3 JSON feeds consumed by NuGet clients and tooling.
+  </Card>
+  <Card title="Cursor Storage" icon="clock">
+    A `cursor.json` blob tracks the last-processed timestamp. Stale cursors (older than 30 days by default) trigger a full regeneration run.
+  </Card>
+  <Card title="Deployment" icon="server">
+    Packaged as a NuGet `.nuspec` and installed as a Windows service via NSSM with automatic restart on failure.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; creates `Job` and delegates to `JobRunner.Run()` |
+| `Job.cs` | `Job` | Main job class; wires DI, determines run mode via cursor staleness check, and calls `IAdvisoryCollector.ProcessAsync()` |
+| `Configuration/GitHubVulnerabilities2v3Configuration.cs` | `GitHubVulnerabilities2v3Configuration` | Extends `GraphQLQueryConfiguration`; adds blob/container names, cache headers, gzip flag, and `DaysBeforeBaseStale` |
+| `Extensions/BlobStorageVulnerabilityWriter.cs` | `BlobStorageVulnerabilityWriter` | Accumulates vulnerabilities in memory, then on `FlushAsync` either performs an update or full regeneration to blob storage |
+| `Extensions/RunMode.cs` | `RunMode` (enum) | `None`, `Regenerate`, or `Update` — drives which write path `BlobStorageVulnerabilityWriter` executes |
+| `Entities/Advisory.cs` | `Advisory` | JSON output entity representing a single advisory (url, severity, versions) per package |
+| `Entities/IndexEntry.cs` | `IndexEntry` | JSON output entity for one entry in `index.json` (name, id URL, updated timestamp, comment) |
+| `Telemetry/ITelemetryService.cs` | `ITelemetryService` | Interface for emitting metrics for update runs, regeneration runs, and special-case triggers |
+| `Telemetry/TelemetryService.cs` | `TelemetryService` | Implements `ITelemetryService` via `ITelemetryClient`; emits `GitHubVulnerability2v3.*` named metrics |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `net472` | Target framework — full .NET Framework |
+| `Autofac` | DI container and adapter registrations |
+| `Azure.Identity` | `ManagedIdentityCredential` for blob storage authentication |
+| `Azure.Storage.Blobs` | `BlobServiceClientFactory` / `AzureStorageFactory` for writing output blobs |
+| `Newtonsoft.Json` | Serialization of all JSON output files and GraphQL query payloads |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | Base `JsonConfigurationJob`, `JobRunner`, configuration bootstrapping |
+| `NuGet.Services.Cursor` | `DurableCursor` / `ReadWriteCursor<DateTimeOffset>` — blob-backed watermark for incremental processing |
+| `NuGet.Services.GitHub` | GraphQL querying (`QueryService`, `AdvisoryQueryBuilder`, `AdvisoryQueryService`), ingestion pipeline (`AdvisoryCollector`, `AdvisoryIngestor`, `GitHubVersionRangeParser`), and the `IVulnerabilityWriter` abstraction |
+| `NuGetGallery.Core` | `PackageVulnerability`, `VulnerablePackageVersionRange`, `AzureStorage`, `StorageFactory` |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Two-phase output: base + update.** The V3 vulnerability feed is split into a stable `vulnerability.base.json` (the full snapshot, refreshed at most every 30 days) and a lightweight `vulnerability.update.json` (incremental changes since the last base). The `index.json` points to the current URLs of both files. NuGet clients can cache the base aggressively and only poll the smaller update file on subsequent checks.
+</Note>
+
+<Note>
+**Cursor staleness triggers full regeneration.** In `Job.Run()`, if `cursor.Value + DaysBeforeBaseStale <= UtcNow`, the cursor is reset to Unix epoch (`DateTimeOffset.FromUnixTimeSeconds(0)`) before the collector runs. The collector then fetches all advisories from the beginning of time, and `BlobStorageVulnerabilityWriter` detects the reset state and runs `RunMode.Regenerate` instead of `RunMode.Update`.
+</Note>
+
+<Warning>
+**Special-case deduplication may force an unexpected regeneration.** `BlobStorageVulnerabilityWriter.ShouldRegenerateForSpecialCase` compares advisory URLs in the incoming update against the existing `vulnerability.base.json`. If any URL appears in both (indicating a re-published advisory), the cursor is reset to `DateTimeOffset.MinValue` and the method returns `true`, aborting the current update run. The next scheduled run then performs a full regeneration. The code comments acknowledge this as a known limitation that should eventually be resolved.
+</Warning>
+
+<Note>
+**Version range translation.** GitHub's advisory format expresses affected version ranges as space-separated `symbol version` pairs (e.g., `>= 1.0.0, < 2.0.0`). `GitHubVersionRangeParser` strips commas and parses the pairs into a NuGet `VersionRange`, which is then serialized to NuGet's normalized range notation for storage in the output JSON.
+</Note>
+
+<Tip>
+**`HttpClient` is registered as `ExternallyOwned()`.** The `HttpClient` instance is created as a field on `Job` and registered with Autofac using `.ExternallyOwned()` to prevent Autofac from disposing it when the container is torn down. This is a deliberate fix for a production issue (NuGetGallery#9194) where premature disposal caused failed requests late in a run.
+</Tip>
+
+<Note>
+**Managed Identity authentication.** The `BlobServiceClientFactory` is constructed with a `ManagedIdentityCredential` using the client ID read from `Constants.ManagedIdentityClientIdKey` in configuration. No storage connection-string secrets are required in production environments.
+</Note>
+
+<Note>
+**Windows service packaging via NSSM.** The `.nuspec` bundles the compiled `net472` binaries alongside `nssm.exe` and PowerShell pre/post-deploy scripts. Deployment uses Octopus Deploy parameters to uninstall the previous service instance and install the new one, configured for automatic restart on failure with a 5-second delay and a 30-second reset window.
+</Note>

@@ -1,0 +1,114 @@
+---
+title: NuGet.Services.Status.Table
+sidebarTitle: Status Table
+description: Azure Table Storage entity contracts for persisting NuGet service status data — incidents, events, messages, and manual overrides.
+icon: table
+---
+
+# NuGet.Services.Status.Table
+
+## Overview
+
+`NuGet.Services.Status.Table` is a **contract library** that defines the Azure Table Storage entity model used to persist NuGet service status data. It provides the strongly-typed `ITableEntity` implementations that back the NuGet status page infrastructure, representing the full lifecycle of a service disruption: from individual **incidents** sourced from an external incident API, through **incident groups** that aggregate them per component, up to user-visible **events** with human-readable **messages**. A separate **manual change** subsystem allows operators to create, edit, or delete events and messages outside of the automated pipeline.
+
+The library is intentionally thin — no business logic, no storage clients — just serializable entity shapes that can be shared across the services that read from and write to the status tables.
+
+## Role in System
+
+<CardGroup cols={2}>
+  <Card title="Status Aggregation Pipeline" icon="arrow-up-right">
+    Downstream services (e.g. a status job) read incidents from an external API, write `IncidentEntity` rows, and aggregate them into `IncidentGroupEntity` and `EventEntity` rows using the contracts defined here.
+  </Card>
+  <Card title="Status Page Backend" icon="globe">
+    The NuGet Gallery status page reads `EventEntity` and `MessageEntity` rows from Azure Table Storage to render current and historical service health to users.
+  </Card>
+  <Card title="Manual Override Queue" icon="pen-line">
+    Operators write `ManualStatusChangeEntity` subclass rows (Add/Edit/Delete for events and messages) into a table; a processor reads those rows and applies the requested mutations.
+  </Card>
+  <Card title="Shared Contract" icon="link">
+    By depending on this single project both the writer (status aggregation job) and the reader (Gallery/API) agree on partition keys, row key schemes, and property names without coupling implementation.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|---|---|---|
+| `IComponentAffectingEntity.cs` | `IComponentAffectingEntity` | Core interface: path to affected component, integer status, start/end times, and `IsActive` flag |
+| `ComponentAffectingEntity.cs` | `ComponentAffectingEntity` | Base `ITableEntity` implementation of `IComponentAffectingEntity`; stores `AffectedComponentStatus` as `int` due to Azure SDK enum limitation |
+| `IChildEntity.cs` | `IChildEntity<TParent>` | Interface for many-to-one parent linkage via `ParentRowKey` and `IsLinked` |
+| `ChildEntity.cs` | `ChildEntity<TParent>` | Base `ITableEntity` implementation of `IChildEntity<TParent>`; `IsLinked` is a computed, read-only-intent property with an empty setter |
+| `IAggregatedComponentAffectingEntity.cs` | `IAggregatedComponentAffectingEntity<TAggregation>` | Combines `IChildEntity<TAggregation>` and `IComponentAffectingEntity` — an entity that is both incident-like and child-linked |
+| `AggregatedComponentAffectingEntity.cs` | `AggregatedComponentAffectingEntity<TAggregation>` | Concrete base combining `ComponentAffectingEntity` with parent linkage via a private `ChildEntity<TAggregation>` delegate |
+| `EventEntity.cs` | `EventEntity` | Top-level user-visible downtime record; partition `"events"`; row key = `{safeComponentPath}_{startTime:o}` |
+| `IncidentGroupEntity.cs` | `IncidentGroupEntity` | Aggregates all `IncidentEntity` rows for one component during an event; partition `"groups"`; parent is `EventEntity` |
+| `IncidentEntity.cs` | `IncidentEntity` | Single incident sourced from the incident API; partition `"incidents"`; row key includes the external incident API ID; parent is `IncidentGroupEntity` |
+| `MessageEntity.cs` | `MessageEntity` | User-facing status page message correlated to an `EventEntity`; partition `"messages"`; typed by `MessageType` |
+| `MessageType.cs` | `MessageType` (enum) | `Manual` (0), `Start` (1), `End` (2) — why a message was posted |
+| `CursorEntity.cs` | `CursorEntity` | Stores a named `DateTime` watermark used by processing jobs to track progress; partition `"cursors"` |
+| `Manual/ManualStatusChangeEntity.cs` | `ManualStatusChangeEntity` | Base manual-change record; partition `"manual"`; row key is a new `Guid` per change; typed by `ManualStatusChangeType` |
+| `Manual/ManualStatusChangeType.cs` | `ManualStatusChangeType` (enum) | `AddStatusEvent` (0), `EditStatusEvent` (1), `DeleteStatusEvent` (2), `AddStatusMessage` (3), `EditStatusMessage` (4), `DeleteStatusMessage` (5) |
+| `Manual/AddStatusEventManualChangeEntity.cs` | `AddStatusEventManualChangeEntity` | Carries component path, status, initial message contents, and active flag for creating a new event |
+| `Manual/EditStatusEventManualChangeEntity.cs` | `EditStatusEventManualChangeEntity` | Carries fields to mutate an existing event |
+| `Manual/DeleteStatusEventManualChangeEntity.cs` | `DeleteStatusEventManualChangeEntity` | Marks an event for deletion |
+| `Manual/AddStatusMessageManualChangeEntity.cs` | `AddStatusMessageManualChangeEntity` | Carries message contents and type for appending a message to an event |
+| `Manual/EditStatusMessageManualChangeEntity.cs` | `EditStatusMessageManualChangeEntity` | Carries updated message contents |
+| `Manual/DeleteStatusMessageManualChangeEntity.cs` | `DeleteStatusMessageManualChangeEntity` | Marks a message for deletion |
+| `Utility.cs` | `Utility` (internal) | `ToRowKeySafeComponentPath()` — replaces the `/` component path divider with `_` so paths are safe for use as Azure Table row key segments |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---|---|
+| `Azure.Data.Tables` | `ITableEntity`, `ETag`, table storage serialization contracts |
+| `Azure.Core` | Core Azure SDK primitives (`ETag`, `Response`, etc.) |
+| `System.Text.Json` | JSON serialization support (multi-target requirement for `netstandard2.0`) |
+
+### Internal Project References
+
+| Project | Purpose |
+|---|---|
+| `NuGet.Services.Status` | Provides `ComponentStatus` enum and domain model types (`Event`, `Message`, `Constants.ComponentPathDivider`) consumed by entity definitions |
+
+### Target Frameworks
+
+This library multi-targets **`net472`** and **`netstandard2.0`**, allowing consumption from both the full .NET Framework Gallery host and modern .NET services.
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Enums stored as integers.** `AffectedComponentStatus` (on `ComponentAffectingEntity`), `Type` (on `MessageEntity` and `ManualStatusChangeEntity`), and similar properties are all declared as `int` rather than their enum types. This is a deliberate workaround for a long-standing Azure Storage SDK limitation where enum-typed properties are not correctly serialized. See the referenced issue in the source comments: `https://github.com/Azure/azure-storage-net/issues/383`.
+</Note>
+
+<Note>
+**Empty setters on computed properties.** Both `IsActive` (`ComponentAffectingEntity`) and `IsLinked` (`ChildEntity<T>`) are logically read-only (computed from `EndTime` and `ParentRowKey` respectively) but expose a no-op public setter. This is required to make the Azure Table SDK include those properties in serialization — the SDK only serializes properties with public getters **and** setters.
+</Note>
+
+<Warning>
+**Row key construction must remain stable.** `EventEntity`, `IncidentGroupEntity`, `IncidentEntity`, and `MessageEntity` all encode structured data (component paths, timestamps, IDs) into their row keys. `Utility.ToRowKeySafeComponentPath()` replaces `/` with `_` to avoid Azure Table Storage reserved characters. Any change to this encoding breaks existing row lookups and cross-table parent/child linkage via `ParentRowKey`.
+</Warning>
+
+<Tip>
+**Hierarchy is encoded through `ParentRowKey`, not foreign keys.** There is no relational join. An `IncidentEntity` stores the row key of its parent `IncidentGroupEntity` in `ParentRowKey`; an `IncidentGroupEntity` stores the row key of its parent `EventEntity`. Consumers must perform separate table reads to walk up the hierarchy.
+</Tip>
+
+<Note>
+**Manual changes use a GUID row key.** Unlike the other entities whose row keys are deterministic (enabling idempotent upserts), `ManualStatusChangeEntity` generates a new `Guid.NewGuid()` on each construction, making every write a distinct command record. A processor is expected to dequeue and apply these records in order, then delete or archive them.
+</Note>
+
+## Entity Hierarchy
+
+```text
+EventEntity  (partition: "events")
+  └── IncidentGroupEntity  (partition: "groups",  ParentRowKey → EventEntity.RowKey)
+        └── IncidentEntity  (partition: "incidents", ParentRowKey → IncidentGroupEntity.RowKey)
+
+EventEntity  (partition: "events")
+  └── MessageEntity  (partition: "messages", ParentRowKey → EventEntity.RowKey)
+
+CursorEntity  (partition: "cursors")   — standalone watermark
+
+ManualStatusChangeEntity  (partition: "manual")  — operator command queue
+```

@@ -1,0 +1,138 @@
+﻿---
+title: StatusAggregator
+sidebarTitle: StatusAggregator
+description: A scheduled job that ingests NuGet incident data, aggregates it into a structured component tree, and publishes a status.json blob consumed by the NuGet status page.
+icon: triangle-alert
+---
+
+## Overview
+
+StatusAggregator is a .NET 4.7.2 console application (run via `NuGet.Jobs.JobRunner`) that continuously polls an internal incident API, parses and aggregates incidents into a three-level hierarchy (Incident → IncidentGroup → Event), and serializes the resulting service health state to Azure Blob Storage as `status.json`. It also supports operator-driven manual overrides — adding, editing, or deleting events and messages — stored in Azure Table Storage.
+
+The job runs on a schedule and each execution:
+
+1. Processes manual status change entries from Azure Table Storage (primary and secondary accounts).
+2. Fetches new incidents from the incident API since the last cursor position.
+3. Updates all active events and their associated component states.
+4. Exports the full service component tree plus recent events to `status.json`.
+
+## Role in the NuGet Gallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="Incident Ingestion" icon="download">
+    Pulls raw incidents from the internal NuGet incident API, authenticated via an X.509 certificate stored in Azure Key Vault.
+  </Card>
+  <Card title="Status Page Feed" icon="globe">
+    Writes `status.json` to Azure Blob Storage, which is the data source for the public NuGet status page at status.nuget.org.
+  </Card>
+  <Card title="Manual Override Support" icon="pencil">
+    Operators can write `ManualStatusChangeEntity` records to Azure Table Storage to inject, edit, or remove events and messages without a code deploy.
+  </Card>
+  <Card title="Dual-Region Resilience" icon="server">
+    Reads and writes to both a primary and a secondary Azure Storage account, ensuring status data is kept consistent across regions.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File Path | Class | Purpose |
+|---|---|---|
+| `Program.cs` | `Program` | Entry point; delegates to `JobRunner.Run(new Job(), args)` |
+| `Job.cs` | `Job` | Wires up Autofac/DI container, configures storage, parsers, factories, updaters, and exporters |
+| `StatusAggregator.cs` | `StatusAggregator` | Orchestrates a single run: initializes storage, calls `IStatusUpdater.Update`, then `IStatusExporter.Export` |
+| `StatusAggregatorConfiguration.cs` | `StatusAggregatorConfiguration` | Strongly-typed configuration: storage endpoints, table/container names, delay timings, severity/environment filters |
+| `Collector/EntityCollector.cs` | `EntityCollector` | Wraps a cursor + processor; fetches new entities since the last recorded cursor position |
+| `Collector/IncidentEntityCollectorProcessor.cs` | `IncidentEntityCollectorProcessor` | Fetches incidents from the incident API since a cursor date and stores them as `IncidentEntity` table rows |
+| `Collector/ManualStatusChangeCollectorProcessor.cs` | `ManualStatusChangeCollectorProcessor` | Reads `ManualStatusChangeEntity` rows from a storage account and dispatches them to `IManualStatusChangeHandler` |
+| `Update/StatusUpdater.cs` | `StatusUpdater` | Drives the update cycle: runs manual collectors, runs the incident collector, then calls `ActiveEventEntityUpdater` |
+| `Update/ActiveEventEntityUpdater.cs` | `ActiveEventEntityUpdater` | Queries all active `EventEntity` rows and calls `IComponentAffectingEntityUpdater<EventEntity>` on each |
+| `Update/AggregationEntityUpdater.cs` | `AggregationEntityUpdater<TChild, TAgg>` | Generic updater that deactivates an aggregation entity when all its children are mitigated |
+| `Factory/NuGetServiceComponentFactory.cs` | `NuGetServiceComponentFactory` | Builds the static NuGet component tree: Gallery, Restore (V2/V3), Search (Global/China), Package Publishing |
+| `Factory/AggregationStrategy.cs` | `AggregationStrategy<TChild, TAgg>` | Determines whether a new entity can be linked to an existing aggregation by checking active state and child presence |
+| `Factory/IncidentFactory.cs` | `IncidentFactory` | Creates `IncidentEntity` rows from a `ParsedIncident` |
+| `Factory/IncidentGroupFactory.cs` | `IncidentGroupFactory` | Creates `IncidentGroupEntity` rows grouping related incidents |
+| `Factory/EventFactory.cs` | `EventFactory` | Creates `EventEntity` rows grouping related incident groups |
+| `Parse/AggregateIncidentParser.cs` | `AggregateIncidentParser` | Fans out to all registered `IIncidentParser`s and collects every `ParsedIncident` result |
+| `Parse/IncidentRegexParsingHandler.cs` | `IncidentRegexParsingHandler` | Abstract base for regex-based parsers; subclasses extract component path and status from named capture groups |
+| `Parse/SeverityRegexParsingFilter.cs` | `SeverityRegexParsingFilter` | Drops incidents whose severity exceeds `MaximumSeverity` in configuration |
+| `Parse/EnvironmentRegexParsingFilter.cs` | `EnvironmentRegexParsingFilter` | Drops incidents not matching the configured `Environments` list |
+| `Export/StatusExporter.cs` | `StatusExporter` | Builds the `ServiceStatus` from `IComponentExporter` + `IEventsExporter` and hands it to `IStatusSerializer` |
+| `Export/StatusSerializer.cs` | `StatusSerializer` | Serializes `ServiceStatus` to JSON and uploads it as `status.json` to the primary blob container |
+| `Manual/ManualStatusChangeHandler.cs` | `ManualStatusChangeHandler` | Dispatches `ManualStatusChangeEntity` records to typed handlers (add/edit/delete for events and messages) |
+| `Table/TableWrapper.cs` | `TableWrapper` | Thin wrapper over Azure SDK `TableClient`; enforces partition key discipline via `TablePartitionKeys` |
+| `Container/ContainerWrapper.cs` | `ContainerWrapper` | Wraps `BlobContainerClient` for blob create/save operations |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Purpose |
+|---|---|
+| `NuGet.Jobs.Common` | `JsonConfigurationJob`, `JobRunner`, `StorageAccountHelper`, `StorageMsiConfiguration` base infrastructure |
+| `NuGet.Services.Incidents` | `IIncidentApiClient`, `Incident`, `IncidentApiConfiguration` — the incident API client contract |
+| `NuGet.Services.Status.Table` | `IncidentEntity`, `IncidentGroupEntity`, `EventEntity`, `ComponentAffectingEntity`, manual change table entities |
+| `Validation.PackageSigning.Core` | Provides `X509Certificate2` extension `ComputeSHA256Thumbprint` used when loading the API certificate |
+
+### Key NuGet / Framework Packages (resolved transitively)
+
+| Package | Purpose |
+|---|---|
+| `Autofac` | IoC container used alongside Microsoft DI for named/keyed storage registrations |
+| `Azure.Data.Tables` | Azure Table Storage SDK v12 (`TableClient`, `TableServiceClient`) |
+| `Azure.Storage.Blobs` | Azure Blob Storage SDK v12 (`BlobServiceClient`, `BlobContainerClient`) |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<T>` for scoped configuration binding |
+| `Newtonsoft.Json` | JSON serialization of `ServiceStatus` with UTC dates and string enums |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The job registers **two named storage accounts** ("Primary" and "Secondary") in Autofac using `Named<T>` registrations. The primary account is registered last so it becomes the default unnamed binding. Both accounts get their own `ManualStatusChangeCollectorProcessor`, meaning manual overrides written to either account are processed.
+</Note>
+
+<Note>
+Incidents are aggregated through a **three-level hierarchy**: raw `IncidentEntity` records are grouped into `IncidentGroupEntity` records (same component path), which are further grouped into `EventEntity` records. `AggregationStrategy<TChild, TAgg>` enforces that a child can only be linked to an aggregation that has existing children (preventing reuse of manually-created or broken aggregations) and that is still active if the child is active.
+</Note>
+
+<Note>
+The cursor pattern (`ICursor` backed by Azure Table Storage) gives each collector a named timestamp watermark. The incident collector advances the cursor only on success. The `StatusUpdater` wraps incident ingestion in a try/catch so a transient API failure does not block the export step — the last successfully exported status remains live.
+</Note>
+
+<Warning>
+Certificate loading in `Job.GetCertificateFromConfiguration` supports two legacy formats: a JSON object with Base64 `Data` + `Password` (older Key Vault certificates) and a plain Base64 string (newer Key Vault certificates). If neither parses successfully the job will throw at startup. Ensure Key Vault secrets are in one of these two forms.
+</Warning>
+
+<Warning>
+The target framework is `net472`. All Azure SDK calls use `async/await` but the entry point calls `.GetAwaiter().GetResult()` — this is intentional for the `JobRunner` pattern used across NuGet background jobs. Do not migrate to `net6+` without verifying `JobRunner` compatibility.
+</Warning>
+
+<Tip>
+Configuration delays (`EventStartMessageDelayMinutes`, `EventEndDelayMinutes`) default to 15 minutes each. `EventVisibilityPeriodDays` defaults to 10 days. These can be tuned in the `StatusAggregator` config section without a code change, which is useful during incidents when faster message cadence is desired.
+</Tip>
+
+## Data Flow Summary
+
+```text
+Incident API
+    │
+    ▼
+IncidentEntityCollectorProcessor  ──►  IncidentEntity (Table)
+    │                                        │
+    │                                        ▼
+    │                               AggregationStrategy
+    │                               IncidentGroupFactory  ──►  IncidentGroupEntity (Table)
+    │                                        │
+    │                                        ▼
+    │                               AggregationStrategy
+    │                               EventFactory          ──►  EventEntity (Table)
+    │
+ManualStatusChangeCollectorProcessor ──►  Manual overrides applied to Table entities
+    │
+    ▼
+ActiveEventEntityUpdater  ──►  Updates EventEntity / IncidentGroupEntity active states
+    │
+    ▼
+StatusExporter
+    ├── ComponentExporter  ──►  NuGetServiceComponentFactory (static tree + live statuses)
+    ├── EventsExporter     ──►  Recent EventEntity rows
+    └── StatusSerializer   ──►  status.json  ──►  Azure Blob Storage (Primary + Secondary)
+```

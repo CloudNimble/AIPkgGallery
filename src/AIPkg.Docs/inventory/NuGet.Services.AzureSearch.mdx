@@ -1,0 +1,135 @@
+---
+title: NuGet.Services.AzureSearch
+sidebarTitle: Services.AzureSearch
+description: Shared library that provides the logic for indexing NuGet packages into Azure AI Search and serving search queries against those indexes.
+icon: search
+---
+
+## Overview
+
+`NuGet.Services.AzureSearch` is the central library that implements everything related to NuGet's Azure AI Search integration. It defines the document models for two indexes (a *search* index for user-facing queries and a *hijack* index for legacy V2 look-ups), the pipelines that populate and update those indexes, and the service layer that executes queries against them. Consuming executable jobs import this library and wire it into their own entry points, but all of the indexing and query logic lives here.
+
+The library supports three distinct data pipelines. **Db2AzureSearch** performs the initial full bootstrap of both indexes by reading all package registrations from the NuGet Gallery SQL database (or optionally from Kusto), creating or replacing the Azure Search indexes and the blob-based auxiliary data files, and writing the initial cursor position so that the incremental pipeline can pick up from the right point. **Catalog2AzureSearch** runs continuously as a catalog collector, reading NuGet catalog commits, converting each commit into a set of Azure Search index actions, and pushing those actions in batches; it maintains a durable cursor in blob storage to track progress. **Auxiliary2AzureSearch** runs as a periodic job that reads owner, download-count, and verified-package data from the Gallery database and the NuGet statistics pipeline, diffs each data set against the previously indexed snapshot stored in blob storage, and pushes only the changed documents to the search index.
+
+A fourth subsystem, the **SearchService** namespace, provides the runtime query path used by the NuGet search web API. It translates incoming V2, V3, and autocomplete requests into Azure Search queries, applies NuGet-specific text analysis (camel-case splitting, separator tokenization, exact-match boosting), executes queries against the appropriate index, and maps the results back to the API response shapes. Download counts, owner lists, verified status, and popularity-transfer adjustments are kept in memory via `AuxiliaryDataCache` and are applied at query time by `SearchResponseBuilder`.
+
+## Role in System
+
+```
+NuGet Catalog (blob storage)
+        |
+        v
+  Catalog2AzureSearch ──────────────────────────────┐
+                                                      |
+NuGet Gallery SQL / Kusto                             |
+        |                                             v
+  Db2AzureSearch (initial bootstrap) ──── Azure AI Search ──── Search Index
+                                     \                     \─── Hijack Index
+NuGet Stats Pipeline / Gallery DB     \                           |
+        |                              \── Blob Storage           v
+  Auxiliary2AzureSearch ─────────────────  (version lists,   NuGet Search
+        (owners, downloads, verified,       owner data,       Web API
+         popularity transfers)              download data,    (V2 / V3 /
+                                            verified pkgs,    Autocomplete)
+                                            cursor)
+```
+
+Each indexing pipeline shares a common `BatchPusher` which queues index actions for both indexes, pushes them in configurable batches (default 1000 documents), and writes per-package-ID version list blobs to blob storage after all documents for that ID have been flushed.
+
+<CardGroup cols={2}>
+  <Card title="Dual Azure Search Indexes" icon="layers">
+    A **search index** holds one document per package ID per `SearchFilters` combination (stable, prerelease, SemVer 2) and is used for V3 and non-hijack V2 queries. A **hijack index** holds one document per package ID+version and is used for legacy V2 look-ups by exact version.
+  </Card>
+  <Card title="Three Indexing Pipelines" icon="git-branch">
+    Db2AzureSearch bootstraps the indexes from scratch; Catalog2AzureSearch keeps them current via the NuGet catalog; Auxiliary2AzureSearch keeps download counts, owners, and verified status in sync from out-of-band data sources.
+  </Card>
+  <Card title="Blob-Backed Version Lists" icon="file-json">
+    For every package ID, a JSON blob in Azure Storage records the known versions and their properties. The `VersionLists` class uses this data to compute which version is the latest under each `SearchFilters` combination and to determine exactly which search index documents need to change when a version is added, updated, or deleted.
+  </Card>
+  <Card title="Auxiliary Data Cache" icon="database">
+    At query time the search service holds download counts, verified-package flags, and popularity-transfer data in memory via `AuxiliaryDataCache`. This avoids hitting storage on every query and is refreshed periodically by a background reloader.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `AzureSearchJob.cs` | `AzureSearchJob<T>` | Abstract base job that starts feature-flag refreshing, enables SDK-level tracing, and dispatches to a typed `IAzureSearchCommand`. |
+| `Catalog2AzureSearch/AzureSearchCollectorLogic.cs` | `AzureSearchCollectorLogic` | `ICommitCollectorLogic` that processes NuGet catalog commit batches: fetches catalog leaves in parallel, builds index actions per package ID, and pushes them via `BatchPusher` with up to three retries. |
+| `Catalog2AzureSearch/Catalog2AzureSearchCommand.cs` | `Catalog2AzureSearchCommand` | Outer command that initializes indexes/containers if needed, resolves the dependency cursor, and drives the catalog collector loop. |
+| `Catalog2AzureSearch/CatalogIndexActionBuilder.cs` | `CatalogIndexActionBuilder` | Converts catalog leaves for a given package ID into the full set of `IndexActions` for both indexes. |
+| `Db2AzureSearch/Db2AzureSearchCommand.cs` | `Db2AzureSearchCommand` | Full-bootstrap command: creates indexes and blob container, runs a producer/consumer pipeline to push all package registrations, writes auxiliary data blobs, and writes the initial catalog cursor. |
+| `Db2AzureSearch/NewPackageRegistrationFromDbProducer.cs` | `NewPackageRegistrationFromDbProducer` | Reads all package registrations from the Gallery SQL database and produces work items for the bootstrap pipeline. |
+| `Db2AzureSearch/NewPackageRegistrationFromKustoProducer.cs` | `NewPackageRegistrationFromKustoProducer` | Alternative producer that reads from Kusto instead of SQL; selected at runtime when `KustoConnectionString` is configured. |
+| `Auxiliary2AzureSearch/Auxiliary2AzureSearchCommand.cs` | `Auxiliary2AzureSearchCommand` | Orchestrates `UpdateVerifiedPackagesCommand`, `UpdateDownloadsCommand`, and `UpdateOwnersCommand` sequentially. |
+| `Auxiliary2AzureSearch/UpdateDownloadsCommand.cs` | `UpdateDownloadsCommand` | Reads download counts from the statistics pipeline (`downloads.v1.json`) and from blob storage, diffs them, applies popularity transfers, then pushes changes to the search index. |
+| `Auxiliary2AzureSearch/UpdateOwnersCommand.cs` | `UpdateOwnersCommand` | Reads owner data from the Gallery database and from blob storage, diffs them, and pushes changed owner arrays to the search index. |
+| `Auxiliary2AzureSearch/UpdateVerifiedPackagesCommand.cs` | `UpdateVerifiedPackagesCommand` | Diffs the set of verified package IDs and updates the corresponding search documents. |
+| `BatchPusher.cs` | `BatchPusher` | Core flushing engine: queues `IndexDocumentsAction` objects for both indexes, flushes them in batches, automatically halves batches on HTTP 413 errors, and writes per-package-ID version list blobs concurrently after each batch. |
+| `Models/SearchDocument.cs` | `SearchDocument` (static class) | Defines the document models for the search index: `Full`, `UpdateLatest`, `UpdateVersionList`, `UpdateOwners`, `UpdateDownloadCount`, and related interfaces. |
+| `Models/HijackDocument.cs` | `HijackDocument` (static class) | Defines the document models for the hijack index: `Full` and `Latest`. |
+| `Models/BaseMetadataDocument.cs` | `BaseMetadataDocument` | Shared base for both index document types; contains all standard package metadata fields (title, description, authors, tags, versions, etc.). |
+| `VersionList/VersionLists.cs` | `VersionLists` | In-memory representation of a package's version history, segmented by `SearchFilters`. Computes which version is latest per filter and produces the exact `IndexChanges` needed when versions are added, changed, or deleted. |
+| `VersionList/VersionListDataClient.cs` | `VersionListDataClient` | Reads and writes per-package-ID version list JSON blobs in Azure Blob Storage; uses ETags for optimistic concurrency. |
+| `SearchService/AzureSearchService.cs` | `AzureSearchService` | Main `ISearchService` implementation: routes V2 (search or hijack index), V3, and autocomplete requests; resolves each to a document get or a full text search. |
+| `SearchService/SearchTextBuilder.cs` | `SearchTextBuilder` | Translates parsed NuGet query syntax into Azure Search query text, handling field-scoped terms, separator/camelCase tokenization, prefix search for autocomplete, and exact-match boosting. |
+| `SearchService/SearchParametersBuilder.cs` | `SearchParametersBuilder` | Builds the `SearchOptions` (filters, sorting, facets, scoring profile) to accompany each query. |
+| `SearchService/SearchResponseBuilder.cs` | `SearchResponseBuilder` | Maps Azure Search result objects to `V2SearchResponse`, `V3SearchResponse`, and `AutocompleteResponse`, merging in auxiliary data (download counts, owners, verified status) from `AuxiliaryDataCache`. |
+| `SearchService/AuxiliaryDataCache.cs` | `AuxiliaryDataCache` | Singleton in-memory cache for download data, verified packages, and popularity transfers; supports conditional reload using ETags to avoid unnecessary blob reads. |
+| `SearchService/SearchStatusService.cs` | `SearchStatusService` | Exposes health-check information: document counts, last commit timestamps, warm-query durations for both indexes, plus server metadata. |
+| `ScoringProfiles/DefaultScoringProfile.cs` | `DefaultScoringProfile` | Builds the Azure Search scoring profile (`nuget_scoring_profile`) that boosts results by a configurable `DownloadScoreBoost` magnitude function applied to the log-scaled download score field. |
+| `IndexBuilder.cs` | `IndexBuilder` | Creates, recreates, and deletes the search and hijack Azure Search indexes, including registering the custom analyzers and the default scoring profile. |
+| `AzureSearchTelemetryService.cs` | `AzureSearchTelemetryService` | Centralises all Application Insights telemetry for index pushes, query durations, auxiliary file reloads, and job outcomes. |
+| `DependencyInjectionExtensions.cs` | `DependencyInjectionExtensions` | Extension methods (`AddAzureSearch`) that register all services, keyed Autofac registrations for search/hijack index clients and blob clients, and choose between SQL and Kusto producers at runtime. |
+| `AzureSearchConfiguration.cs` | `AzureSearchConfiguration` | Root configuration class: Azure Search service name, API key or managed identity client ID, index names, blob storage connection string, container name, and flat-container URL. |
+| `AzureSearchJobConfiguration.cs` | `AzureSearchJobConfiguration` | Extends `AzureSearchConfiguration` with job-level tunables: `AzureSearchBatchSize` (default 1000), `MaxConcurrentBatches` (default 4), `MaxConcurrentVersionListWriters` (default 8), scoring configuration, and popularity-transfer enable flag. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Azure.Identity` | Provides `ManagedIdentityCredential` and `DefaultAzureCredential` for authenticating to Azure Search without API keys. |
+| `Azure.Search.Documents` | Official Azure AI Search SDK; used for all index management, document push, and query operations. |
+| `Microsoft.Azure.Kusto.Data` | Kusto (Azure Data Explorer) client used by `NewPackageRegistrationFromKustoProducer` as an alternative data source during bootstrap. |
+| `Microsoft.Rest.ClientRuntime` | Provides `ServiceClientTracing` integration wired up via `ServiceClientTracingLogger`. |
+| `System.Text.Encodings.Web` | Used in JSON serialization of index documents. |
+| `System.Text.Json` | Used alongside the Azure SDK serializer for document model serialization. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.V3` | Provides `ICommitCollectorLogic`, `CommitCollectorUtility`, catalog cursor infrastructure, V3 search request/response types (`V2SearchRequest`, `V3SearchResponse`, `AutocompleteRequest`, etc.), and auxiliary-file client contracts (`IDownloadsV1JsonClient`, `IOwnerDataClient`, `IDownloadDataClient`, etc.). |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Two-index architecture.** Every package version gets a document in the *hijack* index (one document per ID+version), while the *search* index holds one document per package ID per `SearchFilters` combination. The hijack index exists exclusively to support legacy V2 queries that ask for a specific version; the search index supports all other query types. `AzureSearchService` routes requests to the correct index based on the `IgnoreFilter` flag on the V2 request.
+</Note>
+
+<Note>
+**Version list blobs as shared state.** Because a single package ID can map to up to four search-index documents (one per `SearchFilters`), the indexing pipeline needs to know the complete ordered version list to compute which document represents the "latest" version for each filter. This state is kept as a JSON blob per package ID in Azure Blob Storage and read/written by `VersionListDataClient` using ETag-based optimistic concurrency. `VersionLists.ApplyChanges` recomputes which index documents need to change for both indexes whenever a version is added, updated, or deleted.
+</Note>
+
+<Tip>
+**Popularity transfers.** The download-count update pipeline supports a feature where downloads from deprecated or renamed packages can be "transferred" to their successors. `DownloadTransferrer` applies a configurable transfer percentage so the successor's effective download count is boosted. This is controlled by both a configuration flag (`EnablePopularityTransfers`) and a feature flag (`IFeatureFlagService.IsPopularityTransferEnabled`), allowing it to be toggled without redeployment.
+</Tip>
+
+<Note>
+**Batch splitting on HTTP 413.** `BatchPusher.IndexAsync` catches `RequestFailedException` with status 413 (Request Entity Too Large) and recursively splits the batch in half, retrying each half independently. This handles cases where document payloads (e.g. packages with very long version lists or descriptions) make a full batch exceed Azure Search's request size limit.
+</Note>
+
+<Tip>
+**Kusto vs SQL bootstrap.** During initial indexing (`Db2AzureSearch`), the library can read package data from either the NuGet Gallery SQL database or from Azure Data Explorer (Kusto). The choice is made at startup time in `DependencyInjectionExtensions`: if `KustoConnectionString` is set in configuration, `NewPackageRegistrationFromKustoProducer` is used; otherwise `NewPackageRegistrationFromDbProducer` reads from SQL. This allows faster bootstrap runs by querying Kusto snapshots.
+</Tip>
+
+<Warning>
+**Access-condition concurrency on version lists.** When `BatchPusher` flushes a batch and writes version list blobs, it uses the ETag captured when the blob was originally read. If another process has modified the same blob in the interim, the write fails and the package ID is added to `FailedPackageIds`. `AzureSearchCollectorLogic` and `UpdateDownloadsCommand` both implement retry loops (up to three attempts) to handle this case, re-fetching the latest version list state before retrying.
+</Warning>
+
+<Note>
+**Download score pre-computation.** Rather than sorting by raw download count (which would require a large boosting range in the scoring profile), `DocumentUtilities.GetDownloadScore` computes a normalized log-scale score at index time. The `DefaultScoringProfile` applies a `MagnitudeScoringFunction` against this `DownloadScore` field with a configurable `DownloadScoreBoost` multiplier, keeping the effective boost range manageable while still heavily favouring popular packages.
+</Note>

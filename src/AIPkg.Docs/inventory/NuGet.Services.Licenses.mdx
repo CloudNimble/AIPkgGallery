@@ -1,0 +1,106 @@
+---
+title: NuGet.Services.Licenses
+sidebarTitle: Services.Licenses
+description: Parses and tokenizes SPDX-style license expressions into typed segments for display and linking on the NuGet Gallery web UI.
+icon: scale
+---
+
+## Overview
+
+`NuGet.Services.Licenses` is a small shared library that provides SPDX license expression parsing and segmentation. Its primary purpose is to take a raw license expression string (such as `MIT OR Apache-2.0`) and decompose it into a typed list of segments — license identifiers, exception identifiers, operators, and structural characters like parentheses and whitespace — so that each piece can be individually linked or styled on a web page.
+
+The library is built in two layers. The lower layer, `LicenseExpressionSegmentator`, works against an already-parsed expression tree and performs an in-order traversal to extract the semantically meaningful tokens. Because the parser discards extra parentheses and whitespace, a second pass (`SplitFullExpression`) projects those tree-derived tokens back onto the original raw string to recover all characters, filling in any gaps as `Other`-typed segments. The upper layer, `LicenseExpressionSplitter`, is a single-method facade that wires the two lower-layer steps together and is the only type that calling code needs to depend on.
+
+The library targets both `net472` and `netstandard2.0`, reflecting that it must work in the full-framework NuGet Gallery ASP.NET application while remaining portable for other consumers. It has no project references; its only substantive external dependency is `NuGet.Packaging`, which provides the SPDX expression parser (`NuGetLicenseExpression.Parse`) and the expression tree types (`NuGetLicense`, `LogicalOperator`, `WithOperator`, etc.).
+
+## Role in System
+
+```
+NuGet.org Package Detail Page (PackagesController)
+        |
+        | calls SplitExpression(package.LicenseExpression)
+        v
+ILicenseExpressionSplitter (LicenseExpressionSplitter)
+        |
+        |-- ILicenseExpressionParser.Parse()
+        |       |
+        |       v
+        |   NuGet.Packaging: NuGetLicenseExpression.Parse()
+        |       |
+        |       v
+        |   NuGetLicenseExpression (expression tree)
+        |
+        |-- ILicenseExpressionSegmentator.GetLicenseExpressionSegments()
+        |       |
+        |       v
+        |   in-order tree traversal -> meaningful segments only
+        |
+        `-- ILicenseExpressionSegmentator.SplitFullExpression()
+                |
+                v
+        List<CompositeLicenseExpressionSegment>
+        (LicenseIdentifier | ExceptionIdentifier | Operator | Other)
+                |
+                v
+        View model / Razor template renders each segment,
+        linking identifiers to their SPDX license/exception pages
+```
+
+<CardGroup cols={2}>
+  <Card title="Two-Pass Segmentation" icon="layers">
+    The tree traversal recovers only meaningful tokens; a second string-scanning pass fills in discarded whitespace, parentheses, and other structural characters as `Other` segments, preserving the original expression verbatim.
+  </Card>
+  <Card title="Facade Entry Point" icon="door-open">
+    `LicenseExpressionSplitter` is a thin facade over the parser and segmentator. Callers only need to inject `ILicenseExpressionSplitter` and call `SplitExpression` — the two-step pipeline is internal.
+  </Card>
+  <Card title="Depth Guard" icon="shield">
+    `LicenseExpressionSegmentator` enforces a maximum tree traversal depth of 200 levels (double the theoretical maximum from Gallery's 500-character expression limit) to prevent stack overflows on pathological inputs.
+  </Card>
+  <Card title="Multi-Target Library" icon="package">
+    Targets both `net472` and `netstandard2.0` so it can be consumed by the full-framework NuGet Gallery application and by any future netstandard-compatible consumers without modification.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `LicenseExpressionSplitter.cs` | `LicenseExpressionSplitter` | Facade: parses the expression then calls both segmentator methods and returns the complete segment list. Registered as `ILicenseExpressionSplitter`. |
+| `LicenseExpressionSegmentator.cs` | `LicenseExpressionSegmentator` | Core logic: in-order tree traversal to extract meaningful segments, plus string-scanning pass to recover `Other` segments. |
+| `LicenseExpressionParser.cs` | `LicenseExpressionParser` | Thin wrapper around `NuGetLicenseExpression.Parse()`; exists to make the parser injectable/mockable. |
+| `CompositeLicenseExpressionSegment.cs` | `CompositeLicenseExpressionSegment` | Immutable data type holding a text `Value` and a `CompositeLicenseExpressionSegmentType`. |
+| `CompositeLicenseExpressionSegmentType.cs` | `CompositeLicenseExpressionSegmentType` (enum) | Four values: `LicenseIdentifier`, `ExceptionIdentifier`, `Operator`, `Other`. |
+| `ILicenseExpressionSplitter.cs` | `ILicenseExpressionSplitter` | Single-method interface; the only abstraction that callers in NuGetGallery depend on. |
+| `ILicenseExpressionSegmentator.cs` | `ILicenseExpressionSegmentator` | Two-method interface: `GetLicenseExpressionSegments` and `SplitFullExpression`. |
+| `ILicenseExpressionParser.cs` | `ILicenseExpressionParser` | Single-method interface: `Parse(string) -> NuGetLicenseExpression`. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `NuGet.Packaging` | Provides `NuGetLicenseExpression.Parse()` and the full SPDX expression tree types (`NuGetLicense`, `LogicalOperator`, `WithOperator`, `LicenseOperator`, `LicenseExpressionType`, etc.) that the segmentator traverses. |
+| `System.Formats.Asn1` | Transitive dependency required by `NuGet.Packaging` for certificate/signature handling; not used directly by this library but referenced to satisfy version-binding requirements on `net472`. |
+
+### Internal Project References
+
+This project has no internal project references. It is a leaf library with no dependencies on other projects within the NuGetGallery solution.
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The `SplitFullExpression` algorithm is order-dependent and relies on `String.IndexOf` scanning forward from a running `startIndex`. This means it will produce incorrect results if a meaningful token text (e.g., a license identifier) appears more than once in the expression and the segments list is not in the same left-to-right order as the tokens appear in the raw string. The in-order tree traversal guarantees this ordering.
+</Note>
+
+<Note>
+`LicenseExpressionParser` is intentionally trivial — it exists solely to wrap `NuGetLicenseExpression.Parse` behind an interface so that `LicenseExpressionSplitter` can be unit-tested with a mock parser. The real parsing logic lives entirely inside `NuGet.Packaging`.
+</Note>
+
+<Tip>
+In `NuGetGallery`, all three concrete types (`LicenseExpressionSplitter`, `LicenseExpressionParser`, `LicenseExpressionSegmentator`) are registered with Autofac as `InstancePerLifetimeScope` in `DefaultDependenciesModule`. Callers inject only `ILicenseExpressionSplitter`.
+</Tip>
+
+<Warning>
+The `+` (or-later) SPDX operator is emitted as an `Operator`-typed segment immediately following its `LicenseIdentifier` segment during tree traversal, not as a separate node in the NuGet.Packaging tree. The `SplitFullExpression` pass then locates the literal `+` character in the raw string using the same forward-scanning algorithm used for all other segments.
+</Warning>

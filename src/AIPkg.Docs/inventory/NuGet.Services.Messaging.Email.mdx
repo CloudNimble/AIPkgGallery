@@ -1,0 +1,114 @@
+---
+title: NuGet.Services.Messaging.Email
+sidebarTitle: Messaging.Email
+description: A shared library providing the abstractions, base classes, and two concrete implementations for composing and dispatching email messages across NuGet front-end and back-end services.
+icon: mail
+---
+
+## Overview
+
+`NuGet.Services.Messaging.Email` is a multi-targeted library (`net472` and `netstandard2.0`) that sits between the application layer and the email delivery infrastructure. It defines the core contracts — `IMessageService`, `IEmailBuilder`, `IEmailRecipients` — and provides abstract base classes that concrete email builders inherit from. Application code creates a specific email builder (e.g. for a package publish notification), calls `IMessageService.SendMessageAsync`, and the library handles format negotiation, recipient resolution, and delivery routing without the caller needing to know whether email goes through SMTP or an async Service Bus queue.
+
+The library ships two concrete `IMessageService` implementations with different delivery models. `CoreMarkdownMessageService` sends email synchronously via SMTP using the `AnglicanGeek.MarkdownMailer` package — this path is only compiled for `net472` and is used by the NuGet Gallery web application directly. `AsynchronousEmailMessageService` serializes the composed message into an `EmailMessageData` record and hands it off to `IEmailMessageEnqueuer` for delivery via Azure Service Bus — this is the path used by background jobs and worker roles that need fire-and-forget email dispatch with built-in retries handled downstream.
+
+A key design concern across both delivery paths is the `copySender` / `discloseSenderAddress` feature. When a user sends a contact message, the gallery may need to copy that user without revealing their email address to the recipient. The library handles this by sending a separate email to the sender's `ReplyTo` address (labeled `[Sender Copy]`) rather than adding the sender to the CC list. `EmailMessageFooter` provides pre-formatted opt-out footers in all three output formats (PlainText, Html, Markdown) so every notification email carries consistent unsubscribe instructions.
+
+## Role in System
+
+This library sits between the application logic that decides what email to send and the infrastructure that actually delivers it.
+
+```
+Application Code (NuGetGallery / Jobs)
+         |
+         | creates an IEmailBuilder subclass
+         v
+NuGet.Services.Messaging.Email
+   - IMessageService.SendMessageAsync()
+         |
+         +-- CoreMarkdownMessageService (net472 only)
+         |       |
+         |       v
+         |   AnglicanGeek.MarkdownMailer (SMTP)
+         |
+         +-- AsynchronousEmailMessageService
+                 |
+                 v
+         IEmailMessageEnqueuer  (NuGet.Services.Messaging)
+                 |
+                 v
+         Azure Service Bus --> downstream email worker
+```
+
+<CardGroup cols={2}>
+  <Card title="Dual Delivery Modes" icon="split">
+    Two `IMessageService` implementations cover synchronous SMTP dispatch (`CoreMarkdownMessageService`, net472 only) and asynchronous queue-based dispatch (`AsynchronousEmailMessageService`) via Azure Service Bus, allowing the same email builder to be reused across different host environments.
+  </Card>
+  <Card title="Three-Format Rendering" icon="file-text">
+    The `EmailFormat` enum and the `MarkdownEmailBuilder` base class allow a single Markdown body to be rendered as plain text, HTML, or raw Markdown. The custom `PlainTextRenderer` fixes bugs in Markdig's built-in plain-text conversion for links, emphasis, autolinks, and lists.
+  </Card>
+  <Card title="Sender Privacy" icon="eye-off">
+    The `copySender` + `discloseSenderAddress` parameters on `SendMessageAsync` implement a privacy-preserving sender-copy pattern: when the sender address must not be disclosed, a separate email is sent to the `ReplyTo` address with a `[Sender Copy]` subject suffix instead of CC-ing the sender.
+  </Card>
+  <Card title="Shared Footer Utility" icon="panel-bottom">
+    `EmailMessageFooter` provides static factory methods that emit correctly formatted opt-out footers in all three output formats, ensuring every notification email includes consistent unsubscribe instructions regardless of which builder produced it.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `IMessageService.cs` | `IMessageService` | Core dispatch contract. Single method `SendMessageAsync(IEmailBuilder, copySender, discloseSenderAddress)` used by all callers regardless of delivery mechanism. |
+| `AsynchronousEmailMessageService.cs` | `AsynchronousEmailMessageService` | `IMessageService` implementation that converts an `IEmailBuilder` into an `EmailMessageData` record and calls `IEmailMessageEnqueuer.SendEmailMessageAsync` for queue-based delivery. Handles sender-copy by enqueuing a second message. |
+| `CoreMarkdownMessageService.cs` | `CoreMarkdownMessageService` | `IMessageService` implementation (net472 only) that sends email synchronously via `AnglicanGeek.MarkdownMailer`. Includes a SMTP retry loop with delays of 0.1 s, 1 s, and 10 s on `SmtpException`. |
+| `IEmailBuilder.cs` | `IEmailBuilder` | Contract for a message factory: exposes `Sender`, `GetSubject()`, `GetBody(EmailFormat)`, and `GetRecipients()`. |
+| `EmailBuilder.cs` | `EmailBuilder` | Abstract base class implementing `IEmailBuilder`. Routes `GetBody(format)` to three abstract protected methods (`GetPlainTextBody`, `GetMarkdownBody`, `GetHtmlBody`). Also provides `EscapeLinkForMarkdown` to URL-decode and backslash-escape underscores in URLs. Only compiled for net472 (uses `System.Web.HttpUtility`). |
+| `MarkdownEmailBuilder.cs` | `MarkdownEmailBuilder` | Abstract subclass of `EmailBuilder`. Implements `GetPlainTextBody` by parsing Markdown with Markdig and running it through `PlainTextRenderer`. Implements `GetHtmlBody` via `Markdown.ToHtml`. Provides a static `EscapeMarkdown` helper that escapes all standard Markdown special characters. |
+| `EmailFormat.cs` | `EmailFormat` | Enum with three values: `PlainText`, `Markdown`, and `Html`. Passed to `IEmailBuilder.GetBody` to select the desired rendering. |
+| `IEmailRecipients.cs` | `IEmailRecipients` | Contract for the four standard recipient lists: `To`, `CC`, `Bcc`, `ReplyTo`, each typed as `IReadOnlyList<MailAddress>`. |
+| `EmailRecipients.cs` | `EmailRecipients` | Concrete implementation of `IEmailRecipients`. Exposes a static `None` sentinel (empty `To` list) that builders return when no recipients should receive the message, causing both service implementations to skip dispatch silently. |
+| `IMessageServiceConfiguration.cs` | `IMessageServiceConfiguration` | Configuration contract exposing `GalleryOwner` and `GalleryNoReplyAddress` as `MailAddress` values used as the gallery's authoritative sender and no-reply addresses. |
+| `EmailMessageFooter.cs` | `EmailMessageFooter` | Static utility producing opt-out footer strings for package-owner and contact-owner notification emails. Renders correctly in all three `EmailFormat` values. |
+| `Internal/PlainTextRenderer.cs` | `PlainTextRenderer` | Extends Markdig's `NormalizeRenderer` and registers the three custom inline renderers below. Forces CRLF line endings. |
+| `Internal/PlainTextLinkInlineRenderer.cs` | `PlainTextLinkInlineRenderer` | Renders Markdown links as `text (url)` in plain text. Suppresses the URL when the link text already equals the URL, and silently drops image links. |
+| `Internal/PlainTextAutoLinkInlineRenderer.cs` | `PlainTextAutoLinkInlineRenderer` | Renders autolinks (bare `<url>` syntax) as the raw URL string, stripping the angle-bracket markup. |
+| `Internal/PlainTextEmphasisInlineRenderer.cs` | `PlainTextEmphasisInlineRenderer` | Strips emphasis markers (`*` and `_`) and emits only the inner content, preventing asterisks and underscores from appearing in plain-text output. |
+| `Internal/PlainTextListRenderer.cs` | `PlainTextListRenderer` | Renders unordered and ordered list blocks by iterating items without emitting Markdown bullet characters, producing clean plain-text list output. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Azure.Core` | Provides Azure SDK primitives used transitively; referenced for compatibility with the rest of the service stack. |
+| `Markdig.Signed` | Parses and renders Markdown for `MarkdownEmailBuilder`. Used to produce both HTML (via `Markdown.ToHtml`) and plain-text (via `PlainTextRenderer`) output from a single Markdown source. |
+| `NuGet.StrongName.AnglicanGeek.MarkdownMailer` | (net472 only) SMTP mail-sending library consumed by `CoreMarkdownMessageService`. Provides `IMailSender` and handles SMTP dispatch. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Messaging` | Provides `IEmailMessageEnqueuer`, `EmailMessageData`, and the Service Bus serialization infrastructure that `AsynchronousEmailMessageService` uses to enqueue composed email messages. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+`CoreMarkdownMessageService` is excluded from the `netstandard2.0` compilation target via a conditional `<Compile Remove>` element in the project file. It depends on `System.Web` (for `HttpUtility` in `EmailBuilder`) and `AnglicanGeek.MarkdownMailer`, neither of which is available on .NET Standard. Callers on .NET Standard can only use `AsynchronousEmailMessageService`.
+</Note>
+
+<Note>
+The `AsynchronousEmailMessageService` generates a fresh `Guid` as a `MessageTrackingId` for every `EmailMessageData` it creates, including the separate sender-copy message. This allows downstream workers and logging systems to correlate delivery attempts back to the originating dispatch event.
+</Note>
+
+<Warning>
+When `copySender` is `true` and `discloseSenderAddress` is `false`, `AsynchronousEmailMessageService` sends the sender-copy email to the `ReplyTo` addresses of the original message, not to the `Sender` address. Builders must populate `ReplyTo` with the sender's address for the sender-copy feature to work correctly. If `ReplyTo` is empty, the sender receives no copy.
+</Warning>
+
+<Tip>
+Builders that return `EmailRecipients.None` from `GetRecipients()` cause both service implementations to silently skip dispatch. This is the correct way for a builder to represent "no email should be sent for this event" (for example, when a user has opted out of notifications), without requiring the call site to perform any conditional logic before calling `SendMessageAsync`.
+</Tip>
+
+<Note>
+`MarkdownEmailBuilder.EscapeMarkdown` escapes all 18 characters listed in the CommonMark basic-syntax escape reference. This is distinct from the `EscapeLinkForMarkdown` helper on `EmailBuilder`, which only escapes underscores and URL-decodes the input. Concrete builders should call `EscapeMarkdown` on any user-supplied string that will be embedded inline in Markdown body text, and `EscapeLinkForMarkdown` only for URL values appearing in link syntax.
+</Note>

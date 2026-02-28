@@ -1,0 +1,115 @@
+---
+title: NuGet.Services.Revalidate
+sidebarTitle: Services.Revalidate
+description: A background job that retroactively enqueues previously published packages for re-signing validation, prioritizing high-impact packages while throttling throughput to avoid overloading the ingestion pipeline.
+icon: refresh-cw
+---
+
+## Overview
+
+`NuGet.Services.Revalidate` is a .NET Framework 4.7.2 console application (run as an Azure WebJob) responsible for enqueuing existing NuGet packages into the validation pipeline so they can receive repository signatures that were not applied at original publish time. This was necessary because repository signing was introduced after many packages already existed in the gallery; this job backfills the signing validation for all of them.
+
+The job operates in three sequential phases that must be completed in order. The first phase (Build Preinstalled Packages) is a one-time developer task that scans local Visual Studio and .NET SDK installation directories to produce an embedded JSON manifest of preinstalled package IDs. The second phase (Initialization) populates the `PackageRevalidations` database table with an ordered list of all packages requiring revalidation, grouped and prioritized by importance. The third phase (Revalidation) continuously dequeues batches from that table and sends Service Bus messages to the validation pipeline, dynamically throttling its rate to stay within a configurable event budget shared with live gallery traffic.
+
+A key design goal is to never destabilize the NuGet ingestion pipeline. The throttler computes a real-time quota by querying the Application Insights REST API for the count of push, list, and unlist events in the past hour and subtracting that from a dynamically increasing desired rate ceiling. If the pipeline status blob in Azure Blob Storage shows any component as degraded, the job pauses and resets its desired rate back to the configured minimum. The desired rate increases incrementally with each successful batch and is clamped between `MinPackageEventRate` and `MaxPackageEventRate` to prevent both starvation and overload.
+
+## Role in System
+
+```
+Developer workstation
+  └─ Phase 1: NuGet.Services.Revalidate.exe -RebuildPreinstalledSet
+       Scans VS / .NET SDK directories → PreinstalledPackages.json (embedded resource)
+
+Ops / deployment
+  └─ Phase 2: NuGet.Services.Revalidate.exe -Initialize [-VerifyInitialization]
+       Reads Gallery DB (PackageRegistrations, Packages, PackageDependencies)
+       Writes ordered rows → ValidationDB.PackageRevalidations
+
+Continuous background job
+  └─ Phase 3: NuGet.Services.Revalidate.exe (normal mode)
+       Reads ValidationDB.PackageRevalidations (unenqueued, incomplete)
+       ──[health check]──► Azure Blob Storage (NuGet.Services.Status ServiceStatus JSON)
+       ──[gallery rate]──► Application Insights REST API  (past-hour push/list/unlist count)
+       ──[enqueue]──────► Azure Service Bus Topic  (PackageValidationMessageData)
+       ──[mark sent]────► ValidationDB.PackageRevalidations (sets Enqueued timestamp)
+```
+
+<CardGroup cols={2}>
+  <Card title="Priority-Ordered Initialization" icon="list-ordered">
+    Packages are categorized into four priority sets — Microsoft-owned, preinstalled by VS/.NET SDK, transitive dependencies of those sets, and all remaining packages — and inserted into the queue in descending download-count order within each set.
+  </Card>
+  <Card title="Pipeline-Aware Throttling" icon="gauge">
+    Before each batch the job calculates a revalidation quota as `DesiredRate - RecentGalleryEvents - RecentRevalidations`. If quota is exhausted or the pipeline status component is not `Up`, the batch is deferred and the desired rate is reset to its minimum.
+  </Card>
+  <Card title="Adaptive Rate Control" icon="trending-up">
+    The desired package event rate starts at `MinPackageEventRate` and increases by `MaxBatchSize` per successful iteration up to `MaxPackageEventRate`. An unhealthy pipeline resets it to the minimum, preventing runaway throughput after an outage clears.
+  </Card>
+  <Card title="Lazy Skip Logic" icon="skip-forward">
+    Packages that are already repository-signed or are no longer available (hard-deleted or status `Deleted`) are detected at dequeue time and marked completed without sending a Service Bus message, avoiding wasteful validation work.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Job.cs` | `Job : ValidationJobBase` | Entry point; handles CLI argument dispatch across the three operating modes and registers all DI services |
+| `Program.cs` | `Program` | Bootstraps and runs the `Job` via the NuGet Jobs runner framework |
+| `Services/RevalidationService.cs` | `RevalidationService` | Outer run loop; drives the revalidation cycle, delegates to `IRevalidationStarter`, and handles `RetryLater` vs `UnrecoverableError` results |
+| `Services/RevalidationStarter.cs` | `RevalidationStarter` | Orchestrates a single iteration: checks singleton status, killswitch, throttle, and pipeline health before dequeuing and sending messages |
+| `Services/RevalidationQueue.cs` | `RevalidationQueue` | Reads the next unenqueued, incomplete `PackageRevalidation` rows from the validation DB, filters out already-signed and deleted packages |
+| `Services/RevalidationThrottler.cs` | `RevalidationThrottler` | Computes whether revalidations are throttled and calculates the precise sleep duration between batches based on the desired hourly rate |
+| `Services/RevalidationJobStateService.cs` | `RevalidationJobStateService` | Manages persistent job state: initialized flag, killswitch flag, and the adaptive desired package event rate |
+| `Services/HealthService.cs` | `HealthService` | Reads the NuGet service status JSON blob from Azure Blob Storage and evaluates a configured component path for `ComponentStatus.Up` |
+| `Services/GalleryService.cs` | `GalleryService` | Queries the Application Insights REST API for the count of `PackagePush`, `PackageUnlisted`, and `PackageListed` events in the past hour |
+| `Services/PackageRevalidationStateService.cs` | `PackageRevalidationStateService` | CRUD over `PackageRevalidations` rows: add, remove, count, mark-as-enqueued, count enqueued in past hour |
+| `Services/SingletonService.cs` | `SingletonService` | Placeholder (unimplemented TODO) intended to detect duplicate job instances |
+| `Services/TelemetryService.cs` | `TelemetryService` | Emits Application Insights custom metrics for revalidation start, completion, and operation duration |
+| `Initialization/InitializationManager.cs` | `InitializationManager` | Coordinates the four-priority-set initialization, clears existing state, and batches inserts with sleep intervals |
+| `Initialization/PackageFinder.cs` | `PackageFinder` | Discovers package registration keys from the Gallery DB by owner, preinstalled ID list, transitive dependency traversal, and catch-all |
+| `Initialization/PackageRevalidationInserter.cs` | `PackageRevalidationInserter` | Bulk-inserts `PackageRevalidation` rows using `SqlBulkCopy` for high-throughput initialization |
+| `Configuration/RevalidationConfiguration.cs` | `RevalidationConfiguration` | Root configuration POCO with rate bounds, intervals, and nested configuration sections |
+| `Configuration/InitializationConfiguration.cs` | `InitializationConfiguration` | Preinstalled paths, max package creation date cutoff, and inter-batch sleep duration |
+| `Configuration/HealthConfiguration.cs` | `HealthConfiguration` | Blob container/name and component path for the service status check |
+| `Configuration/RevalidationQueueConfiguration.cs` | `RevalidationQueueConfiguration` | `MaxBatchSize` (default 64) and optional `MaximumPackageVersions` skip threshold |
+| `Configuration/ApplicationInsightsConfiguration.cs` | `ApplicationInsightsConfiguration` | App Insights `AppId` and `ApiKey` for REST queries |
+
+## Dependencies
+
+### NuGet Package References
+
+The project has no explicit `<PackageReference>` entries in its csproj; all NuGet dependencies flow through the three internal project references below (which in turn bring in Autofac, Microsoft.Extensions.*, Azure Service Bus, Application Insights, Entity Framework, and the NuGet Jobs framework).
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Status` | Provides `ServiceStatus`, `IServiceComponent`, and `ComponentStatus` types used by `HealthService` to parse the status blob |
+| `Validation.Common.Job` | Provides `ValidationJobBase`, `IPackageValidationEnqueuer`, `PackageValidationMessageData`, `IRevalidationStateService`, `ValidatingType`, and shared job infrastructure |
+| `Validation.PackageSigning.Core` | Provides `IValidationEntitiesContext`, `PackageRevalidation`, `PackageSigningState`, `PackageSignatureType`, and related EF entity types for the validation database |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The `MaxPackageCreationDate` cutoff in `InitializationConfiguration` is central to correctness. Only packages with a `Created` timestamp strictly before this date are included in revalidation, because packages published after repository signing was enabled already have the correct signatures and do not need retroactive validation.
+</Note>
+
+<Note>
+Initialization uses `SqlBulkCopy` via `PackageRevalidationInserter` rather than EF `SaveChanges` because potentially millions of rows need to be inserted. The rows are ordered by download count descending within each priority set so that the most-used packages are processed first during the revalidation phase.
+</Note>
+
+<Warning>
+`SingletonService.IsSingletonAsync()` always returns `true` and contains a `// TODO` comment. There is no actual distributed lock preventing two job instances from running concurrently. If two instances run simultaneously, they will both dequeue and enqueue the same packages, causing duplicate validation messages.
+</Warning>
+
+<Warning>
+The killswitch is checked twice inside `RevalidationStarter.CanStartRevalidationAsync()` — once before the throttle check and once after the health check. This is an intentional defensive pattern: the health check involves an async I/O call, so a killswitch activated during that window would otherwise be missed until the next iteration.
+</Warning>
+
+<Tip>
+The throttler enforces a minimum sleep of 5 seconds between batches regardless of the calculated delay, preventing a tight spin loop when the desired rate is very high relative to the batch size and the batch completes nearly instantaneously.
+</Tip>
+
+<Tip>
+The `PackageFinder.FindDependencyPackages` method performs a breadth-first traversal of the `PackageDependencies` table using iterative SQL queries rather than a recursive CTE, ensuring it works within EF's LINQ-to-SQL translation constraints while still capturing the full transitive dependency graph of Microsoft and preinstalled packages.
+</Tip>

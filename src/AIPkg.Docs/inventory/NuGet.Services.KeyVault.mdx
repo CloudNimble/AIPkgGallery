@@ -1,0 +1,120 @@
+---
+title: NuGet.Services.KeyVault
+sidebarTitle: Services.KeyVault
+description: Provides a layered abstraction for reading, writing, caching, and injecting secrets from Azure Key Vault across NuGet services.
+icon: key
+---
+
+## Overview
+
+`NuGet.Services.KeyVault` is a shared library that wraps the Azure Key Vault SDK behind a clean abstraction layer, enabling NuGet services to retrieve and manage secrets without being coupled to the underlying Azure SDK types. It defines a set of interfaces (`ISecretReader`, `ISecretWriter`, `ISecretInjector`, and their caching variants) that allow consuming projects to work with secrets uniformly, whether the backing store is a real Key Vault vault, an in-memory cache, or a no-op stub used in local development and testing.
+
+The library ships two distinct caching strategies built on top of `ISecretReader`. The first, `CachingSecretReader`, uses time-based expiry: secrets are held in a `ConcurrentDictionary` and re-fetched from Key Vault after a configurable interval (default 24 hours) or when they are within a configurable window of their Key Vault expiration date (default 30 minutes before expiry). The second, `RefreshableSecretReader`, separates the concern of _when_ to refresh from the concern of _reading_: the cache is populated on first access and is only updated when `Refresh()` or `RefreshAsync()` is explicitly called, which suits long-running services that want to pre-warm secrets during startup and refresh them on a background timer.
+
+Authentication with Key Vault is handled inside `KeyVaultReader` and is determined entirely by the `KeyVaultConfiguration` provided at construction time. Three modes are supported: managed identity (using `ManagedIdentityCredential` in production or `DefaultAzureCredential` in `DEBUG` builds), client certificate with standard authentication (`ClientCertificateCredential`), and client certificate with the `SendX5c` flag set, which instructs Azure Active Directory to include the full certificate chain in the authentication request. The `SecretClient` is created lazily so that configuration errors surface at first use rather than at startup.
+
+## Role in System
+
+```
+NuGet.Services.KeyVault
+        |
+        |-- consumed by --> NuGet.Services.Configuration  (injects secrets into config strings)
+        |-- consumed by --> NuGet.Services.Sql            (retrieves connection string secrets)
+        |-- consumed by --> NuGetGallery                  (reads application secrets at startup)
+        |-- consumed by --> SplitLargeFiles               (CLI tool needing vault access)
+        |
+        v
+Azure Key Vault  (via Azure.Security.KeyVault.Secrets SDK)
+```
+
+The library sits between NuGet application code and the Azure Key Vault service. Consuming projects depend on the interfaces (`ISecretReader`, `ISecretInjector`) rather than on concrete types, which allows the caching and refresh strategy to be swapped or composed at the DI registration site without changing call sites.
+
+<CardGroup cols={2}>
+  <Card title="Two Caching Strategies" icon="layers">
+    `CachingSecretReader` refreshes automatically on a time-based schedule. `RefreshableSecretReader` only refreshes when explicitly told to, making it safe for ASP.NET startup scenarios where async vault calls can cause deadlocks.
+  </Card>
+  <Card title="Secret Injection" icon="brackets-curly">
+    `SecretInjector` scans arbitrary strings for tokens framed with `$$` (e.g., `$$MySecretName$$`) and replaces them with the resolved secret value, enabling secrets to be embedded in configuration strings.
+  </Card>
+  <Card title="Three Auth Modes" icon="shield-check">
+    Supports managed identity, client certificate, and client certificate with full chain (`SendX5c`). In `DEBUG` builds, managed identity falls back to `DefaultAzureCredential` for developer workstation convenience.
+  </Card>
+  <Card title="Null-Object Pattern" icon="ban">
+    `EmptySecretReader` returns the secret name itself as its value, providing a safe no-op implementation for local development and unit tests that do not need real vault connectivity.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `ISecret.cs` | `ISecret` | Core contract: name, string value, and optional `DateTimeOffset` expiration. |
+| `ISecretReader.cs` | `ISecretReader` | Synchronous and async read operations returning raw strings or `ISecret` objects. |
+| `ISecretWriter.cs` | `ISecretWriter` | Extends `ISecretReader` with `SetSecretAsync`, adding optional expiration on write. |
+| `ISecretInjector.cs` | `ISecretInjector` | Contract for replacing framed tokens in a string with their resolved secret values. |
+| `ISecretReaderFactory.cs` | `ISecretReaderFactory` | Factory that creates an `ISecretReader` and an `ISecretInjector` from that reader. |
+| `IRefreshableSecretReaderFactory.cs` | `IRefreshableSecretReaderFactory` | Extends `ISecretReaderFactory` with explicit `Refresh()` / `RefreshAsync()` control. |
+| `ICachingSecretReader.cs` | `ICachingSecretReader` | Adds `TryGetCachedSecret` and `TryGetCachedSecretObject` for non-blocking cache inspection. |
+| `ICachingSecretInjector.cs` | `ICachingSecretInjector` | Extends `ISecretInjector` with `TryInjectCached`, which only succeeds if all secrets are already cached. |
+| `KeyVaultConfiguration.cs` | `KeyVaultConfiguration` | Immutable configuration record. Two constructors: one for managed identity, one for certificate auth. |
+| `KeyVaultSecret.cs` | `KeyVaultSecret` | Concrete `ISecret` implementation wrapping name, value, and expiration. |
+| `KeyVaultReader.cs` | `KeyVaultReader` | Calls the Azure `SecretClient` directly; lazily constructs the client using the configured auth mode. |
+| `KeyVaultWriter.cs` | `KeyVaultWriter` | Extends `KeyVaultReader` and adds `SetSecretAsync` by calling `SecretClient.SetSecretAsync`. |
+| `CachingSecretReader.cs` | `CachingSecretReader` | Time-based caching layer (default 24 h TTL; refreshes 30 min before Key Vault expiry). |
+| `CachingSecretReaderFactory.cs` | `CachingSecretReaderFactory` | Decorator factory that wraps another `ISecretReaderFactory` and returns `CachingSecretReader` instances. |
+| `RefreshableSecretReader.cs` | `RefreshableSecretReader` | Cache-first reader where cache is only populated on first read and refreshed on explicit call. |
+| `RefreshableSecretReaderFactory.cs` | `RefreshableSecretReaderFactory` | Factory that shares a single `ConcurrentDictionary` cache across all created `RefreshableSecretReader` instances. |
+| `RefreshableSecretReaderSettings.cs` | `RefreshableSecretReaderSettings` | Mutable settings class with `BlockUncachedReads` flag to prevent live vault calls during request handling. |
+| `SecretInjector.cs` | `SecretInjector` | Parses `$$token$$` patterns in strings and resolves each token via the underlying `ISecretReader`. Also implements `TryInjectCached` via `ICachingSecretReader` when available. |
+| `EmptySecretReader.cs` | `EmptySecretReader` | No-op `ICachingSecretReader` that echoes the secret name back as its value; used in tests and local dev. |
+| `CertificateUtility.cs` | `CertificateUtility` | Static helpers to locate an `X509Certificate2` by thumbprint or by subject distinguished name from the Windows certificate store. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Azure.Core` | Base Azure SDK types including `TokenCredential`. |
+| `Azure.Identity` | Provides `ManagedIdentityCredential`, `DefaultAzureCredential`, and `ClientCertificateCredential`. |
+| `Azure.Security.KeyVault.Secrets` | `SecretClient` used for all Key Vault read and write operations. |
+| `Microsoft.Extensions.Logging.Abstractions` | `ILogger` accepted on all read methods for optional diagnostic logging. |
+| `Newtonsoft.Json` | Pulled in as a transitive dependency requirement; not directly used by this project's code. |
+| `System.Text.Json` | Pulled in as a transitive dependency requirement; not directly used by this project's code. |
+
+### Internal Project References
+
+This project has no internal project references. It is a leaf library.
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Configuration` | References this project to inject Key Vault secrets into configuration strings. |
+| `NuGet.Services.Sql` | References this project to retrieve database connection string secrets from Key Vault. |
+| `NuGetGallery` | References this project for application-wide secret retrieval at startup and runtime. |
+| `SplitLargeFiles` | References this project for vault access in the CLI tool. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The `SecretClient` inside `KeyVaultReader` is wrapped in a `Lazy<T>`. The client is not created until the first secret read call, which means authentication failures (bad certificate, wrong tenant ID) appear at first use, not at application startup.
+</Note>
+
+<Note>
+`CachingSecretReader` uses two independent freshness criteria. A cached secret is considered outdated if either (a) more than `refreshIntervalSec` seconds have passed since it was cached, or (b) the secret's Key Vault expiration timestamp is within `refreshIntervalBeforeExpirySec` seconds of the current UTC time. This prevents serving an expired secret value even if the time-based TTL has not yet elapsed.
+</Note>
+
+<Warning>
+`RefreshableSecretReaderSettings.BlockUncachedReads` exists specifically to prevent deadlocks in ASP.NET applications. When set to `true`, any attempt to read a secret that is not already in the cache throws `InvalidOperationException` instead of making a live vault call. The intended pattern is: populate the cache during startup with `BlockUncachedReads = false`, then flip the flag to `true` before the application begins handling requests.
+</Warning>
+
+<Note>
+`RefreshableSecretReaderFactory` shares a single `ConcurrentDictionary<string, ISecret>` instance across all `ISecretReader` objects it creates. This means calling `RefreshAsync` on the factory refreshes secrets for every consumer that was given a reader from that factory instance.
+</Note>
+
+<Tip>
+`SecretInjector` uses `$$` as its default frame delimiter. A custom delimiter can be supplied via the two-argument constructor. The parser handles duplicate secret references in a single string efficiently by collecting unique names into a `HashSet<string>` before making any vault calls.
+</Tip>
+
+<Note>
+`CertificateUtility.FindLatestActiveCertificateBySubject` selects the certificate with the latest `NotAfter` date when multiple certificates share the same subject distinguished name, with `NotBefore` as a tiebreaker. This supports rolling certificate deployments where both the old and new certificates exist in the store simultaneously.
+</Note>

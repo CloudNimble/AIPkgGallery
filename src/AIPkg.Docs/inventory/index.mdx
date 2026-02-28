@@ -1,0 +1,505 @@
+---
+title: Overview
+description: "A high-level map of the ~80 NuGetGallery components — grouped into core systems, shared infrastructure, and supplemental operations — with migration disposition notes for AIpkg."
+icon: "sitemap"
+---
+
+This document maps the ~80 components in the NuGetGallery codebase into logical system groups,
+explains how they work together, and annotates each group with a **migration disposition** for AIpkg.
+
+> **Legend**
+> - **Keep** — core concept maps directly; redesign/port to modern stack
+> - **Simplify** — needed but significantly reduced in scope
+> - **Evaluate** — depends on AIpkg feature decisions
+> - **Drop** — NuGet-specific; no equivalent in AIpkg
+
+---
+
+## 1. Core Systems (Run the Service)
+
+These are the systems that must be running 24/7 for the registry to function.
+
+### 1.1 Web Application
+
+The primary user-facing and API-facing surface.
+
+```mermaid
+graph TD
+    subgraph "Web Application — KEEP (redesign to Blazor + EasyAF)"
+        G["NuGetGallery<br/>ASP.NET MVC 5 / Web API 2<br/>.NET 4.7.2<br/>— Browse UI, push/delete API,<br/>  V2 OData, admin panel, auth"]
+        GC["NuGetGallery.Core<br/>Shared Library<br/>— EF6 DbContext, Azure Blob<br/>  abstractions, packaging helpers"]
+        GS["NuGetGallery.Services<br/>Shared Library<br/>— Package workflows,<br/>  deprecation, org management,<br/>  security policy enforcement"]
+    end
+
+    G --> GC
+    G --> GS
+    GS --> GC
+```
+
+**What it does:** Serves nuget.org — lets users browse packages, upload via `dotnet nuget push`,
+manage API keys and organizations, and provides the V2 OData endpoint consumed by older tooling.
+
+**AIpkg migration:** The entire layer is replaced by Blazor SSR + Interactive Server backed by
+EasyAF (SQL DB Project → EF Core 10). V2 OData surface is dropped. V3-only public API.
+
+---
+
+### 1.2 Search Infrastructure
+
+Keeps package search results fast and relevant by maintaining Azure AI Search indexes.
+
+```mermaid
+graph LR
+    subgraph "Indexers — KEEP (redesign)"
+        D2A["NuGet.Jobs.Db2AzureSearch<br/>Initial index bootstrap<br/>from SQL database"]
+        C2A["NuGet.Jobs.Catalog2AzureSearch<br/>Incremental index updates<br/>driven by catalog cursor"]
+        Aux["NuGet.Jobs.Auxiliary2AzureSearch<br/>Syncs download counts,<br/>owners, verified flags"]
+    end
+
+    subgraph "Index — KEEP"
+        SI["Azure AI Search<br/>'search' index — full-text<br/>'hijack' index — exact match"]
+    end
+
+    subgraph "Query Layer — KEEP (redesign)"
+        SS["NuGet.Services.SearchService.Core<br/>ASP.NET Core search API<br/>V2 + V3 query endpoints"]
+        ASL["NuGet.Services.AzureSearch<br/>Shared library — dual-index<br/>management, query translation,<br/>popularity transfers"]
+        MPW["Microsoft.PackageManagement.Search.Web<br/>ASP.NET Core host bootstrap,<br/>Key Vault injection"]
+    end
+
+    DB[(SQL Database)] --> D2A --> SI
+    Catalog[(Catalog Blobs)] --> C2A --> SI
+    DB --> Aux --> SI
+    SI --> SS
+    ASL --> SS
+    MPW --> SS
+```
+
+**What it does:** Two Azure Search indexes power all search — the "search" index for discovery,
+the "hijack" index for exact package+version lookups. Three separate jobs keep them current:
+a bootstrap job (run once), a catalog-driven incremental job, and an auxiliary job that syncs
+download counts and owner metadata from SQL.
+
+**AIpkg migration:** Keep the dual-index pattern and the three-job approach. Swap Azure AI Search
+API calls for the current SDK. Drop V2 query translation; V3 only.
+
+---
+
+### 1.3 Catalog / V3 Metadata Pipeline
+
+The append-only event log that makes nuget.org's metadata publicly readable and auditable.
+
+```mermaid
+graph LR
+    subgraph "Catalog Writer — KEEP (evaluate scope)"
+        MCW["NuGet.Services.Metadata.Catalog<br/>Shared library (complex)<br/>— JSON-LD catalog writer<br/>— RDF triple generation<br/>— Icon pipeline<br/>— Flat-container builder<br/>— Cursor-driven collectors"]
+        Ng["Ng<br/>Job dispatcher<br/>Runs: db2catalog,<br/>catalog2dnx, catalog2icon,<br/>monitoring, lightning"]
+    end
+
+    subgraph "Registration Hive — KEEP"
+        C2R["NuGet.Jobs.Catalog2Registration<br/>Builds /registration/ blobs<br/>from catalog leaves"]
+        Reg[("Registration<br/>Blobs")]
+    end
+
+    subgraph "Catalog Consumers — KEEP"
+        V3["NuGet.Services.V3<br/>Collector host/logic pattern<br/>Concurrent leaf downloader"]
+        PC["NuGet.Protocol.Catalog<br/>V3 catalog protocol types"]
+    end
+
+    Push[Package Push] --> MCW
+    MCW --> Catalog[(Catalog Blobs)]
+    Catalog --> Ng --> C2R --> Reg
+    Catalog --> V3 --> PC
+```
+
+**What it does:** Every package push creates a catalog "commit" — a JSON-LD entry in an
+append-only blob-based feed. Downstream jobs read this feed via cursors and materialize it into
+registration blobs (one JSON file per package ID), flat-container files (used by `dotnet restore`),
+and icon images. Clients can poll the catalog to mirror all of nuget.org.
+
+**AIpkg migration:** The catalog concept (append-only event log) is valuable and maps to AIpkg's
+V3 API spec. The JSON-LD/RDF machinery (dotNetRDF, json-ld.net) is the most likely candidate for
+simplification or replacement. `Ng` as a monolithic job dispatcher is replaced by proper workers.
+
+---
+
+### 1.4 Validation Pipeline
+
+Every package is asynchronously scanned and signed before becoming publicly available.
+
+```mermaid
+graph TD
+    subgraph "Orchestration — EVALUATE"
+        VO["NuGet.Services.Validation.Orchestrator<br/>State-machine driven<br/>with retry + timeout logic"]
+        VE["NuGet.Services.Validation<br/>Shared library — EF entities,<br/>Service Bus messages,<br/>multi-DB migrations"]
+        VI["NuGet.Services.Validation.Issues<br/>Typed validation error codes"]
+        VC["Validation.Common.Job<br/>Base classes for all validators"]
+    end
+
+    subgraph "Package Signing — EVALUATE"
+        PSC["Validation.PackageSigning.Core<br/>X.509 cert + timestamp<br/>validation logic"]
+        PSP["Validation.PackageSigning.ProcessSignature<br/>Signs packages via NuGet signing API"]
+        PSR["Validation.PackageSigning.RevalidateCertificate<br/>Re-checks certs post-revocation"]
+        PSV["Validation.PackageSigning.ValidateCertificate<br/>Checks cert chain + revocation"]
+    end
+
+    subgraph "Symbol Validation — DROP (no .snupkg in AIpkg)"
+        SC["Validation.Symbols.Core"]
+        SV["Validation.Symbols"]
+    end
+
+    subgraph "Content Scanning — EVALUATE"
+        CC["Validation.ContentScan.Core<br/>Malware/content scan integration"]
+        SSC["Validation.ScanAndSign.Core<br/>Sign-then-scan coordinator"]
+    end
+
+    Push[Package Push] --> VO
+    VO --> PSP
+    VO --> PSV
+    VO --> CC
+    VO --> SV
+    PSP & PSV & CC & SV --> VO
+    VO --> Available[Package Available]
+    VE --> VO
+    VI --> VO
+    VC --> PSP & PSV & PSR & CC
+    PSC --> PSP & PSV & PSR
+```
+
+**What it does:** When a package is pushed, the Gallery creates a validation set and hands off to
+the Orchestrator. The Orchestrator drives a configurable set of validators (signing check, cert
+validation, content scan, symbol validation) via Service Bus messages. When all validators pass,
+the package is marked available.
+
+**AIpkg migration:** AIpkg will need some form of content validation. The orchestrator pattern is
+sound. Package signing is less relevant for AI plugins; content scanning may still apply.
+Symbol validation has no AIpkg equivalent. The Service Bus–driven async model is worth keeping.
+
+---
+
+### 1.5 Database Infrastructure
+
+Schema management and data access across multiple SQL databases.
+
+```mermaid
+graph LR
+    subgraph "Shared Libraries — KEEP (replace EF6 with EF Core 10)"
+        Ent["NuGet.Services.Entities<br/>EF6 entity models +<br/>DbContext interfaces"]
+        SQL["NuGet.Services.Sql<br/>Connection management,<br/>retry helpers, Dapper"]
+        DM["NuGet.Services.DatabaseMigration<br/>Migration runner scaffolding,<br/>context interfaces"]
+    end
+
+    subgraph "Migration Runner — KEEP (replace with DACPAC)"
+        DMT["DatabaseMigrationTools<br/>Console app — applies EF<br/>migrations to all DBs<br/>on deployment"]
+    end
+
+    subgraph "Databases"
+        GDB[("Gallery DB<br/>Packages, Users,<br/>Credentials, Owners")]
+        VDB[("Validation DB<br/>Validation sets,<br/>certificates")]
+        SDB[(SupportRequest DB)]
+        CVD[(CatalogValidation DB)]
+    end
+
+    DMT --> GDB & VDB & SDB & CVD
+    Ent --> GDB
+    SQL --> GDB & VDB
+    DM --> DMT
+```
+
+**What it does:** Four separate SQL databases are maintained with EF Code First migrations,
+all applied by a single migration runner tool deployed as part of each release.
+
+**AIpkg migration:** EasyAF replaces EF6 + migration runner with a SQL DB Project (`.sqlproj`)
+as the schema source of truth, generating EF Core 10 entities. The four-database pattern
+collapses — AIpkg starts with one primary database.
+
+---
+
+## 2. Shared Infrastructure Libraries
+
+Cross-cutting plumbing used by virtually every component above.
+
+```mermaid
+graph TD
+    subgraph "No-Dependency Root — KEEP"
+        Contracts["NuGet.Services.Contracts<br/>Interface-only library<br/>(no dependencies)<br/>— ITelemetryClient<br/>— IServiceBusMessage<br/>— Validation enums"]
+    end
+
+    subgraph "Azure Integrations — KEEP (update SDKs)"
+        KV["NuGet.Services.KeyVault<br/>Key Vault client,<br/>secret resolution"]
+        Stor["NuGet.Services.Storage<br/>Blob abstractions,<br/>throttled client"]
+        SB["NuGet.Services.ServiceBus<br/>Topic/subscription clients,<br/>message serialization"]
+        FF["NuGet.Services.FeatureFlags<br/>Blob-backed feature toggles"]
+    end
+
+    subgraph "Application Services — KEEP"
+        Config["NuGet.Services.Configuration<br/>Key Vault injection,<br/>credential helpers"]
+        Log["NuGet.Services.Logging<br/>App Insights, structured<br/>logging, ITelemetryClient impl"]
+        Msg["NuGet.Services.Messaging<br/>+ Messaging.Email<br/>Async email enqueue,<br/>markdown email builders"]
+        Cursor["NuGet.Services.Cursor<br/>Blob-backed durable cursors<br/>for job checkpointing"]
+        JobCommon["NuGet.Jobs.Common<br/>JsonConfigurationJob base<br/>for all background jobs<br/>— DI, logging, config wiring"]
+    end
+
+    subgraph "Domain Utilities — EVALUATE"
+        Lic["NuGet.Services.Licenses<br/>SPDX expression parser"]
+        GH["NuGet.Services.GitHub<br/>GitHub GraphQL client"]
+    end
+
+    subgraph "Legacy — DROP"
+        OWIN["NuGet.Services.Owin<br/>OWIN middleware helpers"]
+        Boot["Bootstrap<br/>jQuery / LESS / Knockout.js<br/>frontend assets"]
+    end
+
+    Contracts --> Log & SB & Msg
+    Config --> KV
+    Log --> Contracts
+    JobCommon --> Log & Config & Stor & Cursor
+```
+
+**What it does:** Every background job is built on `NuGet.Jobs.Common`'s `JsonConfigurationJob`,
+which wires up dependency injection, Application Insights logging, and Key Vault config injection
+consistently. Azure Service Bus handles async messaging between the Gallery and validators.
+Blob-backed cursors let every long-running job resume exactly where it left off after a restart.
+
+**AIpkg migration:** The contracts-first, no-dependency-root pattern is worth keeping. Azure SDK
+wrappers need updating to current packages. OWIN and Bootstrap are dropped entirely with the move
+to ASP.NET Core + Blazor.
+
+---
+
+## 3. Supplemental Systems (One-Off Tasks / Operations)
+
+These systems augment operations but are not on the critical path for the registry to function.
+
+### 3.1 Statistics Pipeline
+
+Download count tracking from CDN log files to the Gallery database.
+
+```mermaid
+graph LR
+    CDN["Azure CDN<br/>Access Logs"] --> |raw .tsv.gz| Collect
+
+    subgraph "Stats Pipeline — DROP (simplify to Azure Monitor)"
+        Collect["Stats.CollectAzureChinaCDNLogs<br/>Downloads CDN log blobs"]
+        San["Stats.CDNLogsSanitizer<br/>Strips PII from log entries"]
+        Common["Stats.AzureCdnLogs.Common<br/>Shared log parsing types"]
+        WH["Stats.Warehouse<br/>Loads sanitized logs<br/>into Azure SQL DW"]
+        Rep["Stats.CreateAzureCdnWarehouseReports<br/>Generates rollup reports<br/>from DW data"]
+        PP["Stats.PostProcessReports<br/>Post-processes report blobs"]
+        Agg["Stats.AggregateCdnDownloadsInGallery<br/>Writes download counts<br/>back to Gallery SQL"]
+        PLM["PackageLagMonitor<br/>Alerts when packages<br/>are slow to appear in feeds"]
+    end
+
+    Collect --> San --> Common --> WH --> Rep --> PP
+    WH --> Agg --> GDB[("Gallery DB<br/>DownloadCount")]
+```
+
+**What it does:** Six separate jobs form an ETL pipeline: collect raw CDN log files from Azure,
+sanitize PII, load into a SQL Data Warehouse, generate rollup reports, post-process blobs, and
+finally aggregate download counts back into the Gallery database where search indexers pick them up.
+
+**AIpkg migration:** This entire pipeline is likely replaced by Azure Monitor / Application
+Insights aggregation. Download counting is simpler at AIpkg's initial scale.
+
+---
+
+### 3.2 GitHub / Security Intelligence
+
+Ingests security advisories from GitHub and surfaces them alongside affected packages.
+
+```mermaid
+graph LR
+    subgraph "Vulnerability Ingestion — EVALUATE"
+        GHSvc["NuGet.Services.GitHub<br/>GraphQL client,<br/>advisory collection,<br/>vulnerability writers"]
+        G2DB["GitHubVulnerabilities2Db<br/>Ingests advisories<br/>into Gallery SQL"]
+        G2V3["GitHubVulnerabilities2v3<br/>Produces V3 vulnerability<br/>index blobs"]
+        VGH["VerifyGitHubVulnerabilities<br/>Reconciles DB vs V3 index<br/>for consistency"]
+    end
+
+    subgraph "Repo Metadata — DROP"
+        GHI["NuGet.Jobs.GitHubIndexer<br/>Indexes GitHub repos<br/>for package-repo linkage"]
+    end
+
+    GitHub["GitHub Advisory DB<br/>(GraphQL API)"] --> GHSvc
+    GHSvc --> G2DB --> GalleryDB[(Gallery SQL)]
+    GHSvc --> G2V3 --> V3Blobs[(V3 Index Blobs)]
+    GalleryDB & V3Blobs --> VGH
+```
+
+**What it does:** A GraphQL-polling job pulls new security advisories from GitHub's database,
+writes them to both the Gallery SQL (for UI display) and V3 blobs (for tooling consumption).
+A separate job indexes GitHub repositories to link packages to their source repos.
+
+**AIpkg migration:** Vulnerability advisories for AI plugins is a valid future feature.
+The GitHub Advisory database may not have AI plugin coverage yet. Repo indexing is likely dropped.
+
+---
+
+### 3.3 Operations & Admin Tools
+
+Human-in-the-loop maintenance and monitoring tasks.
+
+```mermaid
+graph TD
+    subgraph "Admin CLI — SIMPLIFY"
+        GT["GalleryTools<br/>Operator CLI — database backfill,<br/>metadata reflow, API key hashing,<br/>package integrity checks"]
+    end
+
+    subgraph "Scheduled Maintenance — SIMPLIFY"
+        GM["Gallery.Maintenance<br/>Deletes expired API key credentials"]
+        CE["Gallery.CredentialExpiration<br/>Sends expiration warning emails<br/>for API keys about to expire"]
+        AD["AccountDeleter<br/>Processes account deletion<br/>requests from Service Bus queue"]
+        SR["NuGet.SupportRequests.Notifications<br/>Sends support ticket email<br/>notifications to on-call team"]
+    end
+
+    subgraph "Integrity Checks — EVALUATE"
+        VMP["VerifyMicrosoftPackage<br/>Verifies Microsoft-owned<br/>packages have correct metadata"]
+        Rev["NuGet.Services.Revalidate<br/>Queues packages for<br/>re-validation on demand"]
+    end
+```
+
+**What it does:** `GalleryTools` is the operator's Swiss Army knife — an admin CLI for backfill
+operations that are run ad-hoc when schema changes need retroactive data updates. The scheduled
+jobs handle routine hygiene: expired credential cleanup, expiration warnings, and account deletion
+fulfillment. Integrity check jobs provide confidence that data is consistent across systems.
+
+**AIpkg migration:** A similar admin CLI pattern will be needed. Credential expiration warnings
+are directly applicable (API keys). Account deletion is required for GDPR compliance. The specific
+`VerifyMicrosoftPackage` check has no AIpkg equivalent.
+
+---
+
+### 3.4 Blob Storage Operations
+
+One-time and periodic blob management tasks.
+
+```mermaid
+graph LR
+    subgraph "Storage Maintenance — SIMPLIFY"
+        AP["ArchivePackages<br/>Incrementally backs up all<br/>package .nupkg files<br/>to archive storage"]
+        CAC["CopyAzureContainer<br/>Full container backup<br/>between storage accounts<br/>using AzCopy v10"]
+        SAB["SnapshotAzureBlob<br/>Creates Azure Blob<br/>Snapshots for PITR"]
+        SLF["SplitLargeFiles<br/>Splits oversized blobs<br/>into chunks for AzCopy compat"]
+        PH["PackageHash<br/>Backfill job — computes<br/>missing SHA-512 hashes<br/>for existing packages"]
+    end
+
+    Primary[("Primary Blob<br/>Storage")] --> AP --> Archive[(Archive Storage)]
+    Primary --> CAC --> Backup[(Backup Storage)]
+    Primary --> SAB
+    SLF --> CAC
+```
+
+**What it does:** A family of utility jobs manage blob storage hygiene: incremental package
+archival, full container backups, point-in-time recovery snapshots, and a historical backfill for
+packages that were uploaded before hash computation was added.
+
+**AIpkg migration:** Package backup and snapshotting remain applicable. `PackageHash` is a one-time
+historical backfill that won't be needed for a greenfield service. `SplitLargeFiles` is likely
+unnecessary at AIpkg's initial scale.
+
+---
+
+### 3.5 Status & Incident Monitoring
+
+External-facing status page infrastructure.
+
+```mermaid
+graph LR
+    subgraph "Status System — EVALUATE"
+        SA["StatusAggregator<br/>Polls component health<br/>and aggregates into<br/>Incident + Component entities"]
+        ST["NuGet.Services.Status<br/>Status page data models<br/>and blob rendering"]
+        STT["NuGet.Services.Status.Table<br/>Azure Table Storage<br/>backing for status data"]
+        INC["NuGet.Services.Incidents<br/>ICM / incident management<br/>integration"]
+    end
+
+    SA --> STT --> ST --> StatusPage[status.nuget.org]
+    INC --> SA
+```
+
+**What it does:** A background aggregator polls component health endpoints and synthesizes
+the data into incident records written to Azure Table Storage, which are then rendered into
+the public status page.
+
+**AIpkg migration:** A status page is worthwhile. The aggregator pattern is sound. ICM
+integration is Microsoft-internal; AIpkg would use a different incident management tool.
+
+---
+
+### 3.6 CDN Redirect
+
+```mermaid
+graph LR
+    subgraph "CDN Redirect — DROP"
+        CDN["NuGetCDNRedirect<br/>Lightweight redirector<br/>from old CDN URLs<br/>to current blob URLs"]
+    end
+```
+
+**What it does:** Redirects legacy CDN URLs to current Azure CDN / blob storage URLs for
+backwards compatibility with old tooling.
+
+**AIpkg migration:** Not applicable. AIpkg starts fresh with no legacy CDN URL debt.
+
+---
+
+### 3.7 Catalog Validation & Monitoring
+
+Ensures the V3 catalog feed is consistent and complete.
+
+```mermaid
+graph LR
+    subgraph "Catalog Health — EVALUATE"
+        CVM["NuGet.Services.Metadata.Catalog.Monitoring<br/>Crawls catalog to verify<br/>leaves are reachable<br/>and well-formed"]
+        CSV["NuGet.Services.CatalogValidation<br/>Shared library — DB schema<br/>for validation tracking"]
+        Catalog[(Catalog Blobs)] --> CVM --> CVD[(CatalogValidation DB)]
+    end
+```
+
+**What it does:** A monitoring job crawls the catalog feed to verify that every leaf blob is
+readable and correctly formed, writing results to a dedicated validation database.
+
+**AIpkg migration:** Catalog health monitoring is valuable if AIpkg ships a V3 catalog.
+The specific implementation can be significantly simplified.
+
+---
+
+## 4. Migration Disposition Summary
+
+```mermaid
+quadrantChart
+    title AIpkg Migration Disposition
+    x-axis "Low Reuse Potential" --> "High Reuse Potential"
+    y-axis "Low Complexity" --> "High Complexity"
+
+    NuGetGallery Web App: [0.15, 0.9]
+    Search Infrastructure: [0.75, 0.8]
+    Catalog/V3 Pipeline: [0.55, 0.85]
+    Validation Pipeline: [0.45, 0.75]
+    DB Infrastructure: [0.35, 0.5]
+    Shared Libraries: [0.8, 0.45]
+    Stats Pipeline: [0.1, 0.6]
+    GitHub/Security: [0.4, 0.4]
+    Admin/Ops Tools: [0.6, 0.3]
+    Blob Storage Jobs: [0.5, 0.2]
+    Status System: [0.65, 0.25]
+    CDN Redirect: [0.05, 0.05]
+    Bootstrap/OWIN: [0.05, 0.3]
+```
+
+| System Group | Components | Disposition | Reason |
+|---|---|---|---|
+| Web Application | NuGetGallery, .Core, .Services | **Keep / Full Redesign** | Replaced by Blazor + EasyAF; V2 OData dropped |
+| Search Infrastructure | 5 components | **Keep / Update** | Dual-index pattern is solid; update Azure Search SDK |
+| Catalog / V3 Pipeline | 5 components | **Keep / Simplify** | Drop RDF/JSON-LD complexity; keep append-only model |
+| Validation Pipeline | 10 components | **Evaluate** | Content scan yes; signing/symbols scope TBD |
+| Database Infrastructure | 4 components | **Keep / Replace** | EF6 → EF Core 10 + SQL DB Project via EasyAF |
+| Shared Libraries | ~15 components | **Keep / Update** | Contracts-first pattern, Azure SDK updates |
+| Stats Pipeline | 7 components | **Drop** | Replace with Azure Monitor at AIpkg scale |
+| GitHub / Security | 4 components | **Evaluate** | Feature decision — vulnerability data for AI plugins? |
+| Admin / Ops Tools | 6 components | **Simplify** | Need a CLI and scheduled hygiene jobs, fewer one-offs |
+| Blob Storage Jobs | 5 components | **Simplify** | Archival/backup yes; historical backfills no |
+| Status System | 4 components | **Evaluate** | Status page is valuable; ICM integration is MS-internal |
+| CDN Redirect | 1 component | **Drop** | No legacy URL debt in greenfield service |
+| Bootstrap / OWIN | 2 components | **Drop** | Replaced by Blazor + ASP.NET Core |
+
+---
+
+*Generated from inventory files in `/src/AIPkg.Docs/inventory/` and legacy docs in `/src/AIPkg.Docs/legacy/`.*

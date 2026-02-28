@@ -1,0 +1,160 @@
+﻿---
+title: "Stats.Warehouse"
+sidebarTitle: "Stats.Warehouse"
+description: "SQL Server Data Tools (SSDT) database project defining the star-schema data warehouse that stores all NuGet package and tool download telemetry."
+icon: "database"
+---
+
+## Overview
+
+`Stats.Warehouse` is a **SQL Server Database Project** (`.sqlproj`) targeting Azure SQL (SqlAzureV12). It defines the complete schema — tables, stored procedures, user-defined functions, table-valued types, and views — for the NuGet download-statistics data warehouse.
+
+The warehouse follows a classic **star schema** design: a central fact table (`Fact_Download`) is surrounded by dimension tables for date, time, package, client, platform, and operation. A parallel star for NuGet CLI tool distributions (`Fact_Dist_Download`) mirrors the same pattern for tracking tool releases.
+
+Raw IIS/CDN log files are aggregated by external jobs and loaded into this warehouse via table-valued parameters passed to the `Ensure*` and `StoreLogFileAggregates` stored procedures. Reporting stored procedures then query the warehouse to produce the download reports surfaced on nuget.org.
+
+<Note>
+This project contains **no application code**. It is a pure SQL Server Data Tools (SSDT) database project. The compiled output is a `.dacpac` that is deployed to the warehouse SQL server. All logic lives in T-SQL.
+</Note>
+
+## Role in the System
+
+<CardGroup cols={2}>
+  <Card title="Upstream: Stats Pipeline" icon="arrow-right-to-bracket">
+    External stats-collection jobs (e.g., `Stats.ImportAzureCdnStatistics`, `Stats.AggregateCdnDownloadsInGallery`) parse CDN log files and call the `Ensure*` procedures and `StoreLogFileAggregates` to populate the warehouse.
+  </Card>
+  <Card title="Downstream: Download Reports" icon="arrow-right-from-bracket">
+    Reporting jobs call the `DownloadReport*` and `SelectTotalDownloadCounts*` procedures to generate the JSON download-report blobs that nuget.org reads for package download badges and statistics pages.
+  </Card>
+  <Card title="Downstream: Gallery Sync" icon="rotate">
+    `GetDirtyPackageIds` and the `Cursors` table form a cursor-based change-detection pattern used by gallery-sync jobs to identify packages whose download counts have changed and need to be pushed back to the Gallery database.
+  </Card>
+  <Card title="Downstream: Dist Reports" icon="wrench">
+    `View_Dist_ReleaseDate` and `Fact_Dist_Download` track NuGet CLI tool distribution downloads, feeding release-date and version-alias metadata to tooling dashboards.
+  </Card>
+</CardGroup>
+
+## Schema: Tables
+
+| Table | Type | Purpose |
+|---|---|---|
+| `Fact_Download` | Fact | Core download event fact table; FK'd to all dimensions |
+| `Fact_Dist_Download` | Fact | Tool-distribution download facts (NuGet CLI etc.) |
+| `Fact_UserAgent` | Fact/Lookup | Deduplicated raw user-agent strings |
+| `Fact_LogFileName` | Fact/Lookup | Deduplicated CDN log file names |
+| `Fact_IpAddress` | Fact/Lookup | Deduplicated edge-server IP addresses |
+| `Fact_Package_PackageSet` | Bridge | Many-to-many between packages and package sets |
+| `Dimension_Package` | Dimension | Package ID + version, with persisted lowercase columns |
+| `Dimension_Client` | Dimension | Client name + version parts + computed `ClientCategory` |
+| `Dimension_Date` | Dimension | Full date spine with fiscal calendar attributes |
+| `Dimension_Time` | Dimension | Time-of-day dimension (hour granularity) |
+| `Dimension_Operation` | Dimension | Download operation type (install, restore, etc.) |
+| `Dimension_Platform` | Dimension | OS/runtime platform |
+| `Dimension_Tool` | Dimension | NuGet CLI tool ID, version, and filename |
+| `Dimension_PackageSet` | Dimension | Named groupings of packages |
+| `Agg_PackageDownloads_LogFile` | Aggregate | Per-log-file, per-date download count rollup |
+| `Cursors` | Control | Named datetime cursors for incremental processing |
+
+## Schema: Programmability
+
+### Key Stored Procedures
+
+| Procedure | Purpose |
+|---|---|
+| `EnsurePackageDimensionsExist` | Upserts package dimension rows via TVP; returns surrogate IDs |
+| `EnsureClientDimensionsExist` | Upserts client dimension rows via TVP |
+| `EnsurePlatformDimensionsExist` | Upserts platform dimension rows via TVP |
+| `EnsureToolDimensionsExist` | Upserts tool dimension rows via TVP |
+| `EnsureUserAgentFactsExist` | Upserts raw user-agent strings into `Fact_UserAgent` |
+| `EnsureLogFileNameFactsExist` | Upserts log file name strings into `Fact_LogFileName` |
+| `EnsureIpAddressFactsExist` | Upserts edge-server IPs into `Fact_IpAddress` |
+| `StoreLogFileAggregates` | Cursor-based upsert of per-log-file download aggregates |
+| `SelectAlreadyAggregatedLogFiles` | Returns log file names already present in `Agg_PackageDownloads_LogFile` |
+| `CheckLogFileHasPackageStatistics` | Checks whether a log file contributed package download facts |
+| `CheckLogFileHasToolStatistics` | Checks whether a log file contributed tool download facts |
+| `SelectTotalDownloadCounts` | Returns total download count across all packages (with hardcoded -21M correction) |
+| `SelectTotalDownloadCountsPerPackageVersion` | Per-package-version totals |
+| `SelectTotalDownloadCountsPerToolVersion` | Per-tool-version totals |
+| `GetDirtyPackageIds` | Cursor-based detection of packages with new downloads since last run |
+| `UpdateDirtyPackageIdCursor` | Advances the `GetDirtyPackageId` cursor in `Cursors` table |
+| `GetTotalPackageDownloadsByDate` | Daily download totals, used by aggregate reporting |
+| `DownloadReportRecentPopularity` | Top 100 packages by downloads in last 42 days |
+| `DownloadReportRecentPopularityDetail` | Per-version breakdown for recent-popularity report |
+| `DownloadReportRecentPopularityDetailByPackage` | Package-scoped version breakdown |
+| `DownloadReportRecentCommunityPopularity` | Popularity filtered to community (non-NuGet) clients |
+| `DownloadReportRecentCommunityPopularityDetail` | Community popularity with version detail |
+| `DownloadReportLast6Months` | Monthly download totals for last 6 months |
+| `DownloadReportLast6Weeks` | Weekly download totals for last 6 weeks |
+| `DownloadReportNuGetClientVersion` | Downloads grouped by NuGet client version |
+| `DownloadReportListInactive` | Packages with zero recent activity |
+| `CleanupFactIpAddress` | Deletes orphaned IP address facts |
+| `CleanupFactUserAgent` | Deletes orphaned user-agent facts |
+| `CleanupPlatformDimension` | Removes unused platform dimension rows |
+| `GenerateFixedDimensions` | Seeds fixed/static dimension rows (operation types, etc.) |
+| `GetUnknownUserAgents` | Returns user agents with no client dimension mapping |
+| `GetLinkedUserAgents` | Returns user agents already linked to a client dimension |
+| `PatchClientDimensionForUserAgent` | Manually assigns a client dimension to a user-agent string |
+
+### Functions
+
+| Function | Purpose |
+|---|---|
+| `GetClientCategory` | Dispatches to type-detection functions; returns category string |
+| `IsNuGetClient` | Returns 1 if user-agent matches NuGet client patterns |
+| `IsBrowser` | Returns 1 if user-agent is a browser |
+| `IsCrawler` | Returns 1 if user-agent is a web crawler/bot |
+| `IsMobileClient` | Returns 1 if user-agent is a mobile client |
+| `IsScriptClient` | Returns 1 if user-agent is a scripting client (PowerShell, curl, etc.) |
+| `IsUnknownClient` | Returns 1 if user-agent is unknown/test/noise |
+| `ParseCsvString` | Splits a CSV string into a table of values |
+
+### Views
+
+| View | Purpose |
+|---|---|
+| `View_Dist_ReleaseDate` | Earliest download date per tool version; computes `IsPrerelease` and `VersionAlias` |
+| `View_Fixed_Week_Dimension_Date` | Fixed ISO-week mapping over `Dimension_Date` for weekly reporting |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Upsert via Table-Valued Parameters.** All `Ensure*` procedures accept a TVP (table-valued parameter), attempt a bulk insert of new rows using `EXCEPT` to exclude already-existing ones, and return the full set of surrogate IDs. This is the standard pattern for idempotent dimension loading across the warehouse.
+</Note>
+
+<Note>
+**Cursor-based incremental processing.** The `Cursors` table holds named `DATETIME` positions. `GetDirtyPackageIds` reads the `GetDirtyPackageId` cursor, finds facts added since that position, and returns changed package IDs. `UpdateDirtyPackageIdCursor` advances the position after processing. This decouples the warehouse write path from the gallery sync read path.
+</Note>
+
+<Warning>
+**Hardcoded download-count correction in `SelectTotalDownloadCounts`.** The procedure subtracts exactly `21,000,000` from the raw sum to correct for historical over-counting. This magic number is not documented within the SQL and must not be changed without understanding the original data-quality issue it compensates for.
+</Warning>
+
+<Warning>
+**`StoreLogFileAggregates` uses a T-SQL cursor (row-by-row).** The procedure iterates the TVP with a `DECLARE CURSOR` loop rather than a set-based merge, which limits throughput at high log-file volumes. This is a known implementation quirk.
+</Warning>
+
+<Note>
+**`Dimension_Client.ClientCategory` and `ClientVersion` are persisted computed columns.** `ClientCategory` is computed by `dbo.GetClientCategory()` and persisted at write time, making it indexable and report-ready without runtime function calls. The version triple (`Major.Minor.Patch`) is similarly persisted as `ClientVersion`.
+</Note>
+
+<Tip>
+**Download reports exclude Crawlers, Unknowns, and future NuGet major versions.** The `DownloadReport*` procedures filter out `ClientCategory IN ('Crawler', 'Unknown')` and also exclude `NuGet` clients with `Major > 10` — a forward-looking guard against unrecognized future client versions inflating counts.
+</Tip>
+
+<Note>
+**Snapshot isolation is enabled** (`AllowSnapshotIsolation = True` in the project properties). Most reporting procedures use `(NOLOCK)` hints throughout for non-blocking reads, accepting the trade-off of potentially reading uncommitted data in exchange for query concurrency on the heavily-written fact tables.
+</Note>
+
+## Dependencies
+
+This is a pure SSDT database project. It has no NuGet package dependencies and no internal project references.
+
+| Dependency | Type | Notes |
+|---|---|---|
+| `Microsoft.Data.Tools.Schema.SqlTasks.targets` | MSBuild / SSDT | SSDT build targets; resolved from VS installation or `SQLDBExtensionsRefPath` env var |
+| `Microsoft.Data.Tools.Schema.Sql.SqlAzureV12DatabaseSchemaProvider` | SSDT DSP | Targets Azure SQL (SQL Server 2022-compatible DDL) |
+| `System` | .NET Assembly | Referenced for `AssemblyInfo.cs` compilation only |
+
+<Note>
+The `.sqlproj` uses `TargetFrameworkVersion v4.7.2` and `ToolsVersion 4.0` purely as MSBuild scaffolding — there is no runtime .NET component. The project output is a `.dacpac` file.
+</Note>

@@ -1,0 +1,139 @@
+---
+title: NuGetGallery
+sidebarTitle: NuGetGallery (Web App)
+description: The ASP.NET MVC 5 / Web API 2 web application that powers nuget.org — providing the package browse UI, the NuGet V2 OData feed, push/delete APIs, user and organization management, and the admin panel.
+icon: globe
+---
+
+# NuGetGallery
+
+## Overview
+
+NuGetGallery is the primary web application for nuget.org. It is an ASP.NET MVC 5 / Web API 2 project targeting .NET Framework 4.7.2, hosted on IIS via an OWIN pipeline. The application handles every user-facing concern: browsing and searching packages, uploading and deleting packages via the NuGet push API, managing user accounts and organizations, rendering package detail pages, serving the legacy V2 OData feed consumed by older NuGet clients, and providing a restricted admin panel.
+
+The project is built as a `Library` assembly (`OutputType=Library`) deployed to IIS — the OWIN startup class (`OwinStartup`) is detected automatically by the `Microsoft.Owin.Host.SystemWeb` host. All request routing flows through this single process; background work (validation, indexing, catalog) is handled by separate job executables.
+
+<Note>
+The web application operates in two modes: **full mode** (UI + API) and **feed-only mode** (`feedOnlyMode=true`), in which all MVC UI routes are suppressed and only the V2 OData API is registered. Feed-only mode exists to allow separate "feed-only" deployments behind the load balancer that serve NuGet client traffic without serving browser traffic.
+</Note>
+
+## Role in the NuGetGallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="Upstream: Package Authors" icon="upload">
+    Authors push `.nupkg` files via the V2 push API (`PUT /api/v2/package`). The gallery validates the upload, persists it to Azure Blob Storage in the `uploads` container, and enqueues a validation message via `AsynchronousPackageValidationInitiator`.
+  </Card>
+  <Card title="Downstream: Validation Orchestrator" icon="shield-check">
+    After a push, the gallery writes a `PackageValidationSet` record and sends a Service Bus message. The Validation Orchestrator drives the package through validators until it is marked `Available` or `FailedValidation`.
+  </Card>
+  <Card title="Downstream: Search / Azure Search" icon="search">
+    The gallery calls out to an external search service (Azure AI Search via `NuGet.Services.AzureSearch`) for package search. The `IHijackSearchServiceFactory` pattern redirects OData V2 queries to the search service to avoid database fan-out.
+  </Card>
+  <Card title="Downstream: Db2Catalog / V3 Feed" icon="database">
+    When a package is made `Available`, its `LastEdited` timestamp is updated. The Db2Catalog job detects this change and publishes the package into the V3 NuGet protocol (registration, flat container, catalog).
+  </Card>
+</CardGroup>
+
+## Request Pipeline
+
+The OWIN pipeline is bootstrapped in this order by `OwinStartup.Configuration`:
+
+1. `ServicePointManager` tuning (connection limits, TLS 1.2, Nagle disabled).
+2. Autofac DI container composition (`AutofacConfig.UseAutofacInjection`) — scans the assembly for `IAutofacModule` registrations and all controller types.
+3. OWIN cookie authentication middleware (`CookieAuthenticationMiddleware`) with sliding expiration.
+4. External OAuth providers (AAD v2, Microsoft Account) registered via `Authenticator` subclasses.
+5. MVC route table (`Routes.RegisterRoutes`) and Web API (`WebApiConfig.Register`) with OData V1/V2 endpoints.
+6. Feature flag service wired through `NuGet.Services.FeatureFlags`.
+
+## Key Files and Classes
+
+| File Path | Class / Interface | Purpose |
+|-----------|-------------------|---------|
+| `App_Start/OwinStartup.cs` | `OwinStartup` | OWIN entry point; configures TLS, Autofac, cookie auth, external providers, and routes. Auto-detected by `[assembly: OwinStartup]`. |
+| `App_Start/AutofacConfig.cs` | `AutofacConfig` | Builds the Autofac `ContainerBuilder`; registers MVC controllers (property injection), Web API controllers, model binders, filter providers, and all `IAutofacModule` modules found in the assembly. |
+| `App_Start/Routes.cs` | `Routes` | Registers all MVC UI routes and the V2 OData/Web API routes. Supports `feedOnlyMode` to suppress UI routes. |
+| `App_Start/DefaultDependenciesModule.cs` | `DefaultDependenciesModule` | Main Autofac module wiring all service interfaces to their implementations (package services, file storage, search, auditing, messaging, telemetry, etc.). |
+| `Controllers/ApiController.cs` | `ApiController` | Handles NuGet V2 push (`PUT`), delete (`DELETE`), deprecate, and autocomplete endpoints. Validates API keys, calls `PackageUploadService`, initiates validation. |
+| `Controllers/PackagesController.cs` | `PackagesController` | MVC controller for all package-related UI: listing, detail page, upload wizard, readme/license rendering, owner management, deprecation UI, vulnerability display. |
+| `Controllers/AuthenticationController.cs` | `AuthenticationController` | Login/logout, external OAuth sign-in (AAD v2 / MSA), password reset, two-factor authentication, account linking. |
+| `Controllers/AccountsController.cs` | `AccountsController<TUser,TVM>` | Abstract base for `UsersController` and `OrganizationsController`; handles profile, email confirmation, security policy, certificate management. |
+| `Controllers/ODataV1FeedController.cs` | `ODataV1FeedController` | NuGet V1 OData feed (`/api/v1`). Largely legacy; thin wrapper around `NuGetODataController`. |
+| `Controllers/ODataV2FeedController.cs` | `ODataV2FeedController` | NuGet V2 OData feed (`/api/v2`). Primary feed consumed by `nuget.exe` and older SDK clients. Implements search hijacking via `IHijackSearchServiceFactory`. |
+| `Controllers/StatisticsController.cs` | `StatisticsController` | Serves download statistics pages fed by `IStatisticsService` (backed by pre-built JSON reports in blob storage). |
+| `GalleryConstants.cs` | `GalleryConstants` | Central repository of string constants, regex patterns for email/username validation, size limits, header names, and content type names. |
+| `Infrastructure/HijackSearchServiceFactory.cs` | `HijackSearchServiceFactory` | Decides at request time whether to redirect an OData V2 query to the external search service or fall back to direct database queries. |
+| `Infrastructure/Lucene/` | Lucene indexing helpers | Local Lucene.NET index used for `IIndexingService` in development / fallback scenarios. Not used in production. |
+| `OData/NuGetODataController.cs` | `NuGetODataController` | Base class for OData feed controllers; handles `$format`, `DataServiceVersion` headers, and search adapter integration. |
+| `OData/QueryInterceptors/` | Query interceptors | `NormalizeVersionInterceptor`, `PackageHijackingInterceptor`, `CountInterceptor` — applied to LINQ queries before EF materializes them. |
+| `Services/PackageUploadService.cs` | `PackageUploadService` | Validates a new package upload (ID, version, license, readme, icon, typosquatting, metadata validation) and commits to the DB and blob storage. |
+| `Services/ValidationService.cs` | `ValidationService` | Wraps `AsynchronousPackageValidationInitiator`; called after a successful upload to kick off the validation pipeline. |
+| `Services/PackageDeleteService.cs` | `PackageDeleteService` | Hard- and soft-delete logic, including audit trail creation and removal of blob files. |
+| `Services/TyposquattingService.cs` | `TyposquattingService` | Checks a new package ID against a cached list of existing IDs for confusable-character similarity; blocks uploads that would typosquat. |
+| `Services/ReadMeService.cs` | `ReadMeService` | Reads, renders, and writes README files from blob storage; converts Markdown to sanitized HTML for display. |
+| `Telemetry/ITelemetryService.cs` | `ITelemetryService` | Declares all Application Insights custom events and metrics tracked by the web app (uploads, searches, OData queries, auth events, etc.). |
+| `Filters/` | MVC / WebAPI filters | `ApiKeyThrottle`, `ReadOnlyModeErrorFilter`, `AntiForgeryErrorFilter`, `RequiresAccountConfirmationFilter` — applied globally or per-controller. |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `NuGetGallery.Core` | `EntitiesContext`, `ICoreFileStorageService`, `ICorePackageService`, `IAuditingService`, `PackageMetadata`, blob wrappers |
+| `NuGetGallery.Services` | Extended service layer (`IPackageService`, `IUserService`, `IOrganizationService`, security policies, search) |
+| `NuGet.Services.Entities` | EF entity types (`Package`, `PackageRegistration`, `User`, `Organization`, `Certificate`, etc.) |
+| `NuGet.Services.Configuration` | `IGalleryConfigurationService`, `ISecretInjector` (KeyVault-backed config) |
+| `NuGet.Services.Contracts` | Shared interface contracts across NuGet services |
+| `NuGet.Services.FeatureFlags` | `IFeatureFlagService` — runtime feature toggles stored in blob storage |
+| `NuGet.Services.KeyVault` | Azure KeyVault secret resolution at startup |
+| `NuGet.Services.Licenses` | License expression parsing and SPDX validation |
+| `NuGet.Services.Logging` | Application Insights integration (`TelemetryClientWrapper`) |
+| `NuGet.Services.Messaging` / `Messaging.Email` | `IMessageService`, async email enqueuing via Service Bus |
+| `NuGet.Services.Owin` | Shared OWIN middleware helpers |
+| `NuGet.Services.ServiceBus` | Service Bus topic/subscription clients for validation initiation |
+| `NuGet.Services.Sql` | `IDbConnectionFactory`, retry-aware SQL connection management |
+| `NuGet.Services.Validation` / `Validation.Issues` | `PackageValidationSet` entity, validation status enums, issue types |
+
+### Key NuGet Package Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `Autofac` / `Autofac.Mvc5` / `Autofac.WebApi2` | DI container; property injection on MVC controllers |
+| `Microsoft.AspNet.WebApi.OData` / `Microsoft.Data.Services` | OData V1/V2 feed infrastructure |
+| `EntityFramework` | ORM for Gallery SQL Server database (code-first, migrations disabled at runtime) |
+| `Microsoft.Owin.*` / `Owin` | OWIN host pipeline, cookie auth, external OAuth |
+| `NuGet.Packaging` | `.nupkg` reading, `.nuspec` parsing during upload |
+| `NuGet.Versioning` | `NuGetVersion`, `VersionRange` parsing and comparison |
+| `Lucene.Net` / `Lucene.Net.Contrib` | Local search index (development/fallback only) |
+| `HtmlSanitizer` | Strips unsafe HTML when rendering README/markdown content |
+| `CommonMark.NET` | Markdown-to-HTML conversion for README rendering |
+| `Microsoft.ApplicationInsights.Web` | Request telemetry, dependency tracking, exception logging |
+| `NuGet.StrongName.elmah` | Error Logging Modules and Handlers for unhandled exception capture |
+| `Strathweb.CacheOutput.WebApi2` | Output caching on OData feed endpoints |
+| `WebGrease` / `Microsoft.AspNet.Web.Optimization` | CSS/JS bundling and minification |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Search hijacking on OData V2.** Rather than letting all `FindPackagesById`, `Search`, and `GetUpdates` OData queries hit SQL Server, `ODataV2FeedController` uses `IHijackSearchServiceFactory` to redirect eligible queries to the Azure Search-backed search service. The decision is logged via the internal `X-NuGet-CustomQuery` response header, and telemetry tracks whether each query was hijacked or fell back to the database.
+</Note>
+
+<Note>
+**Property injection on MVC controllers.** Unlike Web API controllers (which use constructor injection), MVC controllers in this project use Autofac property injection (`PropertiesAutowired()`). This is a legacy pattern from when the project used an older DI approach; public service properties on controller classes are set by the Autofac container.
+</Note>
+
+<Warning>
+**Migrations are disabled at runtime.** `EntitiesContext` calls `Database.SetInitializer<EntitiesContext>(null)` in its static constructor. Schema changes are applied by a separate `DatabaseMigrationTools` executable — never by the running web application. Running EF migrations against a live production database from within the app would be unsafe at scale.
+</Warning>
+
+<Note>
+**Feed-only mode.** When `feedOnlyMode=true` is passed to `Routes.RegisterRoutes`, only the V2 OData routes and a stub home route (returning HTTP 200 for health probes) are registered. This allows Azure Load Balancer nodes that handle only client protocol traffic to run a leaner version of the app without the full MVC UI surface.
+</Note>
+
+<Warning>
+**OWIN on .NET Framework 4.7.2.** The application uses `Microsoft.Owin.Host.SystemWeb` to run the OWIN pipeline inside an IIS/ASP.NET integrated pipeline — not Kestrel. This means the host is bound to Classic System.Web infrastructure (`HttpContext`, `HttpResponse`) and cannot be moved to ASP.NET Core without significant rearchitecting.
+</Warning>
+
+<Tip>
+**Typosquatting protection.** `TyposquattingService` uses a cached list of existing package IDs (`ITyposquattingCheckListCacheService`) and a confusable-character mapping to block uploads that would appear visually similar to popular packages. The check runs synchronously during the upload validation phase before the package is committed to the database.
+</Tip>

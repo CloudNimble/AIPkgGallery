@@ -1,0 +1,120 @@
+---
+title: PackageHash
+sidebarTitle: PackageHash
+description: A background job that verifies every available NuGet package's SHA-512 hash against one or more blob-storage sources, recording any mismatches to a CSV file.
+icon: shield-check
+---
+
+# PackageHash
+
+`NuGet.Services.PackageHash` is a cursor-driven background job (console executable) that crawls all `Available` packages in the NuGetGallery database and re-derives their SHA-512 hash from the actual `.nupkg` bytes stored in blob storage. Any discrepancy between the stored hash and the recomputed hash is logged as an error and appended to a local `results.csv` file for follow-up investigation.
+
+## Overview
+
+<CardGroup cols={2}>
+  <Card title="Hash Verification" icon="shield-check">
+    Downloads each `.nupkg` from blob storage and recomputes its SHA-512 digest,
+    then compares it against the value stored in the Gallery database.
+  </Card>
+  <Card title="Cursor-Based Progress" icon="clock">
+    Uses a durable file-backed cursor (one per bucket) so the job can be
+    interrupted and resumed without re-processing already-validated packages.
+  </Card>
+  <Card title="Horizontal Sharding" icon="server">
+    Work is partitioned across N independent workers via a consistent-hash
+    scheme on `{id}/{version}`, requiring no shared coordination layer.
+  </Card>
+  <Card title="Failure Reporting" icon="file-text">
+    Mismatched hashes are written to `results.csv` (appended, with a header
+    row) in the working directory for offline analysis.
+  </Card>
+</CardGroup>
+
+## Role in the NuGetGallery Ecosystem
+
+PackageHash sits in the **integrity-verification** tier of the gallery's operational tooling. It is not invoked during normal package ingestion; instead it runs as a periodic or on-demand sweep job to detect silent corruption or tampering of package blobs after they have already been accepted. It depends on:
+
+- **`NuGet.Services.Cursor`** — provides the `DurableCursor` abstraction for tracking progress as a UTC timestamp persisted in a local JSON file.
+- **`Validation.Common.Job`** — provides `ValidationJobBase` (itself extending `NuGet.Jobs.JobBase`) which wires up Autofac DI, configuration binding, `IFileDownloader`, `CryptographyService`, and the structured-logging infrastructure shared by all Gallery background jobs.
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|------|------------------|---------|
+| `Program.cs` | `Program` | Entry point; bootstraps `Job` via `JobRunner.Run`. |
+| `Job.cs` | `Job : ValidationJobBase` | Parses `--bucket-number` / `--bucket-count` CLI args, registers all DI services, and delegates execution to `IPackageHashProcessor`. |
+| `PackageHashProcessor.cs` | `PackageHashProcessor` | Outer loop: loads the cursor, queries the DB for a batch of packages newer than the cursor, trims the batch to avoid boundary races, partitions by bucket, and advances the cursor on success. |
+| `BatchProcessor.cs` | `BatchProcessor` | Inner loop: builds a `ConcurrentBag` of `(source, package)` work items and fans them out across a configurable number of parallel tasks, collecting `InvalidPackageHash` failures. |
+| `PackageHashCalculator.cs` | `PackageHashCalculator` | Downloads the `.nupkg` from a `PackagesContainer` URL and calls `CryptographyService.GenerateHash` to compute the actual SHA-512 digest. |
+| `ConsistentHash.cs` | `ConsistentHash` (static) | Assigns a package to a zero-based bucket index by XOR-folding a SHA-256 hash of the lowercased `id/version` string, then taking modulo bucket count. |
+| `ResultRecorder.cs` | `ResultRecorder` | Appends `InvalidPackageHash` records to `results.csv` with columns: `Type, URL, ID, Version, ExpectedHash, ActualHash`. |
+| `PackageHashConfiguration.cs` | `PackageHashConfiguration` | POCO bound from the `PackageHash` config section; exposes `BatchSize`, `DegreeOfParallelism`, and a list of `PackageSource` objects. |
+| `PackageHash.cs` | `PackageHash` | Value object pairing a `PackageIdentity` with its expected base64-encoded hash digest from the database. |
+| `InvalidPackageHash.cs` | `InvalidPackageHash` | Failure record carrying the `PackageSource`, the expected `PackageHash`, and the actual recomputed hash string. |
+| `PackageSource.cs` | `PackageSource` | Configuration model: a `Url` and a `PackageSourceType` enum value. |
+| `PackageSourceType.cs` | `PackageSourceType` | Enum with a single value `PackagesContainer` (Azure Blob flat-container layout). |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `NuGet.Services.Cursor` | `DurableCursor` — file-backed cursor for tracking the last-processed timestamp per bucket. |
+| `Validation.Common.Job` | `ValidationJobBase`, `IFileDownloader`, `CryptographyService`, `FileStorageFactory`, shared job runner infrastructure. |
+
+### NuGet Packages (resolved transitively via project refs)
+
+| Package | Usage |
+|---------|-------|
+| `Autofac` / `Microsoft.Extensions.DependencyInjection` | DI container wiring in `Job.ConfigureJobServices`. |
+| `Microsoft.Extensions.Logging` | Structured logging throughout all classes. |
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<PackageHashConfiguration>` for live config reads. |
+| `NuGet.Packaging.Core` | `PackageIdentity` value type (id + version). |
+| `NuGet.Versioning` | `NuGetVersion.Parse` for normalized version strings. |
+| `EntityFramework` (via `NuGetGallery`) | `IEntityRepository<Package>` / `DbContext` used in `PackageHashProcessor` to query the database. |
+
+<Note>
+The project targets **net472** (full .NET Framework 4.7.2), not .NET Core or .NET 5+. This is consistent with other background jobs in the NuGetGallery solution that depend on Entity Framework 6 and the classic `NuGet.Jobs` runner.
+</Note>
+
+## Notable Patterns and Implementation Details
+
+### Cursor Boundary Safety
+
+`PackageHashProcessor` trims any packages that share the batch's maximum timestamp before advancing the cursor. This prevents a race condition where two packages with the same `Created`/`LastEdited` timestamp straddle a batch boundary and one would be silently skipped.
+
+```csharp
+var maxTimestamp = fullBatch.Select(GetMaxTimestamp).Max();
+var trimmedBatch = fullBatch
+    .Where(x => GetMaxTimestamp(x) < maxTimestamp)
+    .ToList();
+```
+
+### One-Hour Lookback Window
+
+When the cursor value is within one hour of `UtcNow`, the processor substitutes `UtcNow - 1h` as the effective cursor value and skips advancing the cursor after the batch. This catches packages whose `LastEdited` timestamps arrive slightly out of order.
+
+<Note>
+When the lookback window is applied, `ProcessBatchAsync` always returns `null`, which halts the do-while loop for the current job run. The cursor is not moved forward. This is intentional — the job is expected to be re-invoked periodically rather than running continuously.
+</Note>
+
+### Consistent Hash Sharding
+
+`ConsistentHash.DetermineBucket` hashes the lowercase `{id}/{version}` key with SHA-256, then XOR-folds the 32-byte result into a single `int` before taking `% bucketCount`. This gives a deterministic, stateless partition with no central coordinator.
+
+<Warning>
+`ConsistentHash.DetermineBucket` can return a **negative** bucket index if the XOR-folded integer overflows into a negative value, because `int % n` preserves the sign in C#. Callers should be aware of this if `bucketCount` is ever used outside the current `bucketIndex == bucketNumber - 1` comparison, which happens to be safe as written.
+</Warning>
+
+### Parallel Hash Verification
+
+`BatchProcessor` uses a `ConcurrentBag<Work>` drained by `DegreeOfParallelism` concurrent `Task` workers rather than `Parallel.ForEach` or `PLINQ`, giving full async I/O non-blocking behavior while downloading `.nupkg` files.
+
+### Result Recording
+
+`ResultRecorder` writes directly to `results.csv` in the **current working directory** using `FileMode.Append`. The header row is only written when the file is new (position == 0). There is no rotation, size cap, or remote upload — the file is intended to be inspected or copied off the machine manually after a run.
+
+<Tip>
+To run two workers in parallel against the same package corpus without overlap, launch two processes with matching `--bucket-count 2` and `--bucket-number 1` / `--bucket-number 2` arguments. Each worker maintains its own cursor file named `cursor_{n}_of_{total}.json` in the working directory.
+</Tip>

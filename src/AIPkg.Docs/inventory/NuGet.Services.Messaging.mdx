@@ -1,0 +1,93 @@
+---
+title: NuGet.Services.Messaging
+sidebarTitle: Services.Messaging
+description: A shared library that defines the data contract and Service Bus enqueuing infrastructure for asynchronous email delivery across NuGet services.
+icon: mail
+---
+
+## Overview
+
+`NuGet.Services.Messaging` is a small, focused library that forms the bridge between the NuGet Gallery frontend (the email sender) and the back-end email processing job (the email consumer). It defines the canonical `EmailMessageData` model that both sides agree on, the `IEmailMessageEnqueuer` interface that the frontend uses to dispatch email without knowing the delivery mechanism, and the `ServiceBusMessageSerializer` that translates between `EmailMessageData` and Azure Service Bus brokered messages.
+
+The library encodes one deliberate GDPR constraint directly in the serializer: every Service Bus message is given a time-to-live of exactly two days. Because email message payloads can contain personally identifiable information (recipient addresses, user names, etc.), this hard-coded TTL ensures that un-processed messages are automatically purged by the broker before they can linger indefinitely.
+
+The project targets both `net472` and `netstandard2.0`, which allows it to be referenced by the full-framework NuGetGallery web application and by any future .NET Standard-compatible services without modification. It has no direct Azure SDK dependency of its own; all Azure Service Bus types are abstracted behind interfaces defined in `NuGet.Services.Contracts` and implemented in `NuGet.Services.ServiceBus`.
+
+## Role in System
+
+`NuGet.Services.Messaging` sits in the middle of the asynchronous email pipeline. The gallery frontend constructs an `EmailMessageData` value, hands it to `IEmailMessageEnqueuer`, which serializes it and publishes it to an Azure Service Bus topic. A separate back-end job subscribes to that topic, deserializes the message using the same `IServiceBusMessageSerializer`, and performs the actual SMTP delivery.
+
+```
+NuGetGallery (frontend)
+  └─ AsynchronousEmailMessageService          (NuGet.Services.Messaging.Email)
+       └─ IEmailMessageEnqueuer
+            └─ EmailMessageEnqueuer           (NuGet.Services.Messaging)
+                 ├─ IServiceBusMessageSerializer
+                 │    └─ ServiceBusMessageSerializer  (serializes EmailMessageData to JSON)
+                 └─ ITopicClient
+                      └─ TopicClientWrapper   (NuGet.Services.ServiceBus -> Azure Service Bus)
+
+Azure Service Bus Topic
+  └─ Back-end email job (subscriber)
+       └─ IServiceBusMessageSerializer
+            └─ ServiceBusMessageSerializer  (deserializes JSON back to EmailMessageData)
+```
+
+<CardGroup cols={2}>
+  <Card title="Shared Data Contract" icon="file-json">
+    `EmailMessageData` is the single agreed-upon model for an email message. It carries subject, plain-text body, HTML body, sender, To/CC/Bcc/ReplyTo recipient lists, a tracking GUID, and a delivery count populated on the consumer side.
+  </Card>
+  <Card title="Enqueuing Abstraction" icon="arrow-up-from-bracket">
+    `IEmailMessageEnqueuer` hides the Service Bus publishing details from callers. The concrete `EmailMessageEnqueuer` serializes the message, calls `ITopicClient.SendAsync`, and emits structured log entries at Trace and Information level for each step.
+  </Card>
+  <Card title="Versioned Schema Serialization" icon="layers">
+    `ServiceBusMessageSerializer` uses the generic `BrokeredMessageSerializer<T>` from `NuGet.Services.ServiceBus` together with a private `[Schema(Name = "EmailMessageData", Version = 1)]` inner class. Schema name and version are stored as Service Bus message properties and validated on deserialization.
+  </Card>
+  <Card title="GDPR-Enforced TTL" icon="clock">
+    Messages are given a two-day TTL at serialization time. This is a hard-coded policy (not configuration) that ensures PII-containing email payloads are automatically expired by the broker if they are not consumed promptly.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `EmailMessageData.cs` | `EmailMessageData` | Immutable data transfer object representing a fully composed email message. Constructor enforces that `To` is non-null and non-empty, and that `MessageTrackingId` is not `Guid.Empty`. `CC`, `Bcc`, and `ReplyTo` default to empty lists when `null` is passed. `DeliveryCount` is set by the consumer during deserialization and is `0` when constructing a new message for sending. |
+| `IEmailMessageEnqueuer.cs` | `IEmailMessageEnqueuer` | Single-method interface with `SendEmailMessageAsync(EmailMessageData)`. Consumed by `AsynchronousEmailMessageService` in `NuGet.Services.Messaging.Email` and registered in the NuGetGallery DI container. |
+| `EmailMessageEnqueuer.cs` | `EmailMessageEnqueuer` | Concrete implementation of `IEmailMessageEnqueuer`. Depends on `ITopicClient`, `IServiceBusMessageSerializer`, and `ILogger<EmailMessageEnqueuer>`. Logs the tracking ID at each step (serialize start, serialize success, enqueue start, enqueue success). |
+| `IServiceBusMessageSerializer.cs` | `IServiceBusMessageSerializer` | Two-method interface: `SerializeEmailMessageData(EmailMessageData) → IBrokeredMessage` and `DeserializeEmailMessageData(IReceivedBrokeredMessage) → EmailMessageData`. Used by both the producer (frontend) and consumer (back-end job). |
+| `ServiceBusMessageSerializer.cs` | `ServiceBusMessageSerializer` | Concrete serializer. Internally defines a private `EmailMessageData1` class decorated with `[Schema(Name = "EmailMessageData", Version = 1)]`. Serialization produces a JSON-body `IBrokeredMessage` with `SchemaName` and `SchemaVersion` properties and a two-day TTL. Deserialization validates those properties via `BrokeredMessageSerializer<T>` before JSON deserialization, and populates `DeliveryCount` from the received message's broker metadata. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Azure.Core` | Transitively required for Azure Service Bus type compatibility; not directly referenced in project code. |
+| `Microsoft.Extensions.Logging` | Provides `ILogger<T>` used in `EmailMessageEnqueuer` for structured logging. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Contracts` | Provides the `IBrokeredMessage`, `IReceivedBrokeredMessage`, and `ITopicClient` interfaces that decouple this library from any specific Azure SDK version. |
+| `NuGet.Services.ServiceBus` | Provides `BrokeredMessageSerializer<T>`, `SchemaAttribute`, and the `AssertTypeAndSchemaVersion` extension used by `ServiceBusMessageSerializer` to handle JSON serialization and schema validation of Service Bus messages. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The `EmailMessageData1` inner class in `ServiceBusMessageSerializer` is private and versioned with `[Schema(Name = "EmailMessageData", Version = 1)]`. This versioning scheme means that a schema change (adding, removing, or modifying a property) requires incrementing the version number and adding a new inner class (e.g., `EmailMessageData2`). The deserializer enforces the version at runtime and throws `FormatException` if the message was produced by a different schema version.
+</Note>
+
+<Warning>
+The two-day TTL on Service Bus messages is enforced unconditionally in `ServiceBusMessageSerializer.SerializeEmailMessageData`. It is not configurable. Any email message payload that remains unconsumed in the topic for longer than 48 hours will be dead-lettered or discarded by the broker. This is intentional GDPR policy, but it means that extended outages of the back-end email consumer will result in lost email notifications.
+</Warning>
+
+<Note>
+`EmailMessageEnqueuer` logs the `MessageTrackingId` GUID at every step using structured logging. This allows operators to correlate a specific email message across the frontend log (where it was enqueued) and the backend log (where it was processed or failed) by searching for the same tracking ID value.
+</Note>
+
+<Tip>
+The `DeliveryCount` field on `EmailMessageData` is not set by the sender. It is populated only during deserialization in `ServiceBusMessageSerializer.DeserializeEmailMessageData` from the broker's own `IReceivedBrokeredMessage.DeliveryCount` property. Back-end consumers can use this value to detect and handle repeated delivery attempts (e.g., to avoid sending duplicate emails after transient failures).
+</Tip>

@@ -1,0 +1,122 @@
+---
+title: "NuGet.Services.Testing.Entities"
+sidebarTitle: "Testing.Entities"
+description: "Infrastructure library for unit testing Entity Framework 6 entity contexts using Moq — provides async-capable mock DbSet helpers and validation context setup extensions."
+icon: "flask-conical"
+---
+
+## Overview
+
+`NuGet.Services.Testing.Entities` is a small, focused test-support library that solves a specific pain point: Entity Framework 6's `IDbSet<T>` and async LINQ operators (`ToListAsync`, `FirstOrDefaultAsync`, etc.) cannot be faked with a plain in-memory list out of the box. EF's async extension methods require the underlying `IQueryProvider` to implement `IDbAsyncQueryProvider`, which a standard `List<T>` does not satisfy.
+
+This library ships three building blocks that wire everything up correctly via Moq, and a high-level convenience extension that configures an entire `IValidationEntitiesContext` mock in one call.
+
+<Note>
+  This project is a **test infrastructure library only** — it must never be referenced from production code. It targets `net472` and is intended for use inside xUnit / MSTest unit test projects within the NuGetGallery solution.
+</Note>
+
+## Role in the System
+
+The NuGetGallery solution separates package validation concerns into `NuGet.Services.Validation`, which defines the EF entity model (`IValidationEntitiesContext`, `PackageValidation`, `PackageValidationSet`, certificate chain entities, etc.). Every service that queries that context needs a way to write fast, isolated unit tests without a real SQL Server connection.
+
+`NuGet.Services.Testing.Entities` sits between those two concerns:
+
+```
+Production code                    Test code
+──────────────────                 ────────────────────────────────
+NuGet.Services.Validation          NuGet.Services.Testing.Entities
+  IValidationEntitiesContext   <─────  IValidationEntitiesContextExtensions
+  IDbSet<PackageValidation>    <─────  IDbSetMockExtensions
+  (async LINQ queries)         <─────  TestDbAsyncQueryProvider / Enumerator
+```
+
+Any test project that validates business logic against the EF validation context can reference this library instead of duplicating the async-mock boilerplate.
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|--------------|---------|
+| `TestDbAsyncQueryProvider.cs` | `TestDbAsyncQueryProvider<TEntity>` | Implements `IDbAsyncQueryProvider` by wrapping a real `IQueryProvider`; satisfies EF's requirement for async LINQ (`ToListAsync`, etc.) in tests |
+| `TestDbAsyncQueryProvider.cs` | `TestDbAsyncEnumerable<T>` | Extends `EnumerableQuery<T>` and implements `IDbAsyncEnumerable<T>`; acts as the async-iterable wrapper around an in-memory sequence |
+| `TestDbAsyncQueryProvider.cs` | `TestDbAsyncEnumerator<T>` | Adapts a synchronous `IEnumerator<T>` to `IDbAsyncEnumerator<T>` by returning `Task.FromResult` from `MoveNextAsync` |
+| `IDbSetMockExtensions.cs` | `IDbSetMockExtensions` (static) | Extension methods on `Mock<TDbSet>` and `Mock<TContext>` that configure all IQueryable, async-enumerable, `Add`, and `Remove` mock behaviors against a given in-memory collection |
+| `IValidationEntitiesContextExtensions.cs` | `IValidationEntitiesContextExtensions` (static) | Single `Mock()` extension on `Mock<IValidationEntitiesContext>` that bulk-configures all 11 `IDbSet` properties of the validation context in one call |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Role |
+|---------|------|
+| `Moq` | Mocking framework used to create `Mock<IDbSet<T>>` and `Mock<IValidationEntitiesContext>` instances; version is inherited from the solution-level `Directory.Packages.props` |
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `NuGet.Services.Validation` | Provides `IValidationEntitiesContext` and all entity types (`PackageValidation`, `PackageValidationSet`, `ValidatorStatus`, `PackageSigningState`, `PackageSignature`, `TrustedTimestamp`, `EndCertificate`, `EndCertificateValidation`, `PackageRevalidation`, `ParentCertificate`, `CertificateChainLink`) that the mock extensions are typed against |
+
+<Note>
+  There is no direct reference to the `EntityFramework` NuGet package. The library relies only on the `System.Data.Entity` and `System.Data.Entity.Infrastructure` namespaces that are available via the .NET Framework 4.7.2 target and the EF6 assemblies pulled in transitively by `NuGet.Services.Validation`.
+</Note>
+
+## Usage Pattern
+
+<CardGroup cols={2}>
+  <Card title="Quick context mock" icon="zap">
+    Call `.Mock(...)` with only the entity collections you care about. All other `IDbSet` properties are still configured as empty sets, so queries against them do not throw.
+
+    ```csharp
+    var ctx = new Mock<IValidationEntitiesContext>();
+    ctx.Mock(
+        packageValidations: new List<PackageValidation>
+        {
+            new PackageValidation { Key = 1 }
+        });
+
+    // Async LINQ works correctly
+    var result = await ctx.Object.PackageValidations
+        .Where(v => v.Key == 1)
+        .ToListAsync();
+    ```
+  </Card>
+  <Card title="Generic DbSet mock" icon="database">
+    Use `SetupDbSet` directly when working with custom `IDbSet` types outside the validation context.
+
+    ```csharp
+    var dbSetMock = new Mock<IDbSet<MyEntity>>();
+    dbSetMock.SetupDbSet(new[] { new MyEntity() });
+
+    // Add / Remove callbacks are wired too
+    dbSetMock.Object.Add(new MyEntity());
+    ```
+  </Card>
+</CardGroup>
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **Async shim pattern** — `TestDbAsyncQueryProvider` and `TestDbAsyncEnumerator` are a direct adaptation of the [Microsoft MSDN guidance](https://msdn.microsoft.com/en-us/library/dn314429.aspx) for testing EF6 async queries. The source comment in `TestDbAsyncQueryProvider.cs` acknowledges this origin explicitly. The approach wraps synchronous in-memory LINQ with `Task.FromResult(...)` calls, which is safe in unit tests because there is no real I/O.
+</Note>
+
+<Note>
+  **Mutable in-memory collection** — `IDbSetMockExtensions.SetupDbSet` captures the seed data as an `IQueryable<TEntity>` local variable and re-assigns it inside the `Add` and `Remove` Moq callbacks using `Concat` / `Where`. This means the mock DbSet supports mutations during a test, but the mutations are not thread-safe and the collection reference is rebuilt on every add/remove.
+</Note>
+
+<Warning>
+  **EF6 only — not compatible with EF Core** — `SetupDbSet` requires `TDbSet : IDbSet<TEntity>`. EF Core uses `DbSet<T>` directly and does not implement `IDbSet<T>`, so this library cannot be used with EF Core contexts. It is strictly an EF 6 / `net472` utility.
+</Warning>
+
+<Tip>
+  **Namespace placement** — `IDbSetMockExtensions` is declared in the `System.Data.Entity` namespace (not `NuGet.Services.Testing.Entities`), so consuming test projects pick up the extension methods automatically whenever they have a `using System.Data.Entity;` directive — no extra using statement is required.
+</Tip>
+
+## File Inventory
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `NuGet.Services.Testing.Entities.csproj` | 17 | Project file; targets `net472`, references `Moq` and `NuGet.Services.Validation` |
+| `README.md` | 21 | Brief description and usage example |
+| `TestDbAsyncQueryProvider.cs` | 109 | Core async shim: `TestDbAsyncQueryProvider<T>`, `TestDbAsyncEnumerable<T>`, `TestDbAsyncEnumerator<T>` |
+| `IDbSetMockExtensions.cs` | 64 | Generic `SetupDbSet` extensions for any `Mock<IDbSet<TEntity>>` |
+| `IValidationEntitiesContextExtensions.cs` | 50 | Validation-context-specific `Mock()` convenience extension wiring all 11 entity sets |

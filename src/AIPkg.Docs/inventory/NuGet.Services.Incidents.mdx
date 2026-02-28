@@ -1,0 +1,94 @@
+---
+title: NuGet.Services.Incidents
+sidebarTitle: Services.Incidents
+description: A small client library that provides typed access to the NuGet incident API over HTTP using certificate-based authentication.
+icon: triangle-alert
+---
+
+## Overview
+
+`NuGet.Services.Incidents` is a thin, reusable client library that abstracts HTTP communication with a NuGet internal incident API. It exposes a single interface, `IIncidentApiClient`, with two operations: fetching a single incident by its string identifier, and fetching a filtered collection of incidents using an OData query string.
+
+The implementation authenticates each request using a client `X509Certificate2` attached directly to the `HttpWebRequest`. All JSON deserialization is performed with `Newtonsoft.Json`, and datetime values are explicitly treated as UTC. Paginated responses from the API are transparently followed via OData `nextLink` continuation links until the full result set is accumulated and returned to the caller.
+
+The library is intentionally minimal — it contains no business logic, no dependency injection wiring, and no logging. It targets both `net472` and `netstandard2.0`, making it usable from both full .NET Framework jobs and cross-platform .NET Standard contexts. Its only NuGet dependency is `Newtonsoft.Json`.
+
+## Role in System
+
+This library is consumed exclusively by the `StatusAggregator` job, which polls the incident API on a scheduled basis to collect new incidents and translate them into status page events.
+
+```
+  NuGet Incident API (internal HTTP endpoint)
+            |
+            |  HTTPS + X.509 client certificate
+            v
+  NuGet.Services.Incidents
+  (IIncidentApiClient / IncidentApiClient)
+            |
+            |  IEnumerable<Incident>
+            v
+  StatusAggregator
+  (IncidentEntityCollectorProcessor)
+            |
+            |  Parsed IncidentEntity records
+            v
+  NuGet Status Page (Azure Table / Blob storage)
+```
+
+The `IncidentEntityCollectorProcessor` inside `StatusAggregator` calls `GetIncidents(oDataQuery)` with an OData filter scoped to a specific `OwningTeamId` and a cursor-based `CreateDate` predicate. Because the remote API truncates milliseconds from filter values, the collector performs a secondary in-memory date filter after fetching results to avoid processing stale incidents.
+
+<CardGroup cols={2}>
+  <Card title="Certificate Authentication" icon="shield-check">
+    Every HTTP request attaches an X.509 client certificate loaded from Azure Key Vault configuration. The StatusAggregator job supports both legacy JSON-wrapped and plain Base64 certificate formats.
+  </Card>
+  <Card title="OData Query Support" icon="filter">
+    Callers supply raw OData query parameters (filters, ordering). The client constructs the full request URI by combining the configured base URI with the incidents endpoint and caller-supplied query string.
+  </Card>
+  <Card title="Transparent Pagination" icon="arrow-right">
+    The `GetIncidents` method follows `odata.nextLink` continuation URIs in a loop until no further pages are returned, accumulating all results before returning them to the caller.
+  </Card>
+  <Card title="Multi-Target Framework" icon="layers">
+    The project targets both `net472` and `netstandard2.0`, allowing it to be referenced from full .NET Framework jobs while remaining portable for future cross-platform use.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|--------------|---------|
+| `IIncidentApiClient.cs` | `IIncidentApiClient` | Public interface defining `GetIncident(id)` and `GetIncidents(query)` |
+| `IncidentApiClient.cs` | `IncidentApiClient` | Concrete implementation; builds URIs, attaches the certificate, makes HTTP requests, deserializes responses, and follows pagination |
+| `IncidentApiConfiguration.cs` | `IncidentApiConfiguration` | Configuration POCO holding the `BaseUri` (`Uri`) and `Certificate` (`X509Certificate2`) needed to connect to the API |
+| `Incident.cs` | `Incident`, `IncidentSourceData`, `IncidentStateChangeEventData` | Data model for a single incident returned by the API, including severity, status, owning team, and state-change timestamps for mitigation and resolution |
+| `IncidentStatus.cs` | `IncidentStatus` (enum) | Enumeration of all possible lifecycle states: `New`, `Holding`, `Active`, `Correlating`, `Mitigating`, `Mitigated`, `Resolved`, `Suppressed` |
+| `IncidentList.cs` | `IncidentList` (internal) | Internal OData envelope type used during deserialization; maps `value` to a collection of `Incident` and `odata.nextLink` to a continuation `Uri` |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Newtonsoft.Json` | JSON deserialization of API responses, including OData envelope and datetime handling (`DateTimeZoneHandling.Utc`) |
+
+### Internal Project References
+
+None. This library has no internal project dependencies and is designed as a standalone client package.
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The `IncidentList` type that models OData paginated responses is marked `internal`. It is only used inside `IncidentApiClient.GetIncidents` and is not part of the public API surface.
+</Note>
+
+<Note>
+Authentication is performed by attaching the `X509Certificate2` directly to a `HttpWebRequest` via `ClientCertificates.Add(...)`. There is no bearer token, API key, or other mechanism — the API exclusively uses mutual TLS.
+</Note>
+
+<Warning>
+The incident API silently truncates millisecond precision from OData `datetime` filter values. As a result, `GetIncidents` can return incidents whose `CreateDate` is earlier than the requested cursor. Callers such as `IncidentEntityCollectorProcessor` must apply a secondary `.Where(i => i.CreateDate > cursor)` filter in memory after fetching results.
+</Warning>
+
+<Tip>
+`IncidentApiClient` is stateless beyond its `IncidentApiConfiguration`. In `StatusAggregator` it is registered as a singleton (`AddSingleton<IIncidentApiClient, IncidentApiClient>()`), which is safe because neither the configuration nor the HTTP calls use any mutable shared state.
+</Tip>

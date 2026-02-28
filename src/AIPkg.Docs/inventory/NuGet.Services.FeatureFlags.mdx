@@ -1,0 +1,104 @@
+---
+title: NuGet.Services.FeatureFlags
+sidebarTitle: FeatureFlags
+description: A lightweight library that provides dynamic feature toggle and targeted flight rollout capabilities, backed by a periodically refreshed in-memory cache of flag state loaded from an external storage service.
+icon: toggle-right
+---
+
+## Overview
+
+`NuGet.Services.FeatureFlags` is the core library for runtime feature control across NuGet.org services. It separates flag evaluation from flag persistence, providing a thin client that reads from an in-memory cache while a background refresh loop keeps the cache synchronized with the authoritative state stored externally (in practice, a JSON file in Azure Blob Storage). This means flag checks are always synchronous and allocation-free at call time — there are no async waits or I/O on the hot path.
+
+The library distinguishes between two kinds of toggles. **Features** are binary on/off switches applicable to the entire system — for example, disabling package uploads when ingestion is degraded. **Flights** are targeted rollouts that can be enabled for a defined subset of users identified by username, email domain, or site-admin status, or for all users at once. This makes it possible to gradually expose new behavior to administrators or early-access testers without shipping separate code paths for each audience.
+
+The project targets both `net472` and `netstandard2.0`, keeping it compatible with the legacy ASP.NET MVC gallery and with modern .NET Standard-based jobs and validation services. Its only external dependency is `Microsoft.Extensions.Logging`, which it uses exclusively for diagnostic output when flags are missing or the cache has not yet been loaded.
+
+## Role in System
+
+```
+Azure Blob Storage  (feature-flags JSON file)
+        |
+        v
+IFeatureFlagStorageService   (implemented by FeatureFlagFileStorageService in NuGetGallery.Core)
+        |
+        v
+FeatureFlagCacheService      (background loop refreshes every 60 s by default)
+        |
+        v
+FeatureFlagClient            (synchronous IsEnabled checks, reads from cache)
+        |
+        +---> IFeatureFlagService (NuGetGallery.Services — wraps client, defines named flag methods)
+                |
+                +---> NuGetGallery controllers, services, and background jobs
+```
+
+The storage layer is intentionally **not** part of this library — `IFeatureFlagStorageService` is the only extension point it exposes. The gallery implements `FeatureFlagFileStorageService` (read-only) and `EditableFeatureFlagFileStorageService` (adds ETag-based save and user-removal) in `NuGetGallery.Core`. Jobs that consume flags register their own storage implementations.
+
+<CardGroup cols={2}>
+  <Card title="In-Memory Cache" icon="database">
+    All flag state is held in a single `FeatureFlags` object stored in a private field on `FeatureFlagCacheService`. Reads are lock-free field reads; writes replace the field atomically. No per-request I/O.
+  </Card>
+  <Card title="Targeted Flights" icon="users">
+    `Flight` supports four targeting axes: all users, site admins, a list of explicit usernames, and a list of email domains. All comparisons are case-insensitive. The `All` property short-circuits every other check when true.
+  </Card>
+  <Card title="Graceful Degradation" icon="shield-alert">
+    When the cache is empty or a flag name is unknown, `IsEnabled` returns the caller-supplied `defaultValue` rather than throwing, and emits a structured log entry at `LogError` or `LogWarning` level for observability.
+  </Card>
+  <Card title="Staleness Telemetry" icon="clock">
+    After each refresh attempt, `FeatureFlagCacheService` reports the elapsed time since the last successful load to the optional `IFeatureFlagTelemetryService`. If flags have never loaded, it reports `TimeSpan.MaxValue`.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Models/FeatureFlags.cs` | `FeatureFlags` | Immutable snapshot of all flag state. Stores `Features` (name → `FeatureStatus`) and `Flights` (name → `Flight`). Both dictionaries are converted to `OrdinalIgnoreCase` at construction time. |
+| `Models/FeatureStatus.cs` | `FeatureStatus` | Enum with two values: `Disabled = 0` and `Enabled = 1`. Represents the binary on/off state of a feature flag. |
+| `Models/Flight.cs` | `Flight` | Immutable value object describing a flight's targeting rules: `All`, `SiteAdmins`, `Accounts` (list of usernames), and `Domains` (list of email domains). |
+| `FeatureFlagClient.cs` | `FeatureFlagClient` | Concrete `IFeatureFlagClient`. Reads the latest `FeatureFlags` snapshot from the cache and evaluates feature or flight membership synchronously. Logs a warning when a name is not found and an error when the cache is uninitialized. Uses `MailAddress` to parse the domain out of a user's email address for domain-based flight targeting. |
+| `FeatureFlagCacheService.cs` | `FeatureFlagCacheService` | Drives the background refresh loop via `RunAsync(CancellationToken)` and exposes `RefreshAsync()` for an eager initial load at startup. Uses a factory `Func<IFeatureFlagStorageService>` so each refresh call can resolve a fresh storage instance. Reports staleness via `IFeatureFlagTelemetryService` after every attempt, including failed ones. |
+| `FeatureFlagOptions.cs` | `FeatureFlagOptions` | Configuration POCO with a single property: `RefreshInterval` (default `TimeSpan.FromMinutes(1)`). |
+| `IFeatureFlagClient.cs` | `IFeatureFlagClient` | Public client interface. Declares two `IsEnabled` overloads: one for features (no user context) and one for flights (accepts `IFlightUser`, which may be null for anonymous callers). |
+| `IFeatureFlagCacheService.cs` | `IFeatureFlagCacheService` | Cache-management interface. Exposes `RunAsync`, `RefreshAsync`, `GetLatestFlagsOrNull`, and `GetRefreshTimeOrNull`. |
+| `IFeatureFlagStorageService.cs` | `IFeatureFlagStorageService` | Single-method extension point: `Task<FeatureFlags> GetAsync()`. The library owns the interface; callers supply the implementation. |
+| `IFeatureFlagTelemetryService.cs` | `IFeatureFlagTelemetryService` | Optional telemetry hook. Declares `TrackFeatureFlagStaleness(TimeSpan)`. When not registered, `FeatureFlagCacheService` accepts a null reference and skips reporting. |
+| `IFlightUser.cs` | `IFlightUser` | User identity contract for flight evaluation. Requires `Username`, `EmailAddress`, and `IsSiteAdmin`. Callers pass `null` for anonymous users. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.Extensions.Logging` | Structured logging via `ILogger<T>`. Used by `FeatureFlagClient` and `FeatureFlagCacheService` to emit warnings and errors when flags are unavailable or unknown. |
+
+### Internal Project References
+
+This project has no internal project references. It is consumed by other projects in the solution.
+
+## Notable Patterns and Implementation Details
+
+<Note>
+`FeatureFlagCacheService` accepts a `Func<IFeatureFlagStorageService>` factory rather than a direct `IFeatureFlagStorageService` instance. This allows the DI container (Autofac, in the gallery) to resolve a new storage instance on each refresh cycle — important when the storage service itself holds scoped resources such as HTTP clients or Azure SDK clients.
+</Note>
+
+<Note>
+`RefreshAsync` is intended to be called once at application startup before the background loop begins, ensuring that all flag checks after initialization have a valid cache. The interface's XML doc explicitly calls this out: "This should be called at app startup to guarantee feature flags have been loaded."
+</Note>
+
+<Warning>
+The `IsEnabled(string flight, IFlightUser user, bool defaultValue)` overload does **not** gate anonymous access automatically. Passing `null` for `user` and having `Flight.All = true` will return `true` for an anonymous caller. Code that should never enable a flight for logged-out users must check authentication state before calling this API — the library's own documentation calls this out explicitly.
+</Warning>
+
+<Note>
+All feature and flight name lookups use `OrdinalIgnoreCase` dictionaries constructed at `FeatureFlags` creation time. This means the `FeatureFlagClient` performs a single dictionary lookup per call with no string allocation for case normalization.
+</Note>
+
+<Tip>
+The `IFeatureFlagTelemetryService` parameter in the longer `FeatureFlagCacheService` constructor is optional by convention — a separate constructor overload omits it and passes `null` internally. Callers that do not need staleness metrics can use the shorter constructor without registering a telemetry service.
+</Tip>
+
+<Note>
+Feature flag state is serialized as a JSON file in Azure Blob Storage and managed through the NuGet.org admin panel. The `NuGetGallery.Core` project provides `EditableFeatureFlagFileStorageService`, which adds ETag-based optimistic concurrency for saves and a `RemoveUserAsync` method for GDPR-style user data removal from flight allowlists.
+</Note>

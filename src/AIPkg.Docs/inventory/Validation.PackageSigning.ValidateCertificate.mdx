@@ -1,0 +1,165 @@
+---
+title: Validation.PackageSigning.ValidateCertificate
+sidebarTitle: ValidateCertificate
+description: Queue-driven background job that performs online X.509 certificate revocation checks for NuGet package signatures and propagates status changes to dependent package signatures.
+icon: shield-check
+---
+
+## Overview
+
+`Validation.PackageSigning.ValidateCertificate` is a **console executable** (net472) that runs as a
+continuously-polling Azure Service Bus subscription processor. Its sole responsibility is to receive
+`CertificateValidationMessage` requests, download the target X.509 certificate and its ancestor chain
+from Azure Blob Storage, execute an **online revocation check** against the issuing Certificate
+Authority, and persist the result back to the validation database.
+
+When a certificate is found to be revoked or invalid the job also evaluates every dependent
+`PackageSignature` and either ignores, warns, or rejects it according to a set of time-based and
+flag-based rules. This cascade is what ultimately marks NuGet packages as having invalid signatures.
+
+<Note>
+  The online revocation check is performed via Windows' native **CryptoAPI** (`X509Chain` + raw
+  `CERT_CHAIN_CONTEXT` pointer inspection). The executable therefore only runs on Windows and
+  requires `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` in the project file.
+</Note>
+
+---
+
+## Role in the NuGetGallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="Upstream trigger" icon="arrow-right-to-bracket">
+    Produced by the package-signing orchestrator when a new certificate requires validation or a
+    periodic re-check is scheduled via `CertificateValidationMessage`.
+  </Card>
+  <Card title="Downstream effects" icon="arrow-right-from-bracket">
+    Writes `EndCertificateStatus` and `PackageSignatureStatus` changes to the shared
+    `IValidationEntitiesContext` SQL database, which the gallery reads to decide whether to serve a
+    package.
+  </Card>
+  <Card title="Queue-back integration" icon="rotate">
+    Optionally sends a `CheckValidator` message to the package validation queue after a successful
+    validation so the orchestrator can advance the overall validation state machine.
+  </Card>
+  <Card title="Telemetry" icon="chart-line">
+    Emits Application Insights metrics for message lag, handler duration, lock-lost events, and
+    per-signature invalidation alerts under the `ValidateCertificate.*` prefix.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; bootstraps `Job` via `JobRunner.RunOnce`. |
+| `Job.cs` | `Job : SubscriptionProcessorJob<CertificateValidationMessage>` | DI wiring: registers all services, configures Azure Storage (MSI or connection-string), sets up the Service Bus subscription processor. |
+| `CertificateValidationMessageHandler.cs` | `CertificateValidationMessageHandler` | Core message handler — loads certs from blob storage, dispatches to verifier, saves result, optionally sends queue-back message. |
+| `ICertificateValidationService.cs` | `ICertificateValidationService` | Interface: `FindCertificateValidationAsync` and `TrySaveResultAsync`. |
+| `CertificateValidationService.cs` | `CertificateValidationService` | EF-backed implementation; handles all four status outcomes and fans out signature invalidation in batches of 500. |
+| `ICertificateVerifier.cs` | `ICertificateVerifier` | Interface for code-signing and timestamping certificate verification. |
+| `OnlineCertificateVerifier.cs` | `OnlineCertificateVerifier` | Windows CryptoAPI implementation; builds `X509Chain` with `RevocationMode.Online` and reads raw `CERT_REVOCATION_INFO*` for precise revocation/status-update timestamps. |
+| `CertificateVerificationResult.cs` | `CertificateVerificationResult` | Immutable value type capturing `EndCertificateStatus`, `X509ChainStatusFlags`, optional `RevocationTime` and `StatusUpdateTime`; includes a fluent `Builder`. |
+| `SignatureDeciderFactory.cs` | `SignatureDeciderFactory` | Produces `SignatureDecider` delegates encoding the policy for how revoked/invalid certificates affect dependent signatures. |
+| `SignatureDecision.cs` | `SignatureDecision` (enum) | `Ignore`, `Warn`, or `Reject` — the three outcomes for a dependent signature. |
+| `TelemetryService.cs` | `TelemetryService` | Application Insights wrapper; implements both `ITelemetryService` and `ISubscriptionProcessorTelemetryService`. |
+| `Primitives.cs` | Various `unsafe struct`s | P/Invoke-style structs mirroring Windows CryptoAPI types (`CERT_CHAIN_CONTEXT`, `CERT_REVOCATION_INFO`, `CRL_ENTRY`, `FILETIME`, etc.). Based on .NET CoreFX with custom additions for revocation info. |
+
+---
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `Validation.Common.Job` | Base `SubscriptionProcessorJob<T>`, `JobRunner`, Service Bus plumbing, `IFeatureFlagService`, `IPackageValidationEnqueuer`. |
+| `Validation.PackageSigning.Core` | `ICertificateStore`, `CertificateStore`, `CertificateValidationMessage` serializer, `CertificateStoreConfiguration`, EF entity types (`EndCertificate`, `PackageSignature`, `TrustedTimestamp`, `IValidationEntitiesContext`, etc.). |
+
+### NuGet Packages (resolved transitively)
+
+| Package | Usage |
+|---------|-------|
+| `Microsoft.Extensions.DependencyInjection` | DI container setup in `Job.ConfigureJobServices`. |
+| `Microsoft.Extensions.Configuration` | `IConfigurationRoot` binding for `CertificateStoreConfiguration`. |
+| `Microsoft.Extensions.Logging` | Structured logging throughout all services. |
+| `Microsoft.ApplicationInsights` | `TelemetryClient` consumed by `TelemetryService`. |
+| `Azure.Storage.Blobs` | `BlobServiceClientFactory` for certificate blob storage access. |
+| `Azure.Identity` | `ManagedIdentityCredential` for MSI-based storage authentication. |
+| `Autofac` | `ContainerBuilder` used in `ConfigureAutofacServices`. |
+| `NuGet.Services.ServiceBus` | `IMessageHandler<T>`, `IBrokeredMessageSerializer<T>`, `ISubscriptionProcessorTelemetryService`. |
+| `NuGet.Jobs` | `JobRunner`, `SubscriptionProcessorJob<T>` base class. |
+
+---
+
+## Message Flow
+
+```text
+Azure Service Bus
+  └─ CertificateValidationMessage
+        │
+        ▼
+CertificateValidationMessageHandler.HandleAsync()
+  ├─ FindCertificateValidationAsync()        ← IValidationEntitiesContext (SQL)
+  ├─ LoadCertificatesAsync()                ← ICertificateStore (Azure Blob)
+  ├─ ICertificateVerifier.Verify*()         ← OnlineCertificateVerifier (Windows CryptoAPI)
+  │     └─ CertificateVerificationResult
+  ├─ TrySaveResultAsync()                   ← CertificateValidationService
+  │     └─ ProcessDependentSignaturesAsync()
+  │           └─ SignatureDeciderFactory → SignatureDecider → SignatureDecision
+  └─ (optional) IPackageValidationEnqueuer.SendMessageAsync(CheckValidator)
+```
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **Batch signature updates.** When a certificate is revoked or invalidated,
+  `CertificateValidationService.ProcessDependentSignaturesAsync` updates dependent `PackageSignature`
+  rows in pages of 500 (`MaxSignatureUpdatesPerTransaction`) to avoid oversized EF change-tracker
+  transactions. Each page is committed before the next is fetched.
+</Note>
+
+<Note>
+  **Unknown-status retry loop.** If the CA's revocation endpoint is offline or returns an ambiguous
+  result, the certificate status is set to `Unknown` and `HandleAsync` returns `false`, leaving the
+  Service Bus message unacknowledged for automatic redelivery. After `DefaultMaximumValidationFailures`
+  (10) consecutive failures the certificate is promoted to `Invalid` and a telemetry alert fires,
+  requiring manual NuGet Admin investigation.
+</Note>
+
+<Warning>
+  **Revoked certificate re-validation requires an explicit flag.** The message handler silently
+  completes (drops) any message that tries to re-validate a known-revoked certificate unless
+  `CertificateValidationMessage.RevalidateRevokedCertificate` is `true`. This is intentional: CAs
+  are not required to retain revocation records indefinitely, so re-checking a revoked cert could
+  produce a spuriously "Good" result.
+</Warning>
+
+<Warning>
+  **Windows-only binary.** `OnlineCertificateVerifier` uses `unsafe` pointer arithmetic against the
+  native `SafeX509ChainHandle` to read `CERT_REVOCATION_INFO*` directly from memory. This depends
+  on the Windows CryptoAPI and will not function on Linux or macOS. The project targets `net472`
+  with `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>`.
+</Warning>
+
+<Note>
+  **Signature decision policy nuances.** `SignatureDeciderFactory` encodes several non-obvious rules:
+
+  - A revoked **code-signing** cert invalidates only signatures whose trusted timestamp post-dates the
+    revocation time. Signatures timestamped before revocation survive (`Ignore`). If revocation time
+    is unknown, all dependent signatures are rejected.
+  - A revoked **timestamping** cert triggers `Warn` on already-accepted signatures and `Reject` on
+    signatures still at ingestion (`Unknown` status).
+  - `NotTimeNested` alone is a no-op (`Ignore`) to avoid false positives from minor clock skew.
+  - `HasWeakSignature | NotSignatureValid` only rejects signatures at ingestion; existing valid
+    signatures are left intact.
+</Note>
+
+<Tip>
+  The `Scripts/` folder contains NSSM-based PowerShell deployment scripts (`PreDeploy.ps1`,
+  `PostDeploy.ps1`, `Functions.ps1`) and the `nssm.exe` service wrapper binary. In production this
+  job is installed as a **Windows Service** rather than run as a one-off scheduled task.
+</Tip>

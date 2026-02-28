@@ -1,0 +1,144 @@
+---
+title: NuGet.Services.Validation
+sidebarTitle: Services.Validation
+description: Shared contracts, EF entities, Service Bus messaging, and DB migrations for NuGet's asynchronous package validation pipeline.
+icon: shield-check
+---
+
+## Overview
+
+`NuGet.Services.Validation` is a **shared library** that sits at the center of NuGet Gallery's asynchronous validation pipeline. It provides:
+
+- **Entity Framework entities and DbContext** (`ValidationEntitiesContext`) — the canonical data model for all validation state stored in the dedicated `Validation` SQL database.
+- **Service Bus messaging contracts** — serialization/deserialization of the four message types that drive the validation workflow (`StartValidation`, `ProcessValidationSet`, `CheckValidationSet`, `CheckValidator`).
+- **EF6 code-first migrations** — 20+ incremental migrations that have evolved the schema from 2017 through 2024, covering signing, scanning, revalidation, symbols, and content-scan features.
+- **Cross-cutting enums and data objects** shared between the Gallery front-end (NuGetGallery) and the back-end Orchestrator / validator workers.
+
+The library targets both `net472` (for legacy IIS-hosted services) and `netstandard2.1` (for newer worker roles).
+
+<Note>
+  The `ValidationEntitiesContext` static constructor explicitly calls `Database.SetInitializer<ValidationEntitiesContext>(null)`, disabling automatic EF migrations at runtime. All schema changes must be applied deliberately via the `Migrations` classes or a dedicated migration tool.
+</Note>
+
+---
+
+## Role in the NuGet Gallery Ecosystem
+
+```
+NuGet Gallery (front-end)
+        │  enqueues via IPackageValidationEnqueuer
+        ▼
+Azure Service Bus Topic
+        │  consumed by
+        ▼
+Validation Orchestrator (NuGet.Services.Validation.Orchestrator)
+        │  reads/writes via IValidationEntitiesContext
+        ▼
+Validation SQL Database   ←──  this library owns the schema
+        │
+        ├── PackageValidationSets / PackageValidations
+        ├── signature.* tables  (signing, certs, timestamps)
+        ├── scan.*  tables      (malware scan operations)
+        └── ContentScanOperationState (CVS content scanning)
+```
+
+This project is **not** an executable — it is a shared assembly consumed by:
+
+- **NuGetGallery** — to enqueue validation requests and read signing state.
+- **NuGet.Services.Validation.Orchestrator** — to orchestrate individual validators and persist their results.
+- **Individual validator workers** — which write back `ValidatorStatus` rows to communicate progress.
+
+---
+
+## Key Files and Classes
+
+| File Path | Class / Interface | Purpose |
+|---|---|---|
+| `Entities/ValidationEntitiesContext.cs` | `ValidationEntitiesContext` | EF6 `DbContext`; defines all `IDbSet<T>` properties and fluent model configuration across 5 schema groups. |
+| `Entities/IValidationContext.cs` | `IValidationEntitiesContext` | Interface abstraction over `ValidationEntitiesContext`; used for DI and testability. |
+| `Entities/PackageValidationSet.cs` | `PackageValidationSet` | Root aggregate representing one round of validation for a package; identified by `ValidationTrackingId` (GUID). |
+| `Entities/PackageValidation.cs` | `PackageValidation` | A single named validation step (e.g., `"PackageSigning"`) within a set; tracks status and timing. |
+| `Entities/ValidatorStatus.cs` | `ValidatorStatus` | Cross-service handshake record written by the Orchestrator and updated by downstream validator workers. |
+| `Entities/PackageSigningState.cs` | `PackageSigningState` | Aggregate signing status for a package; lives in the `signature` schema. |
+| `Entities/EndCertificate.cs` | `EndCertificate` | Represents a signing or timestamping leaf certificate identified by SHA-256 thumbprint. |
+| `Entities/ContentScanOperationState.cs` | `ContentScanOperationState` | Tracks CVS (Content Vulnerability Scanning) job state per file path within a package. |
+| `Entities/PackageRevalidation.cs` | `PackageRevalidation` | Queued entry for re-running validation against already-published packages. |
+| `Entities/BaseValidationIssue.cs` | `BaseValidationIssue` | Abstract base for `PackageValidationIssue` and `ValidatorIssue`; holds `IssueCode` + serialized `Data`. |
+| `IPackageValidationEnqueuer.cs` | `IPackageValidationEnqueuer` | Interface for sending validation messages to Service Bus, with optional scheduled delivery. |
+| `PackageValidationEnqueuer.cs` | `PackageValidationEnqueuer` | Concrete implementation; delegates to `ITopicClient` and `IServiceBusMessageSerializer`. |
+| `ServiceBusMessageSerializer.cs` | `ServiceBusMessageSerializer` | Serializes/deserializes all four `PackageValidationMessageType` variants using versioned `[Schema]` attributes. |
+| `PackageValidationMessageData.cs` | `PackageValidationMessageData` | Discriminated-union message envelope; exposes exactly one non-null payload property per message type. |
+| `ValidatingType.cs` | `ValidatingType` (enum) | Distinguishes `Package`, `SymbolPackage`, and `Generic` validation targets. |
+| `Migrations/ValidationMigrationsConfiguration.cs` | `ValidationMigrationsConfiguration` | EF `DbMigrationsConfiguration`; enables ordered migration application. |
+
+---
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---|---|
+| `EntityFramework` | EF6 ORM; `DbContext`, `DbModelBuilder`, migrations |
+| `NuGet.Versioning` | NuGet version parsing/normalization used in entity comparisons |
+| `Azure.Core` | Azure SDK primitives (used transitively) |
+| `System.Text.Json` | JSON serialization support alongside Newtonsoft |
+
+### Internal Project References
+
+| Project | Role |
+|---|---|
+| `NuGet.Services.Contracts` | Shared enums and interfaces (`ValidationIssueCode`, `ValidationStatus`, etc.) |
+| `NuGet.Services.ServiceBus` | `ITopicClient`, `IBrokeredMessage`, `BrokeredMessageSerializer<T>`, `[Schema]` attribute |
+
+---
+
+## Notable Patterns and Implementation Details
+
+<CardGroup cols={2}>
+  <Card title="Versioned Service Bus Schemas" icon="layers">
+    Each message type is serialized using a private inner class annotated with `[Schema(Name=..., Version=1)]`. The deserializer switches on the schema name string read from the brokered message header, making it straightforward to add `Version=2` classes later without breaking existing consumers.
+  </Card>
+  <Card title="Discriminated-Union Message Envelope" icon="git-fork">
+    `PackageValidationMessageData` enforces exactly one non-null payload out of four possible data slots at construction time. Passing more than one non-null payload throws `ArgumentException`, preventing message type mismatches silently.
+  </Card>
+  <Card title="Multi-Schema SQL Layout" icon="database">
+    Signing entities live in the `signature` schema; scan entities in the `scan` schema; everything else in `dbo`. This makes permission scoping and backup partitioning cleaner at the SQL Server level.
+  </Card>
+  <Card title="Dual-Target Library" icon="layers-2">
+    The project targets both `net472` and `netstandard2.1`. EF6 is Windows/full-framework-only for actual DB access, but the entity POCOs and message contracts compile cleanly under `netstandard2.1` for use in lightweight cross-platform services.
+  </Card>
+</CardGroup>
+
+<Warning>
+  The `BatchId` column on `ValidatorStatus` is **intentionally ignored** in the base `ValidationEntitiesContext`. Derived contexts (used in other internal services that have the column) override `ConfigureBatchIdProperty()` to enable it. Forgetting to override in a derived context will silently drop the column from EF's model.
+</Warning>
+
+<Note>
+  Certificate thumbprints are stored as `varchar` (not `nvarchar`) and sized at 256 characters — large enough to accommodate future hash algorithms beyond SHA-256 without requiring a schema migration.
+</Note>
+
+<Tip>
+  `ValidationDbContextFactory` supports three construction modes: a static delegate (`ValidationEntitiesContextFactory`), a direct connection string, or the default `"Validation.SqlServer"` named connection. The static delegate is useful for injecting AAD token-based `DbConnection` objects in Azure-hosted migration tools.
+</Tip>
+
+---
+
+## Message Flow Summary
+
+```csharp
+// 1. Gallery enqueues a new validation
+var message = PackageValidationMessageData.NewStartValidation(
+    trackingId, contentType, contentUrl, properties);
+await enqueuer.SendMessageAsync(message);
+
+// 2. Orchestrator processes the set
+var process = PackageValidationMessageData.NewProcessValidationSet(
+    packageId, version, trackingId, ValidatingType.Package, entityKey);
+
+// 3. Orchestrator checks progress
+var check = PackageValidationMessageData.NewCheckValidationSet(trackingId, extendExpiration: false);
+
+// 4. Orchestrator checks a specific validator step
+var checkValidator = PackageValidationMessageData.NewCheckValidator(validationId);
+```

@@ -1,0 +1,120 @@
+---
+title: "NuGet.Jobs.GitHubIndexer"
+sidebarTitle: "GitHubIndexer"
+description: "Background job that discovers popular C# GitHub repositories, extracts their NuGet package dependencies, and publishes the aggregated usage data to Azure Blob Storage."
+icon: "github"
+---
+
+## Overview
+
+`NuGet.Jobs.GitHubIndexer` is a scheduled background job that builds a picture of which NuGet packages are being used by popular open-source C# projects on GitHub. It queries the GitHub Search API for C# repositories exceeding a configurable star threshold (default: 100 stars), clones only the default branch of each repository using LibGit2Sharp, and scans the tree for dependency declaration files (`packages.config`, `*.csproj`, `*.props`, `*.targets`). Extracted package IDs are deduplicated and serialized as a JSON blob named `GitHubUsage.v1.json` in the `content` Azure Blob Storage container.
+
+The job is designed as a one-shot console application run by a scheduler (deployed as a Windows service via NSSM). On each run it fetches a fresh list of repositories from GitHub, processes them in parallel across a configurable thread pool (default: 32 threads), and uploads the result before exiting. A disk-based cache (`DiskRepositoriesCache`) persists each repository's parsed dependency list to the local temp directory during a run so that if processing is interrupted or a repository times out, already-processed results are not lost within that run.
+
+A key design constraint is the GitHub Search API limit of 1,000 results per query. To retrieve more repositories than this cap allows, `GitHubSearcher` performs sliding-window pagination: it issues multiple pages of results ordered by descending star count and advances the upper star bound to the lowest star count of the last batch, repeating until all repositories above the minimum star threshold have been enumerated.
+
+## Role in System
+
+```
+GitHub Search API
+      |
+      v
+ GitHubSearcher          (discovers popular C# repos via Octokit)
+      |
+      v
+ ReposIndexer            (orchestrates parallel processing)
+      |
+      +---> DiskRepositoriesCache  (short-circuit for already-processed repos)
+      |
+      +---> FetchedRepo / LibGit2Sharp  (shallow clone of default branch)
+      |
+      +---> Filters                (identifies dependency declaration files)
+      |
+      +---> ConfigFileParser / RepoUtils  (parses PackageReference / packages.config XML)
+      |
+      v
+ Azure Blob Storage
+   content/GitHubUsage.v1.json   (consumed by NuGet Gallery / search features)
+```
+
+<CardGroup cols={2}>
+  <Card title="GitHub Discovery" icon="search">
+    Uses the Octokit `IGitHubClient` to search for C# repositories by star count, paginating through results to work around the 1,000-result-per-query API cap. Rate limit headers are inspected to implement automatic throttle-aware delays.
+  </Card>
+  <Card title="Sparse Git Clone" icon="git-branch">
+    Rather than downloading a full repository archive, `FetchedRepo` initializes a local bare repository with LibGit2Sharp, fetches only the default branch ref, and uses `CheckoutPaths` to materialize only the specific dependency files identified by `Filters`.
+  </Card>
+  <Card title="Dependency Extraction" icon="package">
+    `ConfigFileParser` and `RepoUtils` parse both `packages.config` (via `NuGet.Packaging.PackagesConfigReader`) and SDK-style project files (via `XmlDocument` scanning for `PackageReference` nodes). Files over 1 MB are skipped.
+  </Card>
+  <Card title="Usage Blob Output" icon="upload-cloud">
+    Produces `GitHubUsage.v1.json` in the `content` blob container — a JSON array of repository records sorted by descending star count, each listing its NuGet package dependencies. Only repositories with at least one detected dependency are included.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; calls `JobRunner.RunOnce` |
+| `Job.cs` | `Job` | Extends `JsonConfigurationJob`; registers all DI services and binds `GitHubIndexerConfiguration` |
+| `ReposIndexer.cs` | `ReposIndexer` | Main orchestrator; drives discovery, parallel processing, and blob upload |
+| `GitRepoSearchers/GitHub/GitHubSearcher.cs` | `GitHubSearcher` | Implements `IGitRepoSearcher`; paginates GitHub Search API with sliding star-count window and rate-limit handling |
+| `GitRepoSearchers/GitHub/GitHubSearchWrapper.cs` | `GitHubSearchWrapper` | Wraps `IGitHubClient` search calls; parses `Date` and `X-Ratelimit-Reset` headers; applies a double-timeout via `TaskExtensions.ExecuteWithTimeoutAsync` |
+| `GitRepoSearchers/GitHub/GitHubSearchApiResponse.cs` | `GitHubSearchApiResponse` | DTO carrying search results, response date, and throttle reset time |
+| `GitRepoSearchers/WritableRepositoryInformation.cs` | `WritableRepositoryInformation` | Mutable builder for a repository record; accumulates discovered package IDs in a case-insensitive `HashSet` before converting to the immutable `RepositoryInformation` |
+| `FetchedRepo.cs` | `FetchedRepo` | Initializes a local git repo, fetches the default branch via LibGit2Sharp, lists the file tree, and checks out selected files; cleans up on `Dispose` |
+| `RepoFetcher.cs` | `RepoFetcher` | Factory that creates `FetchedRepo` instances; implements `IRepoFetcher` |
+| `Filters.cs` | `Filters` | Static helper that classifies a file path as `PackagesConfig`, `PackageReference`, or `None` based on file name and extension |
+| `ConfigFileParser.cs` | `ConfigFileParser` | Dispatches to the appropriate `RepoUtils` parsing method based on the `Filters.ConfigFileType` |
+| `RepoUtils.cs` | `RepoUtils` | Recursively lists a LibGit2Sharp tree; parses `packages.config` via `PackagesConfigReader`; parses project files via `XmlDocument`; validates package IDs with a regex |
+| `DiskRepositoriesCache.cs` | `DiskRepositoriesCache` | Persists and reads per-repository dependency lists as JSON files in the local cache directory to avoid re-processing within a run |
+| `CheckedOutFile.cs` | `CheckedOutFile` | Represents a file materialized to disk; exposes a `Stream` via `OpenFile()` |
+| `GitFileInfo.cs` | `GitFileInfo` | Lightweight record holding a file's repository-relative path and blob size |
+| `GitHubIndexerConfiguration.cs` | `GitHubIndexerConfiguration` | Configuration POCO with all tunable parameters |
+| `TelemetryService.cs` | `TelemetryService` | Emits Application Insights metrics for run duration, repository discovery, per-repo indexing, file listing, file checkout, and blob upload phases |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `LibGit2Sharp` | Cloning, branch fetching, tree listing, and selective file checkout of Git repositories |
+| `NuGet.StrongName.Octokit` | GitHub REST API client used to search repositories and inspect rate-limit headers |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | `JsonConfigurationJob`, `JobRunner`, `ICloudBlobClient`/`CloudBlobClientWrapper`, `ITelemetryClient`, and the shared `TaskExtensions` (linked as a compiled file) |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The job runs repository indexing on dedicated `Thread` objects rather than `Task.Run`. LibGit2Sharp operations are inherently synchronous and CPU/IO-bound. Spawning threads from the background thread pool avoids starving the async `Task` scheduler. Each thread is marked `IsBackground = true` so the process can exit even if a thread is still running after a cancellation.
+</Note>
+
+<Warning>
+If any repository exceeds `RepoIndexingTimeout` (default: 150 minutes), the controlling `SemaphoreSlim.WaitAsync` times out, which propagates a cancellation to all parallel workers and crashes the process. The intent is to prevent a single hung git operation from blocking the job indefinitely; the process will restart and pick up from the cached results.
+</Warning>
+
+<Tip>
+`GitHubSearcher` uses a sliding upper-star-bound strategy to work around the GitHub Search API's hard cap of 1,000 results per query. After each full page set, it sets the next query's upper star bound to the lowest star count observed so far, effectively partitioning the result space by star count ranges. A warning is logged when the last page of a range shows uniform star counts, which would cause data loss because the partition cannot be further subdivided.
+</Tip>
+
+<Warning>
+The GitHub Search API can return duplicate repository entries across pages when the result set shifts between requests. `GitHubSearcher.GetPopularRepositories` deduplicates by grouping on the repository's full name (the `Id` field) and taking the first occurrence.
+</Warning>
+
+<Note>
+`GitHubSearchWrapper` applies a forcible double-timeout (`GitHubRequestTimeout * 2`) on top of the Octokit/HttpClient built-in timeout via `TaskExtensions.ExecuteWithTimeoutAsync`. This guards against cases where the underlying HTTP request hangs without triggering the built-in timeout, which has been observed in production.
+</Note>
+
+<Note>
+Files larger than 1 MB (`ReposIndexer.MaxBlobSizeBytes = 1 << 20`) are skipped during checkout with a warning. This prevents excessively large auto-generated project files from consuming disproportionate processing time or memory.
+</Note>
+
+<Note>
+The local working directory used for repository clones and the disk cache is `%TEMP%\NuGet.Jobs.GitHubIndexer`. Both the `repos` and `cache` subdirectories are created at the start of each run and deleted on successful completion. Read-only files (common in `.git` folders) are explicitly made writable before deletion to work around `Directory.Delete` limitations on Windows.
+</Note>

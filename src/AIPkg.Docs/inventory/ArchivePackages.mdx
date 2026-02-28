@@ -1,0 +1,119 @@
+---
+title: ArchivePackages
+sidebarTitle: ArchivePackages
+description: Background job that copies newly published or edited NuGet packages from the primary packages blob storage into one or two archive (backup) storage accounts, advancing a cursor after each run.
+icon: archive
+---
+
+## Overview
+
+`ArchivePackages` is a headless .NET Framework 4.7.2 console job that provides **incremental backup** of NuGet package binaries (.nupkg files). On each execution it:
+
+1. Reads a cursor timestamp from a `cursor.json` blob stored in the destination container.
+2. Queries the Gallery SQL database for all packages whose `Published` or `LastEdited` timestamp is newer than the cursor.
+3. For each such package, triggers a server-side blob copy from the primary `packages` container into an `ng-backups` container on the destination storage account.
+4. Advances the cursor to `max(LastEdited, Published)` across the batch.
+
+The job optionally replicates the same set of packages to a **secondary** destination account, providing a redundant offsite backup.
+
+<Note>
+The job only **initiates** the blob copy — it calls `StartCopyAsync` and does not wait for Azure Storage to complete the server-side transfer. Any process relying on a fully-consistent backup must account for in-flight copies.
+</Note>
+
+## Role in System
+
+```
+Gallery SQL DB  ──►  ArchivePackages Job  ──►  Primary Blob Account (ng-backups)
+                              │
+                              └──────────────►  Secondary Blob Account (ng-backups)
+```
+
+<CardGroup cols={2}>
+  <Card title="Source" icon="database">
+    Azure Blob Storage — `packages` container. Blob name format: `{id}.{version}.nupkg` (lowercased).
+  </Card>
+  <Card title="Destination" icon="hard-drive">
+    Azure Blob Storage — `ng-backups` container. Blob name format: `packages/{id}/{version}/{url-encoded-hash}.nupkg`.
+  </Card>
+  <Card title="Cursor" icon="clock">
+    `cursor.json` stored in the destination container. Contains a single ISO-8601 `cursorDateTime` key that advances after each successful batch.
+  </Card>
+  <Card title="Deployment" icon="server">
+    Packaged as a NuGet package via `.nuspec`; installed as a Windows Service using NSSM via Octopus Deploy PowerShell scripts.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `ArchivePackages.Job.cs` | `Job` | Main job logic — reads cursor, queries DB, drives the archive loop for primary and optional secondary destinations |
+| `ArchivePackages.Program.cs` | `Program` | Entry point; constructs `Job` and hands off to `JobRunner.Run()` |
+| `Configuration/InitializationConfiguration.cs` | `InitializationConfiguration` | Strongly-typed config POCO bound from the `Initialization` JSON section |
+| `JobEventSource.cs` | `JobEventSource` | ETW event source (`Outercurve-NuGet-Jobs-ArchivePackages`) emitting structured events for every major operation |
+| `PackageRef.cs` | `PackageRef` | Plain data class representing a Dapper query row — holds `Id`, `Version`, `Hash`, `LastEdited`, `Published` |
+| `Scripts/Functions.ps1` | — | PowerShell helpers `Install-NuGetService` / `Uninstall-NuGetService` used by deploy scripts |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `WindowsAzure.Storage` | Azure Blob Storage client — `ICloudBlobContainer`, `StartCopyAsync`, `UploadFromStreamAsync` |
+
+### Internal Project References
+
+| Project | Key Contributions |
+|---------|-----------------|
+| `NuGet.Jobs.Common` | `JsonConfigurationJob` base class, `JobRunner`, `StorageHelpers` (blob name formatting), `GalleryDbConfiguration` |
+
+### Transitive / Shared Dependencies
+
+| Library | Role |
+|---------|------|
+| `Autofac` | DI container |
+| `Dapper` | Micro-ORM for the SQL query against `Packages` / `PackageRegistrations` |
+| `Microsoft.Extensions.Configuration` | JSON configuration loading with KeyVault secret injection |
+| `Newtonsoft.Json` | Parsing and updating `cursor.json` via `JObject` |
+
+## Configuration Reference
+
+```json
+{
+  "Initialization": {
+    "Source": "<storage-account-name>",
+    "SourceContainerName": "packages",
+    "PrimaryDestination": "<primary-backup-storage-account-name>",
+    "SecondaryDestination": "<optional-secondary-backup-account>",
+    "DestinationContainerName": "ng-backups",
+    "CursorBlob": "cursor.json"
+  }
+}
+```
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Cursor-based incremental processing.** The cursor is a single `cursorDateTime` value persisted inside `cursor.json` in the destination container itself. A freshly created destination container requires a manually seeded `cursor.json` before the job will run successfully.
+</Note>
+
+<Note>
+**Parallel tuple construction, sequential copy dispatch.** The Dapper result list is projected into `(sourceBlobName, destBlobName)` tuples using `AsParallel().Select(...)`, but actual `ArchivePackage` calls are dispatched sequentially. The parallelism only benefits name-string computation, not I/O throughput.
+</Note>
+
+<Warning>
+**Secondary destination re-queries the database independently.** Each destination triggers a full separate `Archive()` call that re-reads the cursor and re-queries SQL. If packages are published between the two calls, the two archives may cover slightly different sets of packages.
+</Warning>
+
+<Warning>
+**No copy-completion verification.** `ArchivePackage` calls `StartCopyAsync(...)` and returns immediately. Azure Storage executes the copy asynchronously. A storage outage or throttling event can leave copies in a pending state with no job-level alerting.
+</Warning>
+
+<Note>
+**Blob name hash encoding.** Destination blob names URL-encode the package hash (`WebUtility.UrlEncode(hash)`). This is necessary because SHA-512 hashes are Base64 strings containing `+`, `/`, and `=` characters that are not safe in Azure blob path segments.
+</Note>
+
+<Tip>
+**NSSM-based Windows Service deployment.** `nssm.exe` (Non-Sucking Service Manager) is bundled in the NuGet package. `PostDeploy.ps1` uses it to register the job with automatic restart-on-failure, ensuring the job recovers from transient crashes without manual intervention.
+</Tip>

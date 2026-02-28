@@ -1,0 +1,118 @@
+﻿---
+title: "NuGet.SupportRequests.Notifications"
+sidebarTitle: "SupportRequests.Notifications"
+description: "Scheduled job that queries the NuGet support-request database and dispatches daily on-call and weekly summary notification emails via Azure Service Bus."
+icon: "bell"
+---
+
+## Overview
+
+`NuGet.SupportRequests.Notifications` is a .NET Framework 4.7.2 console executable that runs as a scheduled backend job within the NuGet Gallery infrastructure. Its sole responsibility is to read open and recently-closed support tickets from the Gallery's SQL-based support-request database, build HTML email reports, and route them to the appropriate recipients through the shared `NuGet.Services.Messaging` Service Bus pipeline.
+
+Two distinct notification types are supported:
+
+- **OnCall Daily Summary** — sent each day to the on-call engineer, listing all currently unresolved issues with their assigned admin and status.
+- **Weekly Summary** — sent once a week to a configured distribution address, comparing last week's issue counts, closure rates, SLA metrics, and top request reasons against the prior week.
+
+The job does not host a web server or long-running process. It is invoked by an external scheduler (Azure WebJobs or equivalent), executes a single task by name, then exits.
+
+---
+
+## Role in System
+
+<CardGroup cols={2}>
+  <Card title="Support Operations" icon="headset">
+    Keeps on-call engineers and support leads informed about ticket volume and SLA trends without requiring manual database queries.
+  </Card>
+  <Card title="Email Pipeline" icon="send">
+    Produces email messages as Service Bus messages consumed by the `EmailPublisher` job, keeping email dispatch decoupled from report generation.
+  </Card>
+  <Card title="Jobs Infrastructure" icon="gear">
+    Extends `JsonConfigurationJob` from `NuGet.Jobs.Common`, inheriting standard argument parsing, DI container setup, SQL connection management, and Application Insights telemetry.
+  </Card>
+  <Card title="Support Request DB" icon="database">
+    Queries the `[dbo].[Issues]`, `[dbo].[History]`, and `[dbo].[Admins]` tables in the Gallery support-request SQL database. No ORM is used — all queries are raw ADO.NET via `SqlCommand`.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File Path | Class / Type | Purpose |
+|-----------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; calls `JobRunner.Run(new Job(), args)` |
+| `Job.cs` | `Job : JsonConfigurationJob` | Reads `--Task` argument, resolves `InitializationConfiguration`, delegates to `ScheduledTaskFactory` |
+| `ScheduledTaskFactory.cs` | `ScheduledTaskFactory` | Resolves a task class by name via `Type.GetType` in the `Tasks` namespace; appends `"Task"` suffix if missing |
+| `IScheduledTask.cs` | `IScheduledTask` | Single-method interface (`RunAsync()`) implemented by every scheduled task |
+| `Tasks/SupportRequestsNotificationScheduledTask.cs` | `SupportRequestsNotificationScheduledTask<TNotification>` | Abstract base task; wires up `SupportRequestRepository`, `MessagingService`, and `NotificationTemplateProvider`; calls `RunAsync()` |
+| `Tasks/WeeklySummaryNotificationTask.cs` | `WeeklySummaryNotificationTask` | Concrete task; queries last-week and prior-week summaries, top reasons, and unresolved issues; performs HTML placeholder substitution |
+| `Notifications/OnCallDailyNotification.cs` | `OnCallDailyNotification : INotification` | Data carrier for the daily email; template name `OnCallSummary.html` |
+| `Notifications/WeeklySummaryNotification.cs` | `WeeklySummaryNotification : INotification` | Data carrier for the weekly email; computes trend percentages (WoW delta) including safe division-by-zero handling |
+| `Notifications/INotification.cs` | `INotification` | Contract: `TemplateName`, `Subject`, `TargetEmailAddress` |
+| `SupportRequestRepository.cs` | `SupportRequestRepository` | ADO.NET data access; four async query methods over the support-request SQL database |
+| `SqlQuery.cs` | `SqlQuery` | Static constants holding all raw T-SQL queries |
+| `Services/MessagingService.cs` | `MessagingService` | Wraps `IMessageService`; constructs `SupportRequestNotificationEmailBuilder` and calls `SendMessageAsync` |
+| `SupportRequestNotificationEmailBuilder.cs` | `SupportRequestNotificationEmailBuilder : IEmailBuilder` | Implements the `NuGet.Services.Messaging.Email` builder contract; sender is `noreply@nuget.org` |
+| `Templates/NotificationTemplateProvider.cs` | `NotificationTemplateProvider` | Loads embedded HTML templates and CSS from assembly resources; caches results in a static dictionary |
+| `Templates/HtmlPlaceholders.cs` | `HtmlPlaceholders` | String constants for every `{{placeholder}}` token replaced in templates |
+| `Templates/HtmlSnippets.cs` | `HtmlSnippets` | Helper methods for trend arrow images and percentage formatting |
+| `Configuration/InitializationConfiguration.cs` | `InitializationConfiguration` | POCO bound from JSON config; holds `EmailPublisherConnectionString`, `EmailPublisherTopicName`, `TargetEmailAddress` |
+| `Models/SupportRequest.cs` | `SupportRequest` | Row model hydrated from `[dbo].[Issues]` |
+| `Models/SingleWeekSummary.cs` | `SingleWeekSummary` | Aggregates counts and average time-to-resolution for a single calendar week |
+| `Models/IssueStatusKeys.cs` | `IssueStatusKeys` | Enum: `New=0`, `Working=1`, `WaitingForCustomer=2`, `Resolved=3` |
+| `JobArgumentNames.cs` | `JobArgumentNames` | CLI argument name constants (`--Task`, `--InstrumentationKey`, `--SourceDatabase`) |
+| `LogEvents.cs` | `LogEvents` | Structured log event IDs 550 (`JobRunFailed`) and 551 (`JobInitFailed`) |
+
+---
+
+## Dependencies
+
+### NuGet Packages (direct, via `NuGet.Jobs.Common`)
+
+| Package | Role |
+|---------|------|
+| `Autofac.Extensions.DependencyInjection` | DI container used by the jobs framework |
+| `System.Data.SqlClient` | ADO.NET SQL connectivity |
+| `Microsoft.Extensions.DependencyInjection` | Service registration |
+| `Microsoft.Extensions.Options.ConfigurationExtensions` | `IOptionsSnapshot<T>` configuration binding |
+| `Dapper.StrongName` | Available in common layer (not directly used by this job) |
+| `Azure.Data.Tables` | Available in common layer (not directly used by this job) |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | `JsonConfigurationJob`, `JobRunner`, `MessageServiceConfiguration`, SQL connection helpers |
+| `NuGet.Services.Messaging.Email` | `IEmailBuilder`, `IMessageService`, `AsynchronousEmailMessageService`, `EmailMessageEnqueuer` |
+| `NuGet.Services.ServiceBus` | `TopicClientWrapper`, `ServiceBusMessageSerializer` (consumed via `NuGet.Jobs.Common`) |
+| `NuGet.Services.Logging` | Application Insights / structured logging setup |
+| `NuGet.Services.Configuration` | Configuration provider utilities |
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Task dispatch by reflection.** `ScheduledTaskFactory` resolves the concrete task class entirely at runtime using `Type.GetType($"NuGet.SupportRequests.Notifications.Tasks.{taskName}")` and `Activator.CreateInstance`. Adding a new task requires no factory changes — only a new class in the `Tasks` namespace implementing `IScheduledTask` with the three-argument constructor `(InitializationConfiguration, Func<Task<SqlConnection>>, ILoggerFactory)`.
+</Note>
+
+<Note>
+**Embedded resource templates with CSS inlining.** HTML email templates (`OnCallSummary.html`, `WeeklySummary.html`) and the shared `EmailStyles.css` are all compiled as embedded resources. `NotificationTemplateProvider` inlines the CSS into each HTML template on first load and caches the result statically for the process lifetime. Placeholder substitution is done via simple `string.Replace` on named tokens defined in `HtmlPlaceholders`.
+</Note>
+
+<Warning>
+**No ORM — raw ADO.NET with `NOLOCK` hints.** All SQL queries use `WITH (NOLOCK)` table hints. This means reads are dirty and may return uncommitted data. The queries are stored as string constants in `SqlQuery.cs` and suppressed under `CA2100` (SQL injection review) with a `#pragma warning disable`. Input parameters are correctly parameterised, so injection risk is low, but the suppression warrants review if queries are ever modified.
+</Warning>
+
+<Warning>
+**No plaintext email fallback.** `SupportRequestNotificationEmailBuilder.GetBody(EmailFormat format)` returns the HTML body regardless of the `format` argument. The inline comment acknowledges this as a known gap. Recipients using plaintext-only email clients will receive raw HTML.
+</Warning>
+
+<Tip>
+**Week-over-week trend arithmetic uses safe division.** `WeeklySummaryNotification.GetDeltaPercentageSafe` returns `double.PositiveInfinity`, `double.NegativeInfinity`, or `double.NaN` instead of throwing when the denominator is zero. Downstream callers in `HtmlSnippets.GetTrendPercentageString` must handle these sentinel values correctly.
+</Tip>
+
+<Tip>
+**`IssueStatusId = 3` means Resolved.** The constant `3` is used directly in several SQL `WHERE` clauses as well as in the `IssueStatusKeys` enum. When reading queries in `SqlQuery.cs`, the numeric literal `3` is always the Resolved status.
+</Tip>

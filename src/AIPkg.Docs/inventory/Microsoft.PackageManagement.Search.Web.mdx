@@ -1,0 +1,106 @@
+---
+title: Microsoft.PackageManagement.Search.Web
+sidebarTitle: Search.Web
+description: Shared ASP.NET Core host bootstrap library providing host builder, startup helpers, and exception filtering for NuGet search service web applications.
+icon: server
+---
+
+## Overview
+
+`Microsoft.PackageManagement.Search.Web` is a small, focused shared library that provides the reusable ASP.NET Core infrastructure for NuGet search service web applications. It contains no controllers, no business logic, and no Azure Search integration of its own. Instead, it supplies three pieces of infrastructure:
+
+1. **Host construction** — a pre-configured `IHostBuilder` that strips out noisy environment variables and wires in Autofac as the DI container.
+2. **Startup helpers** — Azure Key Vault secret injection into configuration, standard ASP.NET Core middleware pipeline setup (routing, CORS, HSTS, security headers), and a utility for building Application Insights operation names.
+3. **Exception filtering** — an MVC `ExceptionFilterAttribute` that maps domain exceptions from `NuGet.Services.AzureSearch` to appropriate HTTP status codes.
+
+The library targets `net6.0` and is published as a versioned NuGet package alongside the rest of the NuGetGallery jobs packages.
+
+## Role in the System
+
+<CardGroup cols={2}>
+  <Card title="Consumed by SearchService.Core" icon="plug">
+    `NuGet.Services.SearchService.Core` is the primary consumer. Its `Program.cs` calls `HostBuilderHelper.CreateHostBuilder` and its `Startup.cs` calls `StartupHelper` methods.
+  </Card>
+  <Card title="Sits above AzureSearch" icon="layers">
+    Depends on `NuGet.Services.AzureSearch` for `AzureSearchException`, `InvalidSearchRequestException`, and `ErrorResponse` types used in the exception filter.
+  </Card>
+  <Card title="Enables multi-host deployment" icon="copy">
+    By encapsulating host bootstrap logic in a shared library, additional search-flavored web applications can reuse the same secure configuration and middleware setup without duplicating Key Vault wiring.
+  </Card>
+  <Card title="Security boundary" icon="shield">
+    All incoming environment variables are filtered to only the `APPSETTING_` prefix. Key Vault secrets are injected at startup; foreground request threads are forbidden from triggering uncached secret reads to avoid deadlocks.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class | Purpose |
+|------|-------|---------|
+| `HostBuilderHelper.cs` | `HostBuilderHelper` | Static factory that creates the `IHostBuilder`. Removes all default `EnvironmentVariablesConfigurationSource` entries and replaces them with a single source scoped to the `APPSETTING_` prefix. Registers Autofac as the service provider factory. |
+| `StartupHelper.cs` | `StartupHelper` | Static helpers called from a host's `Startup` class. Provides `GetSecretInjectedConfiguration` (Key Vault injection + refresh), `Configure` (middleware pipeline), and `GetOperationName<T>` (Application Insights telemetry naming). |
+| `StartupHelper.cs` | `RefreshableConfiguration` | Plain data holder pairing an `IRefreshableSecretReaderFactory` with the fully injected `IConfigurationRoot`. |
+| `Support/ApiExceptionFilterAttribute.cs` | `ApiExceptionFilterAttribute` | MVC `ExceptionFilterAttribute`. Maps `AzureSearchException` → HTTP 503 and `InvalidSearchRequestException` → HTTP 400. All other exceptions propagate normally. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Role |
+|---------|------|
+| `Microsoft.ApplicationInsights.AspNetCore` | Application Insights telemetry integration |
+| `Microsoft.AspNetCore.Http` | Lifted transitive dependency — pinned for Component Governance compliance |
+| `System.Drawing.Common` | Lifted transitive dependency — pinned for Component Governance compliance |
+
+### Framework Reference
+
+| Reference | Notes |
+|-----------|-------|
+| `Microsoft.AspNetCore.App` | Full ASP.NET Core framework reference; brings in MVC, routing, CORS, HSTS, and hosting APIs |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.AzureSearch` | Provides `AzureSearchException`, `InvalidSearchRequestException`, and `ErrorResponse` consumed by the exception filter |
+
+## Startup Flow
+
+```text
+Program.Main
+  └─ HostBuilderHelper.CreateHostBuilder(args)
+       ├─ Removes all EnvironmentVariablesConfigurationSource entries
+       ├─ Adds APPSETTING_-prefixed environment variable source
+       └─ Registers AutofacServiceProviderFactory
+            └─ Startup.ConfigureServices(services)
+                 ├─ StartupHelper.GetSecretInjectedConfiguration(config)
+                 │    ├─ Pre-warms Key Vault secret cache (.Wait())
+                 │    └─ Locks out uncached reads (BlockUncachedReads = true)
+                 └─ Registers ApiExceptionFilterAttribute on MVC pipeline
+                      └─ Startup.Configure(app, env)
+                           └─ StartupHelper.Configure(app, env, corsPolicy)
+                                ├─ UseRouting, UseCors, UseHsts
+                                ├─ Adds X-Content-Type-Options: nosniff header
+                                └─ MapControllers
+```
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Environment variable filtering is intentional.** `HostBuilderHelper` removes _all_ default `EnvironmentVariablesConfigurationSource` registrations and replaces them with a single source scoped to the `APPSETTING_` prefix. This matches the Azure App Service configuration convention and avoids accidentally ingesting hundreds of system-level variables.
+</Note>
+
+<Warning>
+**Synchronous `.Wait()` in `GetSecretInjectedConfiguration`.** During application startup, Key Vault secrets are pre-warmed into the refresh cache by calling `.Wait()`. This blocks the startup thread. The code acknowledges this is "not great" but necessary because the DI container is not yet active. After startup, `BlockUncachedReads = true` is set so request threads must only hit the already-warm cache.
+</Warning>
+
+<Note>
+**CORS is caller-controlled.** `StartupHelper.Configure` accepts an optional `Action<CorsPolicyBuilder>` parameter. If `null`, no CORS middleware is added at all. The consuming host passes an open-origin policy — this keeps the CORS policy out of the shared library.
+</Note>
+
+<Tip>
+**`GetOperationName<T>` standardises Application Insights naming.** Rather than letting ASP.NET Core generate variable operation name strings, consuming startup code pre-registers known operation names via `KnownOperationNameEnricher`. This makes dashboards and alerts more predictable.
+</Tip>
+
+<Note>
+**Target framework mismatch.** This library targets `net6.0` while its primary consumer `NuGet.Services.SearchService.Core` targets `net8.0`. The library runs fine under the .NET forward-compatibility model, but has not been updated to match the host's TFM.
+</Note>

@@ -1,0 +1,104 @@
+---
+title: Validation.ScanAndSign.Core
+sidebarTitle: ScanAndSign Core
+description: Shared contract library for dispatching NuGet package scan and repository-signing requests over Azure Service Bus.
+icon: shield-check
+---
+
+## Overview
+
+`Validation.ScanAndSign.Core` is a small, focused contract library that defines the messaging surface used to dispatch scan-only and scan-and-sign requests to the external NuGet signing validation job. It contains no business logic of its own; instead it provides the types, serialization, and enqueueing abstraction that both the validation orchestrator and the signing job consume.
+
+The project targets both `net472` (for the legacy NuGet Jobs host) and `netstandard2.0` (for modern .NET hosts), making it usable across the full pipeline without modification.
+
+<Note>
+  This library intentionally has zero application logic. Its sole responsibility is reliable, versioned message production and consumption over Azure Service Bus. Keep it thin.
+</Note>
+
+## Role in the System
+
+Within NuGetGallery's multi-step package validation pipeline, this library sits at the boundary between the **Validation Orchestrator** and the out-of-process **ScanAndSign worker job**.
+
+```
+Validation Orchestrator
+  └─ ScanAndSignProcessor
+       └─ IScanAndSignEnqueuer          ← defined here
+            └─ ScanAndSignEnqueuer      ← implemented here
+                 └─ Azure Service Bus Topic
+                      └─ ScanAndSign worker job (consumer)
+```
+
+The orchestrator calls `IScanAndSignEnqueuer` to schedule either a pure malware scan (`Scan`) or a combined scan-plus-repository-signature operation (`Sign`). The worker job deserializes the same `ScanAndSignMessage` type (via `ScanAndSignMessageSerializer`) and processes the request asynchronously.
+
+<CardGroup cols={2}>
+  <Card title="Validation Orchestrator" icon="network-wired">
+    `NuGet.Services.Validation.Orchestrator` — the primary consumer of `IScanAndSignEnqueuer` through `ScanAndSignProcessor`.
+  </Card>
+  <Card title="NuGet.Services.ServiceBus" icon="cloud">
+    Internal project reference that provides `ITopicClient`, `IBrokeredMessageSerializer<T>`, `BrokeredMessageSerializer<T>`, and the `[Schema]` attribute used for versioned message envelopes.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Type | Purpose |
+|---|---|---|
+| `IScanAndSignEnqueuer.cs` | Interface | Public contract for enqueuing scan or scan-and-sign requests, with optional delivery-delay override |
+| `ScanAndSignEnqueuer.cs` | Class | Concrete implementation; builds `ScanAndSignMessage`, serializes it, applies the scheduled-enqueue time, and sends it to the Service Bus topic |
+| `ScanAndSignMessage.cs` | Class | Immutable message payload carrying operation type, validation ID, blob URI, optional V3 service index URL, owner list, and free-form string context |
+| `ScanAndSignMessageSerializer.cs` | Class | `IBrokeredMessageSerializer<ScanAndSignMessage>` implementation supporting schema version 1 (no context) and version 2 (with context); falls back gracefully |
+| `ScanAndSignEnqueuerConfiguration.cs` | Class | POCO configuration bound via `IOptionsSnapshot<T>`; exposes a single nullable `MessageDelay` (`TimeSpan?`) |
+| `OperationRequestType.cs` | Enum | `Scan` — malware scan only; `Sign` — scan plus repository co-signing |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---|---|
+| `Microsoft.Extensions.Options` | `IOptionsSnapshot<ScanAndSignEnqueuerConfiguration>` for configuration injection |
+
+### Internal Project References
+
+| Project | Purpose |
+|---|---|
+| `NuGet.Services.ServiceBus` | `ITopicClient`, `IBrokeredMessageSerializer<T>`, `BrokeredMessageSerializer<T>`, `IReceivedBrokeredMessage`, `[Schema]` attribute |
+
+## Notable Patterns and Implementation Details
+
+### Scheduled Delivery via `ScheduledEnqueueTimeUtc`
+
+Messages are not delivered immediately. `ScanAndSignEnqueuer.SendScanAndSignMessageAsync` sets `IBrokeredMessage.ScheduledEnqueueTimeUtc` to `UtcNow + delay` before calling `ITopicClient.SendAsync`. The delay source priority is:
+
+1. Per-call `messageDeliveryDelayOverride` (when provided by the caller)
+2. `ScanAndSignEnqueuerConfiguration.MessageDelay` (from configuration)
+3. `TimeSpan.Zero` (immediate) as the final fallback
+
+<Tip>
+  Callers that need deterministic retry backoff can pass a `messageDeliveryDelayOverride` directly without touching configuration.
+</Tip>
+
+### Versioned Message Schema (v1 → v2)
+
+`ScanAndSignMessageSerializer` manages backward compatibility through two private inner schema classes:
+
+- **`ScanAndSignMessageData1`** (`[Schema(Name = "SignatureValidationMessageData", Version = 1)]`) — lacks the `Context` dictionary; used only for deserialization of older messages.
+- **`ScanAndSignMessageData2`** (`[Schema(Name = "SignatureValidationMessageData", Version = 2)]`) — adds `IReadOnlyDictionary<string, string> Context`; always used for serialization.
+
+Deserialization attempts v2 first; a `FormatException` triggers a silent fallback to v1 with an empty context dictionary.
+
+<Warning>
+  The schema name `"SignatureValidationMessageData"` predates the scan-only capability and reflects the original sign-only scope of the job. Do not rename it — doing so would break deserialization of any messages already in the Service Bus queue.
+</Warning>
+
+### Constructor Enforcement in `ScanAndSignMessage`
+
+The scan-only constructor (`OperationRequestType`, `Guid`, `Uri`, `IReadOnlyDictionary`) throws `ArgumentException` if called with `OperationRequestType.Sign`. Sign operations **must** supply a V3 service index URL and owner list via the five-argument constructor. This is a compile-time-accessible but runtime-enforced constraint.
+
+### Context Dictionary
+
+The `Context` property (`IReadOnlyDictionary<string, string>`) is a free-form key/value bag passed through to the worker job unchanged. The orchestrator's `ScanAndSignProcessor` populates it with `ProductName`, `ProductVersion`, and `ProductOwners` keys for observability and diagnostics in the signing job.
+
+### Dual-Target Build
+
+The `.csproj` specifies `<TargetFrameworks>net472;netstandard2.0</TargetFrameworks>`. The `net472` target satisfies the legacy Azure WebJobs–based host; `netstandard2.0` enables consumption from ASP.NET Core and modern worker services without a separate adapter.

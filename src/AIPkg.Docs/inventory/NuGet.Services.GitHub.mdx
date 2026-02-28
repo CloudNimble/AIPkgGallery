@@ -1,0 +1,117 @@
+---
+title: NuGet.Services.GitHub
+sidebarTitle: Services.GitHub
+description: Shared library that fetches NuGet-ecosystem security advisories from the GitHub Advisory Database via GraphQL and ingests them into NuGet Gallery data stores.
+icon: shield
+---
+
+## Overview
+
+`NuGet.Services.GitHub` is a reusable class library (not an executable) that encapsulates everything needed to pull vulnerability data from GitHub's v4 GraphQL API and transform it into Gallery-native data structures. Two background-job executables in the repository — `GitHubVulnerabilities2Db` and `GitHubVulnerabilities2v3` — both declare a project reference to this library and compose their pipelines from the interfaces it exposes.
+
+The library is organized into three cooperating layers. The **GraphQL** layer owns the raw HTTP transport: `QueryService` POSTs GraphQL query strings to `https://api.github.com/graphql` using a `Bearer` token, handles up to five automatic retries on 5xx responses, and deserializes the response into a typed object graph (`QueryResponse`, `SecurityAdvisory`, `SecurityVulnerability`, and so on). The **Collector** layer sits above the transport and implements cursor-based paging: `AdvisoryQueryBuilder` constructs the query strings (filtering by ecosystem `NUGET`, ordering by `UPDATED_AT`, requesting up to 100 items per page), while `AdvisoryQueryService` drives the pagination loop, including a secondary loop that fetches additional vulnerability edges when a single advisory has more than 100 affected ranges. The **Ingest** layer accepts the fully-assembled list of advisories and hands them to a caller-supplied `IVulnerabilityWriter`, translating GitHub severity strings and GitHub-format version ranges into Gallery entity types along the way.
+
+A key design decision is that `IVulnerabilityWriter` and the cursor (`ReadWriteCursor<DateTimeOffset>`) are both injected by the host application, not created here. This keeps the library free of any dependency on Azure Storage, SQL, or a specific DI container, and allows the two consuming jobs to plug in entirely different persistence mechanisms without duplicating any GitHub-interaction code.
+
+## Role in System
+
+```
+GitHub Advisory Database (GraphQL v4 API)
+         │
+         ▼
+  ┌──────────────────────────────────────┐
+  │  NuGet.Services.GitHub               │
+  │                                      │
+  │  QueryService          (HTTP/retry)  │
+  │       │                              │
+  │  AdvisoryQueryBuilder  (query text)  │
+  │  AdvisoryQueryService  (paging)      │
+  │       │                              │
+  │  AdvisoryCollector     (cursor loop) │
+  │       │                              │
+  │  AdvisoryIngestor      (mapping)     │
+  │       │                              │
+  │  IVulnerabilityWriter  (interface)   │
+  └───────┬──────────────────────────────┘
+          │
+    ┌─────┴───────────────────┐
+    ▼                         ▼
+GitHubVulnerabilities2Db   GitHubVulnerabilities2v3
+(SQL database writer)      (V3 search index writer)
+```
+
+<CardGroup cols={2}>
+  <Card title="Cursor-driven paging" icon="arrow-right-left">
+    `AdvisoryCollector` loads a `ReadWriteCursor<DateTimeOffset>` supplied by the host and queries only advisories updated since that watermark, advancing the cursor after a successful batch.
+  </Card>
+  <Card title="Full vulnerability pagination" icon="layers">
+    GitHub caps vulnerability edges at 100 per advisory request. `AdvisoryQueryService` detects the cap and issues follow-up queries using edge cursors until all ranges for an advisory are collected.
+  </Card>
+  <Card title="Version range translation" icon="code">
+    `GitHubVersionRangeParser` converts GitHub's symbolic range syntax (e.g., `>= 1.0, < 2.0`) into NuGet `VersionRange` objects, raising `GitHubVersionRangeParsingException` on malformed input.
+  </Card>
+  <Card title="No persistence coupling" icon="plug">
+    `IVulnerabilityWriter` is left entirely unimplemented here. Host applications provide the concrete writer, decoupling transport and mapping logic from SQL, blob, or file output.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `GraphQL/QueryService.cs` | `QueryService` | Sends GraphQL queries to the GitHub API over HTTPS with Bearer auth and automatic retry on server errors (up to 5 attempts) |
+| `GraphQL/IQueryService.cs` | `IQueryService` | Interface for the raw GraphQL transport, allowing test doubles |
+| `GraphQL/SecurityAdvisory.cs` | `SecurityAdvisory` | Deserialization model for a GitHub security advisory (GHSA ID, severity, permalink, withdraw timestamp, nested vulnerabilities) |
+| `GraphQL/SecurityVulnerability.cs` | `SecurityVulnerability`, `SecurityVulnerabilityPackage`, `SecurityVulnerabilityPackageVersion` | Deserialization models for a single package vulnerability edge (package name, affected range string, first patched version) |
+| `GraphQL/QueryResponse.cs` | `QueryResponse`, `QueryResponseData`, `ConnectionResponseData<T>`, `QueryError` | Generic GraphQL response envelope with typed `data` and optional `errors` arrays |
+| `GraphQL/Edge.cs` | `Edge<TNode>` | Wraps a GraphQL connection node with its opaque pagination cursor string |
+| `GraphQL/INode.cs` | `INode` | Marker interface requiring `UpdatedAt`; constrains the generic `Edge<TNode>` and `ConnectionResponseData<TNode>` |
+| `Collector/AdvisoryQueryBuilder.cs` | `AdvisoryQueryBuilder` | Builds GraphQL query strings for the `securityAdvisories` (list, filtered by `updatedSince`) and `securityAdvisory` (single, by GHSA ID) queries; hardcodes page size to 100 |
+| `Collector/AdvisoryQueryService.cs` | `AdvisoryQueryService` | Drives pagination across advisory pages and across vulnerability edge pages within each advisory; deduplicates vulnerability edges by package name + version range |
+| `Collector/AdvisoryCollector.cs` | `AdvisoryCollector` | Orchestrates a single collection cycle: loads cursor, calls `AdvisoryQueryService`, calls `AdvisoryIngestor`, advances cursor to the maximum `UpdatedAt` seen |
+| `Collector/IAdvisoryCollector.cs` | `IAdvisoryCollector` | Single-method interface (`ProcessAsync`) consumed by host job loops |
+| `Ingest/AdvisoryIngestor.cs` | `AdvisoryIngestor` | Converts `SecurityAdvisory` objects into `PackageVulnerability` + `VulnerablePackageVersionRange` entities and delegates persistence to `IVulnerabilityWriter` |
+| `Ingest/GitHubVersionRangeParser.cs` | `GitHubVersionRangeParser` | Parses GitHub's text-based version range syntax into NuGet `VersionRange` values |
+| `Ingest/GitHubVersionRangeParsingException.cs` | `GitHubVersionRangeParsingException` | `ArgumentException` subclass carrying the original unparseable range string |
+| `Ingest/IVulnerabilityWriter.cs` | `IVulnerabilityWriter` | Interface for writing and flushing `PackageVulnerability` records; implemented only by the consuming jobs |
+| `Configuration/GraphQLQueryConfiguration.cs` | `GraphQLQueryConfiguration` | Abstract base configuration: GraphQL endpoint URI, Personal Access Token, User-Agent string, and retry delay (default 3 s) |
+
+## Dependencies
+
+### NuGet Package References
+
+This project declares no direct `<PackageReference>` entries. All third-party packages are resolved transitively through the project references below.
+
+| Package | Resolved via | Purpose |
+|---------|-------------|---------|
+| `Newtonsoft.Json` | `NuGetGallery.Services` / `NuGetGallery.Core` | Serializing GraphQL request bodies (`JObject`) and deserializing responses |
+| `NuGet.Versioning` | `NuGetGallery.Core` | `NuGetVersion` and `VersionRange` types used by `GitHubVersionRangeParser` |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Cursor` | Provides `ReadWriteCursor<DateTimeOffset>` — the blob-backed watermark injected into `AdvisoryCollector` |
+| `NuGetGallery.Services` | Provides `PackageVulnerability`, `VulnerablePackageVersionRange`, `PackageVulnerabilitySeverity`, and other Gallery entity types used during ingestion |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Duplicate vulnerability edge deduplication.** The GitHub GraphQL API has been observed returning duplicate `(packageName, versionRange)` pairs for the same advisory. `AdvisoryQueryService` applies a custom `IEqualityComparer` after collecting all pages to silently drop these duplicates before handing advisories to the ingestor.
+</Note>
+
+<Note>
+**Advisory `UpdatedAt` is preserved during multi-page vulnerability fetches.** When `AdvisoryQueryService` issues follow-up queries to retrieve additional vulnerability pages for a single advisory, the `UpdatedAt` field from the original advisory is restored onto the merged result. This prevents the cursor from being incorrectly advanced based on a secondary query's timestamp.
+</Note>
+
+<Warning>
+**`GraphQLQueryConfiguration` is abstract.** Consuming applications must subclass it and supply the abstract `UserAgent` property. Forgetting to do so will cause a runtime error at DI registration time, not at build time.
+</Warning>
+
+<Warning>
+**No retry on 4xx responses.** `QueryService.MakeWebRequestAsync` only retries when no HTTP status code was received or when the status code is 500 or above. A 401 (bad token) or 403 (rate-limited) will surface immediately as an `HttpRequestException`.
+</Warning>
+
+<Tip>
+**`IVulnerabilityWriter.FlushAsync` must be a no-op if unused.** The interface contract explicitly states that implementations must no-op rather than throw when `FlushAsync` is called without any prior writes. This allows `AdvisoryIngestor.IngestAsync` to always call `FlushAsync` at the end without conditional logic.
+</Tip>

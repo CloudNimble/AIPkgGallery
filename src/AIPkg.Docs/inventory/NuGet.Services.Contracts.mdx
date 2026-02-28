@@ -1,0 +1,96 @@
+---
+title: NuGet.Services.Contracts
+sidebarTitle: Services.Contracts
+description: A shared interface-only library that defines the contracts for telemetry, Service Bus messaging, and package validation used across NuGet services.
+icon: file-code
+---
+
+## Overview
+
+`NuGet.Services.Contracts` is a foundational, interface-only library that defines the abstractions shared across multiple NuGet service projects. It contains no concrete implementations — only interfaces and enumerations that establish the contracts other projects implement and consume. This deliberate design keeps the dependency graph shallow and allows consuming projects to reference a single, lightweight assembly without pulling in any infrastructure-specific code.
+
+The library is organized into three namespaces that reflect the three cross-cutting concerns it addresses: `NuGet.Services.Logging` for telemetry, `NuGet.Services.ServiceBus` for Azure Service Bus messaging, and `NuGet.Services.Validation` for the package validation pipeline. Each namespace defines only what is needed for callers to depend on behavior without knowing the underlying implementation.
+
+The project targets both `net472` and `netstandard2.0`, making it compatible with the full .NET Framework used by legacy services and with .NET Standard-based libraries. Because it carries no NuGet package dependencies of its own, it is a pure contract layer with no transitive dependency risk.
+
+## Role in System
+
+`NuGet.Services.Contracts` sits at the base of the dependency graph. Five concrete projects reference it directly; none of those projects are referenced back by it.
+
+```
+NuGet.Services.Contracts   (interfaces + enums only, no dependencies)
+        |
+        +-- NuGet.Services.Logging        (implements ITelemetryClient)
+        |
+        +-- NuGet.Services.ServiceBus     (implements ITopicClient, ISubscriptionClient, etc.)
+        |
+        +-- NuGet.Services.Validation     (uses validation enums + ServiceBus contracts)
+        |
+        +-- NuGet.Services.Validation.Issues  (implements IValidationIssue)
+        |
+        +-- NuGet.Services.Messaging      (uses ServiceBus + validation contracts)
+        |
+        +-- NuGetGallery                  (references all of the above)
+```
+
+<CardGroup cols={2}>
+  <Card title="Service Bus Abstractions" icon="arrow-left-right">
+    Defines `ITopicClient`, `ISubscriptionClient`, `IBrokeredMessage`, `IReceivedBrokeredMessage`, and `IOnMessageOptions` — the full contract for publishing and consuming Azure Service Bus messages without depending on the Azure SDK.
+  </Card>
+  <Card title="Validation Contracts" icon="shield-check">
+    Defines `IValidationIssue`, `ValidationIssueCode`, `ValidationStatus`, and `ValidationSetStatus` — the shared vocabulary for the package validation pipeline used by both the gallery frontend and backend validators.
+  </Card>
+  <Card title="Telemetry Abstraction" icon="chart-line">
+    Defines `ITelemetryClient` with methods for tracking metrics (with and without a timestamp) and exceptions, decoupling callers from Application Insights or any specific telemetry backend.
+  </Card>
+  <Card title="No Dependencies" icon="ban">
+    The project has zero NuGet package references. All types are expressed using only BCL primitives, making this library safe to reference from any tier of the stack.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Logging/ITelemetryClient.cs` | `ITelemetryClient` | Contract for recording metrics and exceptions to a telemetry backend. Supports optional timestamp on metric calls and optional property/metric bags on exception calls. Includes a `Flush()` method for ensuring buffered telemetry is sent. |
+| `ServiceBus/IBrokeredMessage.cs` | `IBrokeredMessage` | Contract for an outbound Service Bus message. Exposes TTL, custom properties, scheduled enqueue time, message ID, and body serialization. |
+| `ServiceBus/IReceivedBrokeredMessage.cs` | `IReceivedBrokeredMessage` | Contract for an inbound Service Bus message. Extends the outbound shape with delivery count, expiry, enqueue time, raw body stream, and async `CompleteAsync`/`AbandonAsync` settlement methods. |
+| `ServiceBus/ISubscriptionClient.cs` | `ISubscriptionClient` | Contract for a Service Bus topic subscription consumer. Exposes `StartProcessingAsync` (with and without options) and `CloseAsync`. |
+| `ServiceBus/ITopicClient.cs` | `ITopicClient` | Contract for a Service Bus topic producer. Exposes `SendAsync` and `CloseAsync`. |
+| `ServiceBus/IOnMessageOptions.cs` | `IOnMessageOptions` | Options passed to `ISubscriptionClient.StartProcessingAsync` controlling auto-completion and maximum concurrent message processing. |
+| `Validation/IValidationIssue.cs` | `IValidationIssue` | Contract for a single validation problem found during a validation step. Each issue has an issue code and a `Serialize()` method that returns the issue-specific payload excluding the code. |
+| `Validation/ValidationIssueCode.cs` | `ValidationIssueCode` | Enum of all known validation failure reasons, covering package signing rules (codes 1–9) and symbol validation errors (codes 250–254). Code 0 (`Unknown`) is the default fallback. |
+| `Validation/ValidationStatus.cs` | `ValidationStatus` | Enum describing the state of a single validation step: `NotStarted`, `Incomplete`, `Succeeded`, or `Failed`. |
+| `Validation/ValidationSetStatus.cs` | `ValidationSetStatus` | Enum describing the aggregate state of a validation set: `Unknown`, `InProgress`, or `Completed`. `Completed` covers both the succeeded and failed outcomes for the set as a whole. |
+
+## Dependencies
+
+### NuGet Package References
+
+This project has no NuGet package references.
+
+### Internal Project References
+
+This project has no internal project references. It is a dependency root.
+
+## Notable Patterns and Implementation Details
+
+<Note>
+The split between `IBrokeredMessage` and `IReceivedBrokeredMessage` reflects the asymmetry between publishing and consuming. Outbound messages are constructed by the caller, so `IBrokeredMessage` uses mutable setters. Inbound messages are owned by the broker, so `IReceivedBrokeredMessage` exposes only read-only properties and async settlement methods.
+</Note>
+
+<Note>
+`ValidationSetStatus.Completed` intentionally covers both success and failure at the set level. Callers must inspect the individual `ValidationStatus` values on each step to determine the actual outcome. The `Completed` state simply signals that orchestration has finished and no further polling is needed.
+</Note>
+
+<Warning>
+`ValidationIssueCode.ObsoleteTesting` (value 9999) is decorated with `[Obsolete]` and must not be used in production code. It exists solely to support test scenarios and is preserved in the enum to avoid breaking deserialization of any persisted data that may reference the value.
+</Warning>
+
+<Tip>
+Symbol validation issue codes are explicitly grouped in the 200–299 range and marked with a region comment. New symbol-related codes should be added within that range to maintain the convention and avoid collisions with package signing codes.
+</Tip>
+
+<Note>
+The `ITelemetryClient.TrackMetric` overload that accepts a `DateTimeOffset` timestamp allows callers to record metrics that occurred at a point in the past, which is useful when processing batch events or messages that were enqueued before processing began.
+</Note>

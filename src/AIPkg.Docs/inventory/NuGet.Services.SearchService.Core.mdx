@@ -1,0 +1,124 @@
+---
+title: "NuGet.Services.SearchService.Core"
+sidebarTitle: "SearchService.Core"
+description: "ASP.NET Core microservice that adapts NuGet V2/V3 search protocol to Azure AI Search, serving package discovery for nuget.org and NuGet clients."
+icon: "search"
+---
+
+## Overview
+
+`NuGet.Services.SearchService.Core` is the **search microservice** for nuget.org. It is a read-only ASP.NET Core web application that sits between NuGet clients and an Azure AI Search resource, acting as a protocol adapter: clients speak the NuGet V2/V3 search protocol; the service translates those requests into Azure Search REST calls and maps the returned documents back into the JSON shapes callers expect.
+
+The service is stateless and horizontally scalable. nuget.org deploys at least two instances across four Azure regions, each paired with its own Azure Search resource for business-continuity and disaster-recovery purposes.
+
+<CardGroup cols={2}>
+  <Card title="V3 Search Endpoint" icon="magnifying-glass">
+    `/query` — NuGet V3 Search resource used by Visual Studio Package Manager UI and the .NET CLI (`dotnet tool search`).
+  </Card>
+  <Card title="V3 Autocomplete Endpoint" icon="keyboard">
+    `/autocomplete` — NuGet V3 Autocomplete resource used by Package Manager Console tab-completion.
+  </Card>
+  <Card title="Internal V2 Search Endpoint" icon="building">
+    `/search/query` — Used exclusively by NuGetGallery for OData hijack queries, V2 API search, and gallery UI search.
+  </Card>
+  <Card title="Health and Diagnostics" icon="heart-pulse">
+    `/` returns a simple success boolean; `/search/diag` returns detailed diagnostic JSON for monitoring.
+  </Card>
+</CardGroup>
+
+## Role in the NuGetGallery Ecosystem
+
+```text
+NuGet Clients / Gallery UI
+        │
+        ▼
+NuGet.Services.SearchService.Core   ←── this project
+        │
+        ├── /query, /autocomplete  ──→  Azure AI Search (search index)
+        └── /search/query          ──→  Azure AI Search (search index OR hijack index)
+                                           + Azure Blob Storage (auxiliary files)
+```
+
+The service **never writes** to Azure Search. Population of the search and hijack indexes is handled by separate jobs (`Db2AzureSearch`, `Catalog2AzureSearch`, `Auxiliary2AzureSearch`). This project only reads.
+
+NuGetGallery calls `/search/query` when it "hijacks" OData queries instead of going to SQL — covering V2 package search, `FindPackagesById`, single-version metadata lookups, and the gallery UI search page.
+
+## Key Files and Classes
+
+| File | Class | Purpose |
+|------|-------|---------|
+| `Program.cs` | `Program` | Entry point; delegates host construction to `HostBuilderHelper` from the shared web library. |
+| `Startup.cs` | `Startup` | Registers all DI services, configures Autofac, sets up CORS (GET/HEAD/OPTIONS, any origin), HSTS, and Application Insights. |
+| `Controllers/SearchController.cs` | `SearchController` | Single API controller exposing all five endpoints: `/`, `/search/diag`, `/search/query`, `/query`, `/autocomplete`. |
+| `Support/AuxiliaryFileReloaderBackgroundService.cs` | `AuxiliaryFileReloaderBackgroundService` | `BackgroundService` that continuously reloads auxiliary files (downloads, verified packages) from Blob Storage via `IAuxiliaryFileReloader`. |
+| `Support/FeatureFlagBackgroundService.cs` | `FeatureFlagBackgroundService` | `BackgroundService` that continuously polls and caches feature flags via `IFeatureFlagCacheService`. |
+| `Support/SecretRefresherBackgroundService.cs` | `SecretRefresherBackgroundService` | `BackgroundService` that periodically refreshes Azure Key Vault secrets into the running configuration via `ISecretRefresher`. |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `Microsoft.PackageManagement.Search.Web` | Shared ASP.NET Core infrastructure: `HostBuilderHelper`, `StartupHelper`, `ApiExceptionFilterAttribute`, CORS/HSTS helpers, Autofac host factory. |
+| `NuGet.Services.AzureSearch` | Core search logic, Azure Search client wrappers, `ISearchService`, `ISearchStatusService`, `IAuxiliaryDataCache`, `IAuxiliaryFileReloader`, `ISecretRefresher`, all request/response models. |
+
+### NuGet Package References (via `Microsoft.PackageManagement.Search.Web`)
+
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.ApplicationInsights.AspNetCore` | Telemetry; adaptive sampling disabled; custom `KnownOperationNameEnricher` tags known operation names. |
+| `Microsoft.AspNetCore.Http` | Lifted transitive dependency for Azure DevOps Component Governance compliance. |
+| `System.Drawing.Common` | Lifted transitive dependency for Component Governance compliance. |
+| `Autofac` / `Autofac.Extensions.DependencyInjection` | DI container; Autofac modules registered via `builder.RegisterAssemblyModules(...)`. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Single controller, all endpoints.** Every public HTTP endpoint lives on `SearchController`. Before any search action executes, `EnsureInitializedAsync()` blocks until auxiliary file data (download counts, verified package flags) has been loaded at least once from Blob Storage.
+</Note>
+
+<Note>
+**`ignoreFilter` toggles between two Azure Search indexes.** When `ignoreFilter=false` (the default), the *search index* is queried — containing only the latest, listed packages. When `ignoreFilter=true`, the *hijack index* is queried — containing all versions including unlisted ones. This single parameter switch makes the same endpoint serve both package discovery and package restore scenarios.
+</Note>
+
+<Note>
+**Autocomplete dual-mode dispatch.** The `/autocomplete` endpoint infers its mode from which query parameter is present: if `q` is set (or neither parameter is set), it returns matching package IDs; if only `id` is set, it returns all versions for that package ID. This branching is handled directly in the controller action with a single ternary expression.
+</Note>
+
+<Warning>
+**`/search/query` is an unstable internal contract.** The response uses PascalCase field names and includes extra fields (`Owners`, `Listed`, `FlattenedDependencies`, `Frameworks`, `Tfms`, `ComputedFrameworks`, `ComputedTfms`, `Hash`, `PackageFileSize`, etc.) that are absent from the V3 `/query` response. External clients must not depend on this endpoint — use `/query` discovered via the V3 service index instead.
+</Warning>
+
+<Warning>
+**Test data filtering has edge cases.** Optimized document-lookup queries (e.g., `packageid:BaseTestPackage`) bypass the `testData=false` filter entirely. Owner-based filtering is also impossible when querying the hijack index because the owners field is not populated in that index.
+</Warning>
+
+<Tip>
+**`debug=true` is available on all search and autocomplete endpoints.** Appending `debug=true` to any request includes the raw Azure Search document and internal diagnostic fields in the response — useful for live-site investigations without needing direct Azure portal access.
+</Tip>
+
+<Tip>
+**Configuration is read only from `APPSETTING_`-prefixed environment variables in Azure App Services.** `HostBuilderHelper` strips all default environment variable configuration sources and replaces them with a single source scoped to the `APPSETTING_` prefix, preventing accidental leakage of unrelated process environment variables into the application configuration.
+</Tip>
+
+### Background Services
+
+Three `BackgroundService` implementations keep runtime state fresh without requiring restarts:
+
+| Service | What It Refreshes | Observable Via |
+|---------|-------------------|----------------|
+| `AuxiliaryFileReloaderBackgroundService` | Download counts, verified-packages list, popularity-transfers from Azure Blob Storage | `/search/diag` → `AuxiliaryFiles.Loaded` |
+| `FeatureFlagBackgroundService` | Feature flag cache from Azure Table Storage | Internal flag checks at request time |
+| `SecretRefresherBackgroundService` | Key Vault secrets rotated into live `IConfiguration` | `/search/diag` → `Server.LastServiceRefreshTime` |
+
+### Supported `sortBy` Values for `/search/query`
+
+| Value | Behavior |
+|-------|----------|
+| `relevance` | Default; Azure Search relevance scoring |
+| `lastEdited` | Descending by last-edit timestamp |
+| `published` | Descending by published timestamp |
+| `created-asc` / `created-desc` | Ascending or descending by creation timestamp |
+| `title-asc` / `title-desc` | Case-insensitive lexicographic by title (falls back to package ID if no title) |
+| `totalDownloads-asc` / `totalDownloads-desc` | Ascending or descending by total download count |

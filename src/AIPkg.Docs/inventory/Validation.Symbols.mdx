@@ -1,0 +1,169 @@
+---
+title: "Validation.Symbols"
+sidebarTitle: "Validation.Symbols"
+description: "Azure WebJob that validates symbol packages (.snupkg) by verifying portable PDB integrity, checksum matching, and PE file correspondence before ingestion into NuGet.org."
+icon: "shield-check"
+---
+
+<Warning>
+  This project handles **symbol packages (.snupkg)**, a NuGet-specific concept
+  that has **no equivalent in AIpkg**. It should not be ported to the AIpkg
+  platform and is documented here for NuGetGallery inventory completeness only.
+</Warning>
+
+## Overview
+
+`Validation.Symbols` is a background job (console executable) that runs as part
+of the NuGet.org package validation pipeline. When a publisher uploads a symbol
+package (`.snupkg`) alongside a regular NuGet package (`.nupkg`), this job is
+triggered via an Azure Service Bus message to verify that the symbols are valid
+before they are made publicly available for debugger consumption.
+
+The job performs three layers of verification:
+
+1. **ZIP safety check** — ensures the `.snupkg` archive does not contain path
+   traversal entries that could escape the extraction directory.
+2. **Structural match** — confirms every `.pdb` file in the snupkg has a
+   corresponding `.dll` or `.exe` in the nupkg (no orphan symbol files).
+3. **Portable PDB + checksum validation** — reads PE debug directory entries,
+   verifies the PDB is in Portable PDB format (magic bytes `BSJB`), and
+   cryptographically confirms the PDB checksum matches the embedded checksum
+   record in the PE file.
+
+---
+
+## Role in the NuGetGallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="Validation Orchestrator" icon="arrow-right-arrow-left">
+    Receives `SymbolsValidatorMessage` from the orchestrator via Azure Service
+    Bus. Reports back `Succeeded` or `Failed` with structured issue codes.
+  </Card>
+  <Card title="Azure Blob Storage" icon="database">
+    Downloads both the `.snupkg` (from a URI) and the corresponding `.nupkg`
+    (from the packages or validation container) to perform cross-file checks.
+  </Card>
+  <Card title="Validator State DB" icon="table">
+    Writes final validation status to the `ValidatorStatuses` table via
+    `IValidatorStateService`, keyed by `ValidatorName.SymbolsValidator`.
+  </Card>
+  <Card title="Feature Flags" icon="toggle-right">
+    Conditionally sends a queue-back message to the orchestrator after saving
+    status, controlled by `IFeatureFlagService.IsQueueBackEnabled()`.
+  </Card>
+</CardGroup>
+
+<Note>
+  This job is registered as `ValidatorName.SymbolsValidator` in the validation
+  orchestrator. The orchestrator manages retry logic and overall package
+  publication gating — this job only performs the symbol-specific checks.
+</Note>
+
+---
+
+## Key Files and Classes
+
+| File | Class / Interface | Purpose |
+|------|-------------------|---------|
+| `Program.cs` | `Program` | Entry point; calls `JobRunner.RunOnce(new Job(), args)` |
+| `Job.cs` | `Job : SubscriptionProcessorJob<SymbolsValidatorMessage>` | DI wiring — registers all services, configures two `CloudBlobCoreFileStorageService` instances (packages + validation containers), and registers `ValidatorStateService` with the `SymbolsValidator` name |
+| `SymbolsValidatorMessageHandler.cs` | `SymbolsValidatorMessageHandler` | Service Bus message handler; checks idempotency via `IValidatorStateService`, delegates to `ISymbolsValidatorService`, persists result, and optionally sends queue-back |
+| `SymbolsValidatorService.cs` | `SymbolsValidatorService` | Core validation logic: ZIP safety, structural PE/PDB matching, portable PDB format check, and SHA checksum verification using `System.Reflection.Metadata` |
+| `SymbolsFileService.cs` | `SymbolsFileService` | Downloads snupkg by URI and nupkg from blob storage (falls back from packages container to validation container) |
+| `SymbolsValidatorConfiguration.cs` | `SymbolsValidatorConfiguration` | POCO config bound from `SymbolsConfiguration` section; holds three Azure Storage connection strings |
+| `TelemetryService.cs` | `TelemetryService` | Application Insights telemetry; emits per-assembly and per-package validation results, duration, and working directory cleanup failures |
+| `ITelemetryService.cs` | `ITelemetryService` | Interface extending `ISubscriptionProcessorTelemetryService` with symbol-specific tracking methods |
+| `ISymbolsFileService.cs` | `ISymbolsFileService` | Abstracts `DownloadSnupkgFileAsync` (by URI) and `DownloadNupkgFileAsync` (by id + version) |
+| `ISymbolsValidatorService.cs` | `ISymbolsValidatorService` | Single method: `ValidateSymbolsAsync(SymbolsValidatorMessage, CancellationToken)` |
+
+---
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `System.Reflection.Metadata` | Reads PE debug directory, portable PDB metadata, and `PdbChecksum` entries for cryptographic matching |
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `NuGet.Services.Validation.Orchestrator` | Provides `SubscriptionProcessorJob<T>`, `IValidatorStateService`, `ValidatorStateService`, `IFeatureFlagService`, `IPackageValidationEnqueuer`, `ValidatorName`, `IZipArchiveService`, and validation response types |
+| `Validation.Symbols.Core` | Provides `SymbolsValidatorMessage`, `SymbolsValidatorMessageSerializer`, `IZipArchiveService`, `ZipArchiveService`, `Settings` (working directory), and ingester message types |
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+  **Dual-container fallback for nupkg downloads.** `SymbolsFileService` first
+  checks the main packages blob container, then falls back to the validation
+  container. This handles the case where a symbol package is uploaded alongside
+  a nupkg that is still awaiting final publication (sitting in the validation
+  container rather than the live packages container).
+</Note>
+
+<Note>
+  **Checksum algorithm is multi-hash tolerant.** A PE file may embed multiple
+  `PdbChecksum` debug directory entries using different hash algorithms
+  (e.g., SHA-256, SHA-384). The validator computes the PDB hash for each
+  algorithm found and accepts a match from any one of them, following the
+  [Portable PDB checksum spec](https://github.com/dotnet/corefx/blob/master/src/System.Reflection.Metadata/specs/PE-COFF.md#portable-pdb-checksum).
+  The 20-byte PDB ID region is zeroed before hashing, as required by the spec.
+</Note>
+
+<Warning>
+  **Embedded PDBs are intentionally skipped.** When
+  `PEReader.TryOpenAssociatedPortablePdb` returns `pdbPath == null`, the PDB is
+  embedded directly in the PE. The validator treats this as no external PDB to
+  verify and moves on. Only external `.pdb` files are validated against
+  checksums.
+</Warning>
+
+<Warning>
+  **Working directory cleanup uses a retry loop, not a finalizer.** After
+  extracting files to a temp directory for validation, `SymbolsValidatorService`
+  retries `Directory.Delete` in a loop with 1-second sleeps for up to 20
+  seconds. If the directory still exists after the timeout, a telemetry event is
+  emitted and the directory is left on disk. This is a known operational quirk
+  that can accumulate stale temp directories on the job host if antivirus or
+  file handles interfere.
+</Warning>
+
+<Note>
+  **DB save has a fixed 5-retry loop without exponential backoff.**
+  `SymbolsValidatorMessageHandler.SaveStatusAsync` retries up to 4 times
+  (the loop condition is `++currentRetry < maxRetries` where `MaxDBSaveRetry = 5`,
+  so the effective max is 4 attempts). If all retries fail, the message is
+  requeued, which means the validation will re-run. The service is therefore
+  idempotent by design — duplicate messages with a terminal state are detected
+  and dropped immediately.
+</Note>
+
+---
+
+## Validation Failure Codes
+
+| Issue Code | Meaning |
+|------------|---------|
+| `SymbolErrorCode_SnupkgContainsEntriesNotSafeForExtraction` | ZIP path traversal detected |
+| `SymbolErrorCode_SnupkgDoesNotContainSymbols` | No `.pdb` files found in snupkg |
+| `SymbolErrorCode_MatchingAssemblyNotFound` | One or more `.pdb` files have no corresponding `.dll`/`.exe` |
+| `SymbolErrorCode_PdbIsNotPortable` | PDB magic bytes are not `BSJB` (not a Portable PDB) |
+| `SymbolErrorCode_ChecksumDoesNotMatch` | PDB hash does not match any `PdbChecksum` entry in the PE |
+| `Unknown` | `BadImageFormatException` thrown when opening associated PDB |
+
+---
+
+## AIpkg Applicability
+
+<Warning>
+  **This entire project is out of scope for AIpkg.** AIpkg packages (`.aipkg`)
+  do not include native assemblies, PDB files, or debug symbols. The concepts of
+  snupkg, portable PDB validation, and PE checksum matching are specific to the
+  .NET binary package ecosystem and should be deleted when forking NuGetGallery
+  for AIpkg. See also: [Server Infrastructure spec](../specs/04-server-infrastructure)
+  which explicitly lists symbol package handling as a deletion target.
+</Warning>

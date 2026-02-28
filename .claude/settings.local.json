@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs:*)",
+      "Bash(cd \"D:/GitHub/NuGetGallery/src/AIPkg.Docs\" && mint dev 2>&1)",
+      "Bash(ls:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.github.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:deepwiki.com)",
+      "WebFetch(domain:smartscope.blog)",
+      "WebFetch(domain:undercodenews.com)"
+    ]
+  }
+}

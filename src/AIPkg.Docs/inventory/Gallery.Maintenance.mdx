@@ -1,0 +1,122 @@
+---
+title: Gallery.Maintenance
+sidebarTitle: Gallery.Maintenance
+description: Scheduled background job that runs a collection of maintenance tasks against the NuGet Gallery SQL database, currently focused on deleting expired API key credentials and their associated scopes.
+icon: wrench
+---
+
+## Overview
+
+`Gallery.Maintenance` is a console executable background job that performs periodic housekeeping operations directly against the NuGet Gallery SQL database. It follows the standard NuGet Jobs pattern, extending `JsonConfigurationJob` from `NuGet.Jobs.Common` and driven by `JobRunner`, which handles the run loop, Application Insights telemetry, sleep intervals, and optional continuous-run vs. run-once behavior.
+
+The job's architecture is built around an extensible `MaintenanceTask` abstract base class. On each run, `Job` uses reflection to discover every concrete, non-abstract subclass of `MaintenanceTask` in its own assembly, instantiates each one with a typed `ILogger<T>`, and executes them sequentially. If any task throws, its failure is recorded and the job continues running the remaining tasks, then throws a summary exception at the end to signal an unhealthy exit to the job runner. This means a single broken task does not prevent other maintenance work from completing.
+
+Currently the only implemented task is `DeleteExpiredApiKeysTask`, which queries the `Credentials` and `Scopes` tables for `apikey.verify.*` and `apikey.v5` credential types whose `Expires` timestamp is in the past, logs each found record, then deletes the matching rows from both tables within a SQL transaction.
+
+## Role in System
+
+```
+[JobRunner / NSSM Windows Service]
+         |
+         v
+    Gallery.Maintenance (Job)
+         |
+         | reflection-based discovery
+         v
+  [ MaintenanceTask subclasses ]
+         |
+         v
+  DeleteExpiredApiKeysTask
+         |
+         | System.Data.SqlClient (GalleryDbConfiguration)
+         v
+  [Gallery SQL Database]
+  Credentials + Scopes tables
+```
+
+<CardGroup cols={2}>
+  <Card title="Task Discovery via Reflection" icon="scan">
+    `Job.GetMaintenanceTasks()` scans its own assembly at runtime for all concrete `MaintenanceTask` subclasses. Adding a new maintenance operation only requires creating a new class — no registration step needed.
+  </Card>
+  <Card title="Fault-Tolerant Orchestration" icon="shield">
+    Individual task failures are caught, logged, and deferred. All tasks run on every iteration; a summary exception is raised afterwards only if at least one task failed.
+  </Card>
+  <Card title="Transactional Credential Cleanup" icon="trash-2">
+    `DeleteExpiredApiKeysTask` deletes expired credentials and their associated scopes atomically within a SQL transaction, with up to 3 retries on the SELECT and a 5-minute command timeout.
+  </Card>
+  <Card title="Windows Service Deployment" icon="server">
+    Packaged as a NuGet package with PowerShell pre/post deploy scripts that use NSSM to register, configure automatic restart, and start/stop the job as a Windows service.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; instantiates `Job` and passes it to `JobRunner.Run()`. |
+| `Job.cs` | `Job : JsonConfigurationJob` | Orchestrates the run: discovers all `MaintenanceTask` subclasses via reflection, runs each, and throws a summary exception if any failed. Also provides `CreateTypedLogger(Type)` to construct a correctly-typed `ILogger<T>` for each task. |
+| `MaintenanceTask.cs` | `MaintenanceTask` (abstract) | Base class for all maintenance operations. Requires a constructor accepting `ILogger<MaintenanceTask>` and an abstract `RunAsync(Job)` method. |
+| `DeleteExpiredApiKeysTask.cs` | `DeleteExpiredApiKeysTask : MaintenanceTask` | The sole current task. SELECTs expired `apikey.verify.*` and `apikey.v5` credentials, logs each, then DELETEs matching rows from `Credentials` and `Scopes` inside a transaction. |
+| `Models/ApiKey.cs` | `ApiKey` | DTO populated from the SELECT query; holds `CredentialKey`, `CredentialType`, `UserKey`, `Username`, `Expires`, and `ScopeSubject`. |
+| `LogEvents.cs` | `LogEvents` | Defines two structured log event IDs: `JobRunFailed` (650) and `JobInitFailed` (651). |
+| `Scripts/Functions.ps1` | — | PowerShell helpers `Install-NuGetService` and `Uninstall-NuGetService` wrapping NSSM and `sc.exe`. |
+| `Scripts/PreDeploy.ps1` | — | Reads `Jobs.ServiceNames` from Octopus Deploy parameters and calls `Uninstall-NuGetService` for each service before deployment. |
+| `Scripts/PostDeploy.ps1` | — | Reads `Jobs.ServiceNames` from Octopus Deploy parameters and calls `Install-NuGetService` for each service after deployment. |
+| `Scripts/nssm.exe` | — | Bundled Non-Sucking Service Manager binary used to register the job executable as a Windows service. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `System.Data.SqlClient` | SQL connections to the Gallery database (via `NuGet.Jobs.Common`). |
+| `Dapper.StrongName` | `QueryWithRetryAsync` extension used for the expired-credentials SELECT. |
+| `Autofac.Extensions.DependencyInjection` | DI container wiring inherited from `JsonConfigurationJob`. |
+| `Microsoft.Extensions.Logging` | `ILogger<T>` typed loggers for tasks and the job itself. |
+| `Microsoft.Extensions.DependencyInjection` | `IServiceCollection` configuration hooks. |
+| `Microsoft.Extensions.Configuration` | JSON configuration file loading with optional KeyVault secret injection. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Jobs.Common` | Provides `JsonConfigurationJob`, `JobRunner`, `GalleryDbConfiguration`, `OpenSqlConnectionAsync<T>`, `QueryWithRetryAsync`, and the full DI/telemetry bootstrap. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+New maintenance tasks are added by creating a new `MaintenanceTask` subclass with a constructor that accepts `ILogger<TTask>`. No manual registration is required — `Job.GetMaintenanceTasks()` discovers subclasses automatically using `Assembly.GetTypes()`. The constructor signature requirement is enforced at runtime via reflection; a missing or mismatched constructor will throw a `NullReferenceException` when the task is being instantiated.
+</Note>
+
+<Warning>
+`DeleteExpiredApiKeysTask` builds its DELETE query by formatting parameterized placeholder names into a string with `string.Format`. This pattern triggers CA2100 ("Review SQL queries for security vulnerabilities") and is suppressed with a `#pragma warning disable` comment. The values are passed as `SqlParameter` objects with explicit `SqlDbType.Int` typing, so there is no actual injection risk, but the suppression is worth noting for future reviewers.
+</Warning>
+
+<Warning>
+The row-count after the DELETE is validated against `expectedRowCount = expiredApiKeys.Count() * 2` (one credential row plus one scope row per key). If the actual deleted row count does not match, the task throws an exception. This assumes a strict 1:1 relationship between credentials and scopes for the targeted credential types, which must remain true for the task to complete cleanly.
+</Warning>
+
+<Tip>
+The job targets `net472` and is deployed as a Windows service managed by NSSM. NSSM is bundled directly in the `Scripts/` folder and is included in the NuGet package output, so no separate NSSM installation is required on the target host. The service is configured for automatic restart with a 5-second delay (`sc.exe failure ... actions= restart/5000`).
+</Tip>
+
+### SQL Queries in DeleteExpiredApiKeysTask
+
+**SELECT** (with 3-retry wrapper, 5-minute timeout):
+
+```sql
+SELECT s.[CredentialKey], c.[Type] as CredentialType, c.[UserKey], u.[Username], c.[Expires], s.[Subject] as ScopeSubject
+FROM [dbo].[Credentials] c
+INNER JOIN [dbo].[Scopes] s ON s.[CredentialKey] = c.[Key]
+INNER JOIN [dbo].[Users] u ON u.[Key] = c.[UserKey]
+WHERE (c.[Type] LIKE 'apikey.verify%' OR c.[Type] = 'apikey.v5')
+  AND c.[Expires] < GETUTCDATE()
+```
+
+**DELETE** (inside a transaction, parameterized key list):
+
+```sql
+DELETE FROM [dbo].[Scopes] WHERE [CredentialKey] IN (@Key0, @Key1, ...)
+DELETE FROM [dbo].[Credentials] WHERE [Key] IN (@Key0, @Key1, ...)
+```

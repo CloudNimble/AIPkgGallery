@@ -1,0 +1,111 @@
+---
+title: GitHubVulnerabilities2Db
+sidebarTitle: GitHubVulnerabilities2Db
+description: Background job that ingests GitHub Advisory Database security vulnerabilities into the NuGetGallery SQL database via GraphQL polling.
+icon: shield-alert
+---
+
+## Overview
+
+`GitHubVulnerabilities2Db` is a long-running background job (console EXE) that continuously polls the GitHub Advisory Database via GitHub's v4 GraphQL API and writes any new or updated NuGet-ecosystem vulnerability advisories into the NuGetGallery SQL database.
+
+The job is cursor-driven: it stores a `DateTimeOffset` watermark in Azure Blob Storage so that each run only processes advisories that were published or updated since the last successful run. It loops until the collector reports no more pages of advisories to process, then exits.
+
+<Note>
+This job is the **authoritative source** for vulnerability data surfaced on nuget.org package pages. It does not perform search re-indexing — that responsibility is deliberately delegated to the V3 pipeline.
+</Note>
+
+## Role in the NuGetGallery Ecosystem
+
+```
+GitHub Advisory DB (GraphQL)
+        │
+        ▼
+  AdvisoryCollector          ← cursor-gated paging loop
+  AdvisoryQueryService       ← GraphQL HTTP calls
+  AdvisoryIngestor           ← maps advisory → PackageVulnerability
+        │
+        ▼
+  GalleryDbVulnerabilityWriter
+        │
+        ▼
+  PackageVulnerabilitiesManagementService  (NuGetGallery.Services)
+        │
+        ▼
+  GalleryDb (SQL)            ← PackageVulnerability rows
+```
+
+<CardGroup cols={2}>
+  <Card title="Data Source" icon="github">
+    GitHub Advisory Database polled via the v4 GraphQL API.
+  </Card>
+  <Card title="Data Sink" icon="database">
+    NuGetGallery SQL database — `PackageVulnerabilities` and related tables.
+  </Card>
+  <Card title="Cursor Storage" icon="cloud">
+    Azure Blob Storage — a `cursor.json` blob tracks the last-processed timestamp.
+  </Card>
+  <Card title="Deployment" icon="server">
+    Packaged as a NuGet `.nuspec` and installed as a Windows service via NSSM.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Program.cs` | `Program` | Entry point; creates `Job` and delegates to `JobRunner.Run()` |
+| `Job.cs` | `Job` | Main job class; owns DI wiring for all services and runs the collector loop |
+| `Configuration/GitHubVulnerabilities2DbConfiguration.cs` | `GitHubVulnerabilities2DbConfiguration` | Extends `GraphQLQueryConfiguration`; adds blob cursor settings |
+| `Gallery/GalleryDbVulnerabilityWriter.cs` | `GalleryDbVulnerabilityWriter` | Writes `PackageVulnerability` entities to the Gallery DB |
+| `Gallery/ThrowingAuditingService.cs` | `ThrowingAuditingService` | Stub — throws `NotImplementedException`; auditing is intentionally disabled |
+| `Gallery/ThrowingTelemetryService.cs` | `ThrowingTelemetryService` | Stub — throws on all methods; telemetry is not emitted from this job |
+| `Gallery/ThrowingIndexingService.cs` | `ThrowingIndexingService` | Stub — no-ops `UpdatePackage()`, throws everything else |
+| `Gallery/ThrowingSecurityPolicyService.cs` | `ThrowingSecurityPolicyService` | Stub — throws on all methods |
+| `Fakes/FakeFeatureFlagService.cs` | `FakeFeatureFlagService` | Stub — throws on all feature flag checks |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `NuGet.Jobs.Common` | Base `JsonConfigurationJob`, `JobRunner`, SQL connection helpers |
+| `NuGet.Services.Cursor` | `DurableCursor` / `ReadWriteCursor<DateTimeOffset>` — blob-backed watermark |
+| `NuGet.Services.GitHub` | GraphQL querying, ingestion, and the `IAdvisoryCollector` / `IVulnerabilityWriter` abstractions |
+| `NuGetGallery.Services` | `PackageVulnerabilitiesManagementService`, `EntitiesContext`, and all Gallery service interfaces |
+
+### NuGet / Framework Dependencies
+
+| Package | Notes |
+|---------|-------|
+| `net472` | Full .NET Framework (not .NET Core) |
+| `Autofac` | DI container |
+| `Azure.Identity` | `ManagedIdentityCredential` for blob storage auth |
+| `Azure.Storage.Blobs` | Backing store for `DurableCursor` |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Cursor-driven incremental processing.** `Job.Run()` calls `collector.ProcessAsync()` in a `while` loop until it returns `false`. Each iteration advances the `DurableCursor` blob in Azure Storage, so the job is safe to stop and restart at any time without reprocessing old advisories.
+</Note>
+
+<Note>
+**Managed Identity authentication for blob storage.** The `BlobServiceClientFactory` is constructed with a `ManagedIdentityCredential` keyed by `UserManagedIdentityClientId` from configuration — no connection-string secrets are required in production.
+</Note>
+
+<Warning>
+**Stub services throw by design.** `ThrowingAuditingService`, `ThrowingTelemetryService`, and `ThrowingSecurityPolicyService` all implement Gallery interfaces but throw `NotImplementedException` on every method. If any of those paths are ever reached, the job will fail loudly rather than silently no-oping.
+</Warning>
+
+<Warning>
+**`ThrowingIndexingService.UpdatePackage` is intentionally a no-op (not a throw).** `PackageUpdateService` calls `UpdatePackage` as part of its normal flow. Throwing there would break every vulnerability write. The search index is kept consistent by the V3 pipeline instead.
+</Warning>
+
+<Tip>
+**`HttpClient` lifetime management.** The `HttpClient` is created as a field on `Job` and registered with Autofac as `ExternallyOwned()`. This prevents Autofac from disposing it prematurely — a fix for a specific production issue tracked in NuGetGallery#9194.
+</Tip>
+
+<Note>
+**Windows service packaging via NSSM.** The `.nuspec` bundles the compiled binaries alongside `nssm.exe` and PowerShell scripts. The pre/post deploy scripts use NSSM to uninstall the old service instance and install the new one, configured for automatic restart on failure.
+</Note>

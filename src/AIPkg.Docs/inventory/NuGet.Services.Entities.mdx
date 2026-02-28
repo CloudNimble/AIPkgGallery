@@ -1,0 +1,124 @@
+---
+title: NuGet.Services.Entities
+sidebarTitle: Services.Entities
+description: Shared domain model library defining all Entity Framework entity classes, interfaces, enums, and extension methods that represent NuGet Gallery's SQL Server data schema.
+icon: layers
+---
+
+## Overview
+
+`NuGet.Services.Entities` is the foundational domain model library for NuGet Gallery. It contains every Entity Framework entity class, supporting enum, base interface, and entity-level extension method that maps directly to the SQL Server database schema used by the Gallery and its related services. No application logic or data access code lives here — only the plain object graph that EF6 works with.
+
+The two primary entity hierarchies are the **package model** and the **account model**. The package model centers on `PackageRegistration` (the stable identity record keyed by package ID) and `Package` (individual version records). The account model centers on `User`, with `Organization` extending `User` via Table-Per-Type (TPT) inheritance. All entities implement the marker interface `IEntity`, which enforces a single integer primary key convention (`Key`) across the entire schema.
+
+The library targets both `net472` and `netstandard2.1`, allowing it to be consumed by the ASP.NET Framework Gallery web application as well as .NET Standard-compatible background jobs. It ships as an internal NuGet package versioned with the common `GalleryPackageVersion` build property and has no internal project-to-project references — it is a leaf-level dependency that other projects reference but does not reference any of them.
+
+## Role in System
+
+```
+NuGet.Services.Entities  (this library — leaf, no project refs)
+        │
+        ├──► NuGetGallery.Core        ← EF DbContext, repositories, service interfaces
+        │         │
+        │         └──► NuGetGallery   ← ASP.NET MVC web application (nuget.org)
+        │
+        └──► (other background jobs / services consuming the entity model)
+```
+
+<CardGroup cols={2}>
+  <Card title="Package Domain" icon="box">
+    `PackageRegistration` anchors a package ID and its owners. Each `Package` record represents one version, carrying metadata fields, status flags, signing info, deprecation links, vulnerability ranges, and symbol package associations.
+  </Card>
+  <Card title="Account Domain" icon="user">
+    `User` is the base account type. `Organization` extends it via TPT inheritance and adds member/admin tracking through the `Membership` join entity. Credentials, security policies, certificates, and federated credential policies all hang off `User`.
+  </Card>
+  <Card title="Security Model" icon="shield">
+    `Credential` covers API keys, username/password, and external (MSA / Entra ID) credentials. `Scope` restricts a credential to specific package IDs and allowed actions. `FederatedCredentialPolicy` enables keyless publishing via OIDC tokens from Entra ID service principals or GitHub Actions workflows.
+  </Card>
+  <Card title="Namespace Reservation" icon="tag">
+    `ReservedNamespace` records prefix or exact-match reservations that grant the `IsVerified` badge on matching `PackageRegistration` entries, preventing squatting on well-known package ID patterns.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `IEntity.cs` | `IEntity` | Marker interface requiring `int Key { get; set; }` on all entity types. |
+| `IPackageEntity.cs` | `IPackageEntity` | Extends `IEntity` with `Id` and `Version` string properties; shared by `Package` and `SymbolPackage` to enable generic DI patterns. |
+| `Package.cs` | `Package` | Core version record. Holds metadata fields (title, description, tags, URLs), computed flags (`IsLatest`, `IsLatestStable`, `IsLatestSemVer2`), hash/signing info, status, embedded license/readme type, deprecation links, and vulnerability ranges. |
+| `PackageRegistration.cs` | `PackageRegistration` | Per-ID registration grouping all versions, owners, required signers, reserved namespace associations, rename records, and sponsorship URLs. |
+| `SymbolPackage.cs` | `SymbolPackage` | Symbol (`.snupkg`) record linked to a `Package`. Implements `IPackageEntity` and `IEquatable<SymbolPackage>`; tracks status, hash, file size, and an optimistic concurrency `RowVersion`. |
+| `User.cs` | `User` | Account base class. Carries credentials, security policies, certificates, organization memberships, roles, email confirmation state, login failure tracking, and MFA flag. Implements `IEquatable<User>` by `Key`. |
+| `Organization.cs` | `Organization` | TPT child of `User`. Adds `Members` (collection of `Membership`) and per-request lazy-computed `Administrators` / `Collaborators` projections. |
+| `Membership.cs` | `Membership` | Join entity linking a `User` (member) to an `Organization`, with an `IsAdmin` flag distinguishing administrators from collaborators. |
+| `Credential.cs` | `Credential` | Polymorphic credential supporting API keys, passwords, and external logins. Tracks type, value, tenant ID, expiry, last-used timestamp, revocation source, and a `FederatedCredentialPolicy` link. |
+| `Scope.cs` | `Scope` | Fine-grained permission record on a `Credential`. Stores owner key (user or org), a package glob `Subject`, and an `AllowedAction`. Serialized as compact JSON (`o`, `s`, `a`). |
+| `FederatedCredentialPolicy.cs` | `FederatedCredentialPolicy` | Defines which external OIDC tokens may act on behalf of a user. Stores a `Type` enum, a JSON `Criteria` blob, and links to the creating user and the target package-owner user. |
+| `FederatedCredential.cs` | `FederatedCredential` | Audit record of a federated token that was accepted by a `FederatedCredentialPolicy`. Stores the token's unique `Identity` (e.g., `jti`/`uti` claim) to prevent replay. |
+| `Certificate.cs` | `Certificate` | X.509 certificate record identified by SHA-256 thumbprint. Linked to users via the `UserCertificate` join entity and to signed packages via `Package.Certificate`. |
+| `ReservedNamespace.cs` | `ReservedNamespace` | Namespace reservation with a value, a prefix flag, a shared-namespace flag, and many-to-many links to both `PackageRegistration` and `User`. |
+| `PackageDeprecation.cs` | `PackageDeprecation` | Deprecation record for a specific `Package` version. Stores a `[Flags]` status, an optional alternate package or registration recommendation, the deprecating user, and a custom message. |
+| `PackageVulnerability.cs` | `PackageVulnerability` | Vulnerability record sourced from the GitHub Advisory Database. Holds the GitHub database key, advisory URL, severity, and a set of `VulnerablePackageVersionRange` entries. |
+| `VulnerablePackageVersionRange.cs` | `VulnerablePackageVersionRange` | Links a `PackageVulnerability` to a package ID and a NuGet version range string, plus the first patched version and the resolved set of affected `Package` rows. |
+| `PackageStatus.cs` | `PackageStatus` | Enum for package/symbol lifecycle: `Available`, `Deleted`, `Validating`, `FailedValidation`. |
+| `PackageDeprecationStatus.cs` | `PackageDeprecationStatus` | Flags enum for deprecation reasons: `Other`, `Legacy`, `CriticalBugs` (combinable). |
+| `UserStatus.cs` | `UserStatus` | Enum for account lock state: `Unlocked` (0) and `Locked` (2); value 1 is intentionally reserved for future use. |
+| `FederatedCredentialType.cs` | `FederatedCredentialType` | Enum distinguishing `EntraIdServicePrincipal` (1) and `GitHubActions` (2) OIDC credential types. |
+| `EmbeddedLicenseFileType.cs` | `EmbeddedLicenseFileType` | Enum for embedded license format: `Absent`, `PlainText`, `Markdown`. |
+| `EmbeddedReadmeFileType.cs` | `EmbeddedReadmeFileType` | Enum for embedded readme format: `Absent`, `Markdown`. |
+| `Constants.cs` | `Constants` | Static constants: `AdminRoleName` (`"Admins"`), `MaxPackageIdLength` (128), `MaxPackageVersionLength` (64). |
+| `EntityException.cs` | `EntityException` | Serializable exception type for entity-layer errors, with an optional `params object[]` format-string constructor. |
+| `Extensions/PackageExtensions.cs` | `PackageExtensions` | Extension methods on `Package` for retrieving the latest or latest-available `SymbolPackage` and checking symbol availability. |
+| `Extensions/PackageRegistrationExtensions.cs` | `PackageRegistrationExtensions` | Extension methods for certificate-based signing policy: `IsSigningAllowed`, `IsSigningRequired`, and `IsAcceptableSigningCertificate`. |
+| `Extensions/RoleExtensions.cs` | `RoleExtensions` | Single extension: `Role.Is(roleName)` — case-insensitive role name comparison. |
+| `Extensions/ExceptionExtensions.cs` | `ExceptionExtensions` | Extension on `DataException`: `IsSqlUniqueConstraintViolation()` walks the inner exception chain looking for SQL error numbers 547, 2601, or 2627. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Newtonsoft.Json` | Used by `Scope` for compact JSON serialization of credential scope fields (`JsonProperty`, `JsonIgnore`). |
+| `NuGet.Frameworks` | Provides NuGet framework parsing types; used by entity classes that track target framework monikers. |
+| `System.ComponentModel.Annotations` | Supplies `[Required]`, `[StringLength]`, `[Key]`, `[NotMapped]`, `[DatabaseGenerated]`, and `[DisplayColumn]` attributes that drive both EF schema generation and validation. |
+| `System.Data.SqlClient` | Lifted to a top-level reference to resolve a Component Governance alert; used by `ExceptionExtensions` to inspect `SqlException` error numbers. |
+
+### Internal Project References
+
+None. `NuGet.Services.Entities` has no internal project-to-project references and is a leaf dependency in the solution graph.
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**`IEntity` as the universal key contract.** Every entity in the library implements `IEntity` with a single `int Key { get; set; }`. This allows generic repository and service patterns in consuming projects (`NuGetGallery.Core`) to operate on any entity type without knowing its concrete class.
+</Note>
+
+<Note>
+**TPT inheritance for Organizations.** `Organization` extends `User` using Entity Framework's Table-Per-Type (TPT) pattern. The `Users` table holds all accounts; a separate `Organizations` table adds organization-specific columns. This design means any code that accepts a `User` can transparently handle both users and organizations, while organization-specific features (member lists, admin/collaborator projections) are only accessible on the `Organization` subtype.
+</Note>
+
+<Warning>
+**`Package.Authors` is write-only and obsolete.** The `Authors` collection on `Package` is marked `[Obsolete]` and kept only for backward compatibility during a migration period. Consuming code should use `Package.FlattenedAuthors` (a pre-computed comma-separated string) instead.
+</Warning>
+
+<Warning>
+**`Package.Id` can be null in LINQ-to-SQL queries.** The `Id` property on `Package` falls back to `PackageRegistration.Id` in memory but may be null when EF materializes partial projections. Code comments explicitly warn against using `Package.Id` in LINQ expressions; use `PackageRegistration.Id` for database-level comparisons.
+</Warning>
+
+<Note>
+**`HasReadMe` stores false as NULL.** The `HasReadMeInternal` column stores `null` for `false` to avoid updating existing rows when the feature was introduced. The public `HasReadMe` property normalizes `null` to `false` via the `NotMapped` wrapper.
+</Note>
+
+<Note>
+**`FederatedCredential.Identity` enforces replay prevention.** The `Identity` field stores the unique token identifier (`jti` or `uti` claim) from an OIDC token. A unique database constraint on this column prevents the same token from being accepted twice, even after the issuing `FederatedCredentialPolicy` is deleted (the foreign key to the policy is intentionally not a hard FK constraint).
+</Note>
+
+<Tip>
+**`PackageDeprecationStatus` is a `[Flags]` enum.** Deprecation reasons can be combined: a package can simultaneously be flagged as `Legacy | CriticalBugs`. Any non-zero value is a valid, meaningful deprecation; a `PackageDeprecation` row with status `NotDeprecated` (0) is explicitly disallowed by a `[Range(1, int.MaxValue)]` attribute on the `Status` property.
+</Tip>
+
+<Note>
+**`UserStatus` value 1 is intentionally unused.** The enum skips from `Unlocked = 0` to `Locked = 2`, mirroring the pattern in `PackageStatus` and reserving value 1 for a potential future `Deleted` status.
+</Note>

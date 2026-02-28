@@ -1,0 +1,158 @@
+---
+title: NuGet.Services.Validation.Orchestrator
+sidebarTitle: Validation Orchestrator
+description: Azure Service Bus-driven job that orchestrates the full validation lifecycle for NuGet packages (.nupkg) and symbol packages (.snupkg) before they become publicly available on nuget.org.
+icon: workflow
+---
+
+# NuGet.Services.Validation.Orchestrator
+
+## Overview
+
+The Validation Orchestrator is a .NET Framework 4.7.2 console executable that manages ("orchestrates") the end-to-end validation pipeline for packages submitted to nuget.org. It does not perform validation work itself — instead it acts as a state machine and dispatcher, coordinating a configurable graph of downstream *validator* jobs.
+
+When a package or symbol package is first published (or manually revalidated), its `PackageStatusKey` is set to `Validating`. The orchestrator's job is to ensure that status eventually transitions to either `Available` or `FailedValidation` by driving all configured validators to completion.
+
+<Note>
+The orchestrator runs as two separate deployment instances that share most of their code but have distinct Service Bus topics, validator sets, and configuration: one for `.nupkg` packages and one for `.snupkg` symbol packages.
+</Note>
+
+## Role in the NuGetGallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="Upstream: NuGetGallery" icon="upload">
+    NuGetGallery enqueues a `ProcessValidationSet` Service Bus message when a package is published or an admin requests revalidation. It also creates the initial validation set record in the Validation DB.
+  </Card>
+  <Card title="Downstream: Validators" icon="shield-check">
+    Each validator is a separate job (e.g., ProcessSignature, ValidateCertificate, ScanAndSign, SymbolsValidator) that the orchestrator starts and polls via its own Service Bus topic.
+  </Card>
+  <Card title="Downstream: Db2Catalog" icon="database">
+    When a package is marked `Available`, its `LastEdited` timestamp is updated, which triggers the Db2Catalog job to pick up the package and publish it into the V3 NuGet protocol feed.
+  </Card>
+  <Card title="Downstream: Email Job" icon="mail">
+    On terminal outcomes (success or failure), the orchestrator enqueues email notifications to package owners via a dedicated email Service Bus topic.
+  </Card>
+</CardGroup>
+
+## Orchestration Algorithm
+
+The core loop executed for each incoming Service Bus message:
+
+1. Look up (or create) a `PackageValidationSet` for the given tracking ID.
+2. For each **in-progress** (`Incomplete`) validation, call `GetResponseAsync` on its validator.
+   - If succeeded or failed, persist the new status and call `CleanUpAsync`.
+3. For each **not-started** validation whose prerequisites are met, call `StartAsync`.
+   - Repeat this loop if any start attempt returns `Succeeded` immediately (handles synchronous validators; capped at 20 iterations).
+4. Evaluate the outcome:
+   - Any required validation **failed** — mark package `FailedValidation`, send failure email.
+   - All required validations **succeeded** — mark package `Available`, send publish email.
+   - Still in progress — re-enqueue a `ProcessValidationSet` message with a delay (`ValidationMessageRecheckPeriod`).
+5. Validators can also send a `CheckValidator` "queue-back" message when they finish, so the orchestrator reacts immediately rather than waiting for the scheduled recheck.
+
+<Tip>
+Because the orchestrator is a Service Bus subscription listener with no singleton requirement, multiple instances can run in parallel safely. Optimistic concurrency on `PackageValidationSet` prevents double-processing terminal state changes.
+</Tip>
+
+## Service Bus Message Shapes
+
+```json
+// ProcessValidationSet — enqueued by NuGetGallery or by the orchestrator itself
+{
+  "PackageId": "NuGet.Versioning",
+  "PackageNormalizedVersion": "4.3.0",
+  "ValidationTrackingId": "14b4c1b8-40e2-4d60-9db7-4b7195e807f5",
+  "ValidatingType": 0,
+  "EntityKey": 123
+}
+
+// CheckValidator — enqueued by a validator as a queue-back optimization
+{
+  "ValidationId": "3fa83d31-3b44-4ffd-bfb8-02a9f5155af6"
+}
+```
+
+## Key Files and Classes
+
+| File Path | Class / Interface | Purpose |
+|-----------|-------------------|---------|
+| `Program.cs` | `Program` | Entry point; delegates to `JobRunner.RunOnce`. Returns non-zero exit code if configuration validation fails. |
+| `Job.cs` | `Job : JsonConfigurationJob` | Wires all DI registrations (MS.Extensions.DI + Autofac), reads config sections, selects Package vs. Symbol message handler based on `ValidatingType`. |
+| `OrchestrationRunner.cs` | `OrchestrationRunner` | Starts the Service Bus subscription processor, waits for `ProcessRecycleInterval`, then gracefully shuts down. Controls process lifetime. |
+| `PackageValidationMessageHandler.cs` | `PackageValidationMessageHandler` | Service Bus message handler for `.nupkg` validation. Thin subclass of `BaseValidationMessageHandler<Package>`. |
+| `SymbolValidationMessageHandler.cs` | `SymbolValidationMessageHandler` | Service Bus message handler for `.snupkg` validation. Thin subclass of `BaseValidationMessageHandler<SymbolPackage>`. |
+| `BaseValidationMessageHandler.cs` | `BaseValidationMessageHandler<T>` | Core message handling logic: entity lookup, lease acquisition, validation set retrieval, processor and outcome processor dispatch. |
+| `ValidationSetProcessor.cs` | `ValidationSetProcessor` | Iterates validations in a set; checks incomplete ones and starts eligible not-started ones, respecting the dependency graph. |
+| `ValidationOutcomeProcessor.cs` | `ValidationOutcomeProcessor<T>` | Decides terminal outcome (Available / FailedValidation), sends emails, re-enqueues for recheck, handles timeouts and "taking too long" notifications. |
+| `ValidationSetProvider.cs` | `ValidationSetProvider<T>` | Creates or retrieves a `PackageValidationSet` from the Validation DB; deduplicates new requests within a configurable window. |
+| `ValidatorProvider.cs` | `ValidatorProvider` | Resolves `INuGetValidator` / `INuGetProcessor` instances by name from the DI container. |
+| `PackageStatusProcessor.cs` | `PackageStatusProcessor` | Sets `PackageStatus` on the Gallery DB entity, copies validated blob to the public container, extracts license and readme files to Flat Container. |
+| `SymbolsStatusProcessor.cs` | `SymbolsStatusProcessor` | Symbol-package equivalent of `PackageStatusProcessor`. |
+| `ValidationStorageService.cs` | `ValidationStorageService` | CRUD operations against the Validation DB (`PackageValidationSet`, `PackageValidation`). Uses optimistic concurrency. |
+| `ValidationPackageFileService.cs` | `ValidationPackageFileService` | Reads/writes `.nupkg`/`.snupkg` blobs in validation storage; generates time-limited SAS URIs for validators. |
+| `ValidationFailureBehavior.cs` | `ValidationFailureBehavior` (enum) | `MustSucceed` — failure blocks the package. `AllowedToFail` — optional validator; package can still become Available. |
+| `Configuration/ValidationConfiguration.cs` | `ValidationConfiguration` | Top-level config: list of `ValidationConfigurationItem`, storage connection string, timeouts, deduplication window. |
+| `Configuration/ValidationConfigurationItem.cs` | `ValidationConfigurationItem` | Per-validator config: name, `RequiredValidations` dependency list, `ShouldStart`, `FailureBehavior`, `TrackAfter` timeout. |
+| `Configuration/TopologicalSort.cs` | `TopologicalSort` | Validates that the `RequiredValidations` graph is a DAG (no cycles) at startup via `ConfigurationValidator`. |
+| `Telemetry/ITelemetryService.cs` | `ITelemetryService` | Declares all Application Insights metrics: validator duration, set completion, timeouts, status transitions, issue counts. |
+| `PackageSigning/ProcessSignature/PackageSignatureProcessor.cs` | `PackageSignatureProcessor` | `INuGetProcessor` that applies or strips a repository signature on the package blob. |
+| `PackageSigning/ValidateCertificate/PackageCertificatesValidator.cs` | `PackageCertificatesValidator` | `INuGetValidator` that dispatches certificate chain validation to the ValidateCertificate job. |
+| `PackageSigning/ScanAndSign/ScanAndSignProcessor.cs` | `ScanAndSignProcessor` | `INuGetProcessor` for the closed-source malware-scan-and-sign step. |
+| `Symbols/SymbolsValidator.cs` | `SymbolsValidator` | `INuGetValidator` for symbol package content validation. |
+| `Symbols/SymbolsIngester.cs` | `SymbolsIngester` | `INuGetValidator` that triggers ingestion into the closed-source Microsoft symbol server. |
+| `Symbols/SymbolScanValidator.cs` | `SymbolScanValidator` | `INuGetValidator` for malware scanning of symbol packages (closed-source backing job). |
+
+## Dependencies
+
+### Internal Project References
+
+| Project | Role |
+|---------|------|
+| `Validation.Common.Job` | Base job infrastructure, `INuGetValidator`/`INuGetProcessor` contracts, `BaseValidationMessageHandler`, file services, lease service |
+| `Validation.PackageSigning.Core` | `SignatureValidationMessage`, `CertificateValidationMessage`, serializers, `ValidatorStateService` |
+| `Validation.ContentScan.Core` | Content-scan message types and configuration |
+| `Validation.ScanAndSign.Core` | `ScanAndSignMessage`, enqueuer, configuration |
+| `Validation.Symbols.Core` | `SymbolsValidatorMessage`, `SymbolsIngesterMessage`, serializers, `ISymbolsValidationEntitiesService` |
+
+### Key NuGet / Framework Dependencies
+
+| Package / Assembly | Purpose |
+|--------------------|---------|
+| `Autofac` | Secondary DI container; used for keyed registrations (multiple Service Bus topic clients, multiple `IValidatorStateService` instances per validator) |
+| `Microsoft.Extensions.DependencyInjection` | Primary DI container for transient/scoped service registration |
+| `NuGet.Services.ServiceBus` | `ISubscriptionClient`, `ITopicClient`, `SubscriptionProcessor<T>`, `TopicClientWrapper` |
+| `NuGet.Services.Validation` | `PackageValidationSet`, `PackageValidation`, `ValidationEntitiesContext`, entity status enums |
+| `NuGet.Services.Entities` | `Package`, `SymbolPackage`, and Gallery DB entity types |
+| `NuGet.Services.Messaging` | `IMessageService`, `AsynchronousEmailMessageService`, `IEmailMessageEnqueuer` |
+| `NuGet.Services.Logging` | Application Insights integration (`TelemetryClientWrapper`, `CommonTelemetryService`) |
+| `Azure.Storage.Blobs` | Blob storage client for validation storage and flat container |
+| `System.Configuration` | `App.config` support (net472 framework reference) |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Dual-mode deployment.** A single compiled binary serves as both the Package Orchestrator and the Symbols Orchestrator. The `OrchestrationRunnerConfiguration.ValidatingType` config value (`Package` or `SymbolPackage`) switches which message handler, validators, file metadata service, and status processor are registered — resolved entirely at DI composition time in `Job.ConfigureAutofacServices` and `Job.ConfigureJobServices`.
+</Note>
+
+<Note>
+**Validator dependency graph.** Each `ValidationConfigurationItem` carries a `RequiredValidations` list (validator names that must reach `Succeeded` before this validator starts). `ValidationSetProcessor.ArePrerequisitesMet` checks that all named prerequisites are satisfied. `TopologicalSort` verifies there are no cycles at startup via `ConfigurationValidator.Validate()`.
+</Note>
+
+<Warning>
+**Processors cannot run in parallel.** Validators that implement `INuGetProcessor` (e.g., `ScanAndSignProcessor`, `PackageSignatureProcessor`) modify the package blob. Running two processors concurrently could result in operating on divergent blob versions. The `RequiredValidations` dependency graph must be configured to enforce strictly sequential execution of all processors.
+</Warning>
+
+<Warning>
+**Several validators have closed-source backing jobs.** `ScanAndSignProcessor` (malware scanning + repository signing), `SymbolScanValidator` (symbol malware scan), and `SymbolsIngester` (Microsoft symbol server) integrate with internal Microsoft services not present in this repository. Only the orchestrator-side enqueuer stubs and state-tracking code are here.
+</Warning>
+
+<Note>
+**`AllowedToFail` validators.** A validator with `FailureBehavior = AllowedToFail` is optional — its failure does not block the package from becoming `Available`. However, if such a validator is still `Incomplete` when all required validators succeed, the orchestrator marks the package `Available` immediately and continues scheduling rechecks until the optional validator reaches a terminal state, then deletes the validation-storage blob.
+</Note>
+
+<Note>
+**Process recycling pattern.** `OrchestrationRunner` starts the subscription processor, sleeps for `ProcessRecycleInterval` (typically ~24 hours), then initiates a graceful shutdown and the executable exits. The host restarts it (managed by NSSM, per `Scripts/nssm.exe`). This bounds memory growth and ensures periodic config and certificate refresh without requiring a true long-running daemon.
+</Note>
+
+<Tip>
+**`CheckValidator` queue-back optimization.** Downstream validators enqueue a lightweight `CheckValidator` message (`SchemaName: PackageValidationCheckValidatorMessageData`) directly back to the orchestrator's own Service Bus topic when they complete. This lets the orchestrator react within seconds rather than waiting for the next scheduled `ProcessValidationSet` recheck cycle, which is controlled by `ValidationMessageRecheckPeriod`.
+</Tip>

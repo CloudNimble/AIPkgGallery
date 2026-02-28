@@ -1,0 +1,123 @@
+﻿---
+title: NuGetCDNRedirect
+sidebarTitle: NuGetCDNRedirect
+description: A minimal ASP.NET MVC 5 web application that performs IIS-level HTTP redirects for CDN traffic, routing all requests to a configured destination URL with a single health-check escape hatch.
+icon: arrow-right-left
+---
+
+## Overview
+
+NuGetCDNRedirect is a deliberately thin ASP.NET MVC 5 (.NET Framework 4.7.2) web application whose sole runtime job is to redirect every incoming HTTP request to a configured CDN or canonical URL. The redirect is implemented entirely inside IIS via the `<httpRedirect>` configuration element in `Web.config` — no application code is involved in the redirect path itself. The MVC layer exists only to serve a liveness/status endpoint that infrastructure health checks can reach without being redirected.
+
+The application was created in 2017 and has intentionally remained minimal. There is no data access, no authentication, no business logic, and no internal project references. It is deployed as a standalone Azure App Service (or IIS site).
+
+---
+
+## Role in the NuGetGallery Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="CDN Traffic Shaping" icon="arrow-right-left">
+    Sits in front of CDN origin URLs and performs HTTP 302 redirects (IIS `Found`) to route legacy or vanity hostnames to the canonical NuGet CDN endpoint.
+  </Card>
+  <Card title="Infrastructure Health Probe" icon="heart-pulse">
+    Exposes `GET /Status/Index` as an exempted path (redirect disabled for that route) so load balancers and Azure health checks can confirm the app is alive.
+  </Card>
+  <Card title="Telemetry Integration" icon="chart-line">
+    All unhandled exceptions are forwarded to Application Insights via a global MVC filter, giving operations teams visibility into any unexpected failures.
+  </Card>
+  <Card title="Security Hardening" icon="shield">
+    Enforces HTTPS-only cookies, removes the `X-Powered-By` header, and sets a one-year HSTS header (`max-age=31536000; includeSubDomains`) on every response.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Files and Classes
+
+| File Path | Class / Element | Purpose |
+|---|---|---|
+| `Global.asax.cs` | `MvcApplication` | Application entry point; registers areas, filters, and routes on startup. |
+| `App_Start/RouteConfig.cs` | `RouteConfig` | Registers the single default MVC route (`{controller}/{action}/{id}`) defaulting to `Status/Index`. |
+| `App_Start/FilterConfig.cs` | `FilterConfig` | Registers `AiHandleErrorAttribute` as a global MVC filter for exception telemetry. |
+| `Controllers/StatusController.cs` | `StatusController` | Single `GET /Status/Index` action that returns a plain "Ok" view; this route is exempt from the IIS redirect. |
+| `ErrorHandler/AiHandleErrorAttribute.cs` | `AiHandleErrorAttribute` | Extends `HandleErrorAttribute` to forward exceptions to Application Insights when custom errors are enabled. |
+| `Web.config` | `<httpRedirect>` | Core redirect logic: a wildcard IIS redirect rule sends all requests to a placeholder destination URL. |
+| `Views/Status/Index.cshtml` | — | Renders a single "Ok" string; consumed by health probes. |
+| `Views/Shared/Error.cshtml` | — | Bare-bones error page shown when an unhandled exception surfaces to the browser. |
+
+---
+
+## Dependencies
+
+### NuGet Packages
+
+| Package | Purpose |
+|---|---|
+| `Microsoft.ApplicationInsights.Web` | HTTP module and telemetry pipeline for request tracking and exception reporting. |
+| `Microsoft.AspNet.Mvc` | ASP.NET MVC 5 framework (controllers, filters, views, routing). |
+| `Microsoft.AspNet.Web.Optimization` | Bundling and minification infrastructure (included by template; not actively used). |
+| `Microsoft.CodeDom.Providers.DotNetCompilerPlatform` | Roslyn-based C# compiler for runtime Razor view compilation. |
+| `Newtonsoft.Json` | JSON serialization; pulled in as a transitive dependency by Application Insights. |
+
+### Internal Project References
+
+<Note>
+NuGetCDNRedirect has **no internal project references**. It is a fully self-contained web application with no dependencies on NuGetGallery, NuGetGallery.Core, or any other solution project.
+</Note>
+
+---
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**The redirect is pure IIS configuration, not application code.** The `<httpRedirect enabled="true" httpResponseStatus="Found">` block in `Web.config` with a `<add wildcard="*" destination="https://placeholder" />` entry means every HTTP request is intercepted by the IIS Static File / Redirect module before MVC ever processes it. The destination URL is a placeholder in source control and must be overridden via a `Web.config` transform or deployment slot setting in production.
+</Note>
+
+<Note>
+**The `/Status/Index` route is explicitly exempted from redirection.** A `<location path="Status/Index">` block in `Web.config` sets `<httpRedirect enabled="false" />` for that path only. This is the mechanism that allows health probes to get a real `200 OK` response instead of a redirect.
+</Note>
+
+<Warning>
+**The redirect destination is a placeholder in source control.** `Web.config` contains `destination="https://placeholder"` — this is intentional but means the application is non-functional unless the value is replaced at deploy time. There is no compile-time or startup check that validates the destination URL is real.
+</Warning>
+
+<Warning>
+**`Web.Debug.config` contains no environment-specific overrides.** Only `Web.Release.config` strips the `debug` compilation attribute and disables tracing. Running the application in Debug configuration will emit verbose compilation output and trace diagnostics.
+</Warning>
+
+<Tip>
+**Security headers are applied at the IIS level.** The `Strict-Transport-Security` header and `X-Powered-By` removal are configured in `<system.webServer><httpProtocol>` rather than in MVC middleware, so they apply to every response — including static files and error pages — without requiring application code.
+</Tip>
+
+<Tip>
+**The `StaticFile` handler is explicitly removed.** `<remove name="StaticFile" />` in `<handlers>` prevents IIS from serving any static assets directly. Combined with the cleared `<fileExtensions>` and `<hiddenSegments>` request filter rules, this means IIS imposes no file-extension or segment restrictions, allowing the wildcard redirect to catch every pattern uniformly.
+</Tip>
+
+---
+
+## Startup Sequence
+
+```text
+Application_Start()
+  └── AreaRegistration.RegisterAllAreas()
+  └── FilterConfig.RegisterGlobalFilters()
+        └── adds AiHandleErrorAttribute (global exception → App Insights)
+  └── RouteConfig.RegisterRoutes()
+        └── ignores *.axd routes
+        └── maps default route → Status/Index
+```
+
+All inbound HTTP traffic is handled by IIS before reaching the MVC pipeline, except for requests to `Status/Index` which pass through normally and return `200 OK`.
+
+---
+
+## Target Framework and Build Notes
+
+| Property | Value |
+|---|---|
+| Target Framework | .NET Framework 4.7.2 |
+| Project Type | ASP.NET MVC Web Application (classic csproj) |
+| Namespace | `NuGet.Services.CDNRedirect` |
+| Assembly Name | `NuGetCDNRedirect` |
+| MVC View Pre-compilation | Disabled (`MvcBuildViews=false`) |
+| IIS Express Port (dev) | `57913` |

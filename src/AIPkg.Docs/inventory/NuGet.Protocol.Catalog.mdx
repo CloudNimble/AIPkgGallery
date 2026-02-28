@@ -1,0 +1,130 @@
+---
+title: NuGet.Protocol.Catalog
+sidebarTitle: Protocol.Catalog
+description: A .NET library that provides typed models, an HTTP client, and a cursor-driven processor for consuming the NuGet V3 Catalog resource.
+icon: "book-open"
+---
+
+## Overview
+
+`NuGet.Protocol.Catalog` is a reusable class library for reading and processing the NuGet V3 Catalog API. The catalog is an append-only event log published at `https://api.nuget.org/v3/index.json` that records every package publish, metadata edit, and delete event on NuGet.org. This library provides the typed JSON models, an HTTP deserialization client, and a high-level processor that walks the catalog hierarchically (index → pages → leaves) in strict chronological order.
+
+The central design is the cursor pattern: an `ICursor` abstraction records the last successfully processed commit timestamp so that any consumer can resume exactly where it left off after a restart or transient failure. The built-in `FileCursor` stores this value as a JSON file on disk, while callers can implement their own `ICursor` backed by a database or Azure Blob Storage. The `CatalogProcessor` writes to the cursor at commit boundaries — not after every leaf — which means cursor advancement is always aligned with atomic catalog commits.
+
+The library deliberately contains no application-level logic. All domain behavior lives behind the `ICatalogLeafProcessor` interface, which callers implement to decide what to do with each `PackageDetailsCatalogLeaf` or `PackageDeleteCatalogLeaf` as it is delivered. This keeps the library focused on reliable catalog traversal and leaves processing concerns entirely to the consumer.
+
+## Role in System
+
+```
+NuGet V3 Service Index (api.nuget.org/v3/index.json)
+          │
+          │  discovers Catalog/3.0.0 URL
+          ▼
+    CatalogProcessor
+          │
+          ├── ICatalogClient (CatalogClient)
+          │       ├── GET /v3/catalog0/index.json  → CatalogIndex
+          │       ├── GET /v3/catalog0/page*.json  → CatalogPage
+          │       └── GET /v3/catalog0/data/*.json → PackageDetailsCatalogLeaf
+          │                                          PackageDeleteCatalogLeaf
+          │
+          ├── ICursor (FileCursor / custom)
+          │       └── reads / writes last processed commit timestamp
+          │
+          └── ICatalogLeafProcessor (caller-supplied)
+                  ├── ProcessPackageDetailsAsync(leaf)
+                  └── ProcessPackageDeleteAsync(leaf)
+```
+
+Internal consumers of this library are `NuGet.Services.Metadata.Catalog` (the metadata pipeline) and `Monitoring.PackageLag` (the package lag monitor).
+
+<CardGroup cols={2}>
+  <Card title="Cursor-Driven Resumability" icon="clock">
+    The `ICursor` abstraction records the last committed catalog timestamp. The `CatalogProcessor` advances the cursor at commit boundaries so processing always resumes from a consistent point after a crash or restart.
+  </Card>
+  <Card title="Redundant Leaf Deduplication" icon="filter">
+    When `ExcludeRedundantLeaves` is enabled (the default), multiple entries for the same package ID and version within a single page are collapsed to the latest one, reducing unnecessary downstream work.
+  </Card>
+  <Card title="Hierarchical Traversal" icon="list-tree">
+    The processor walks the three-level catalog hierarchy (index → pages → leaves) and filters pages and leaves by commit timestamp bounds before fetching them, minimising HTTP requests to only the range of interest.
+  </Card>
+  <Card title="Two-Pass Leaf Deserialization" icon="code">
+    `CatalogClient.GetLeafAsync` downloads leaf JSON once as a byte array, peeks at the `@type` field to determine the concrete leaf type, then deserializes again into the correct strongly-typed model without a second HTTP round-trip.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `CatalogProcessor.cs` | `CatalogProcessor` | Orchestrates full catalog traversal: discovers the catalog index URL from the NuGet service index, filters pages and leaves by commit timestamp, invokes `ICatalogLeafProcessor` for each leaf in chronological order, and advances the `ICursor` at each commit boundary. |
+| `CatalogProcessorSettings.cs` | `CatalogProcessorSettings` | Configuration bag for the processor. Holds `ServiceIndexUrl` (defaults to `https://api.nuget.org/v3/index.json`), `MinCommitTimestamp`, `MaxCommitTimestamp`, `DefaultMinCommitTimestamp`, and `ExcludeRedundantLeaves`. Cloned at construction time to prevent mutation. |
+| `CatalogClient.cs` | `CatalogClient` | Implements `ICatalogClient`. Fetches and deserializes the catalog index, catalog pages, and typed leaf documents via `ISimpleHttpClient`. Validates that the deserialized leaf type matches the expected type before returning. |
+| `ICatalogClient.cs` | `ICatalogClient` | Interface exposing `GetIndexAsync`, `GetPageAsync`, `GetLeafAsync`, `GetPackageDeleteLeafAsync`, and `GetPackageDetailsLeafAsync`. |
+| `ICatalogLeafProcessor.cs` | `ICatalogLeafProcessor` | Caller-implemented interface with `ProcessPackageDetailsAsync` and `ProcessPackageDeleteAsync`. Returning `false` or throwing stops the processor. The same package may be delivered more than once due to retries. |
+| `ICursor.cs` | `ICursor` | Interface for reading and writing a nullable `DateTimeOffset` cursor value. |
+| `FileCursor.cs` | `FileCursor` | File-backed `ICursor` implementation. Stores the cursor as `{"value":"..."}` JSON using Newtonsoft.Json. Returns `null` if the file does not exist or cannot be parsed, allowing first-run bootstrapping. |
+| `SimpleHttpClient.cs` | `SimpleHttpClient` | Wraps `HttpClient` with streaming JSON deserialization via Newtonsoft.Json. Distinguishes non-200 responses as `ResponseAndResult<T>` with `HasResult = false` rather than throwing. |
+| `SimpleHttpClientException.cs` | `SimpleHttpClientException` | Exception thrown by `ResponseAndResult<T>.GetResultOrThrow()` when the HTTP response was not successful. Carries `Method`, `RequestUri`, `StatusCode`, and `ReasonPhrase`. |
+| `ResponseAndResult.cs` | `ResponseAndResult<T>` | Value type coupling an HTTP response's status metadata with an optional deserialized result. `GetResultOrThrow()` converts a failed response into a `SimpleHttpClientException`. |
+| `Models/CatalogIndex.cs` | `CatalogIndex` | Top-level catalog document. Contains a list of `CatalogPageItem` references with their commit timestamps. |
+| `Models/CatalogPage.cs` | `CatalogPage` | One page of the catalog. Contains a list of `CatalogLeafItem` references pointing at individual leaf documents. |
+| `Models/CatalogPageItem.cs` | `CatalogPageItem` | Summary entry for a catalog page: URL, commit timestamp, and leaf count. |
+| `Models/CatalogLeafItem.cs` | `CatalogLeafItem` | Summary entry for one leaf within a page: URL, `CatalogLeafType`, commit timestamp, package ID, and version. Uses `nuget:` JSON-LD prefixed property names. |
+| `Models/CatalogLeaf.cs` | `CatalogLeaf` | Base class for fully-fetched leaf documents. Provides `Url`, `Type`, `CommitId`, `CommitTimestamp`, `PackageId`, `Published`, and `PackageVersion`. |
+| `Models/PackageDetailsCatalogLeaf.cs` | `PackageDetailsCatalogLeaf` | Concrete leaf for package publish and edit events. Carries the full package metadata: authors, description, dependencies, deprecation, vulnerabilities, license, icon, readme, package hash, size, and SemVer details. |
+| `Models/PackageDeleteCatalogLeaf.cs` | `PackageDeleteCatalogLeaf` | Concrete leaf for package delete events. Inherits `CatalogLeaf` with no additional fields. |
+| `Models/CatalogLeafType.cs` | `CatalogLeafType` | Enum with values `PackageDetails = 1` and `PackageDelete = 2`. |
+| `Models/ModelExtensions.cs` | `ModelExtensions` | Static helpers: `GetPagesInBounds`, `GetLeavesInBounds`, `ParsePackageVersion`, `ParseTargetFramework`, `ParseRange`, `IsPackageDelete`, `IsPackageDetails`, `IsListed`, `IsSemVer2`. |
+| `Models/PackageDeprecation.cs` | `PackageDeprecation` | Embedded deprecation metadata within a `PackageDetailsCatalogLeaf`: reasons list, message, and optional `AlternatePackage`. |
+| `Models/PackageVulnerability.cs` | `PackageVulnerability` | Embedded vulnerability metadata: advisory URL and severity string. |
+| `Serialization/NuGetJsonSerialization.cs` | `NuGetJsonSerialization` | Central Newtonsoft.Json settings factory: UTC `DateTimeZoneHandling`, `DateTimeOffset` date parsing, and null-value omission. Used by `SimpleHttpClient` and `FileCursor`. |
+| `Serialization/BaseCatalogLeafConverter.cs` | `BaseCatalogLeafConverter` | Abstract `JsonConverter` base for mapping `CatalogLeafType` enum values to and from their JSON string representations. |
+| `Serialization/CatalogLeafTypeConverter.cs` | `CatalogLeafTypeConverter` | Handles the `@type` field on full leaf documents, which may be a string or a JSON-LD array. Maps `"PackageDetails"` / `"PackageDelete"`. |
+| `Serialization/CatalogLeafItemTypeConverter.cs` | `CatalogLeafItemTypeConverter` | Handles the `@type` field on page summary items, which uses `nuget:` prefixed values (`"nuget:PackageDetails"`, `"nuget:PackageDelete"`). |
+| `Serialization/PackageDependencyRangeConverter.cs` | `PackageDependencyRangeConverter` | Tolerates malformed catalog documents that serialize a dependency version range as a JSON array rather than a string; takes the first element in that case. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.Extensions.Logging.Abstractions` | `ILogger<T>` used by `CatalogProcessor`, `CatalogClient`, `SimpleHttpClient`, and `FileCursor` for structured diagnostic output. |
+| `Newtonsoft.Json` | JSON serialization and deserialization for all catalog documents and the `FileCursor` value. Custom `JsonConverter` subclasses handle the non-standard `@type` array format. |
+| `NuGet.Protocol` | Provides `Repository.Factory`, `ServiceIndexResourceV3`, and `FeedType` used by `CatalogProcessor` to discover the catalog index URL from the NuGet service index. |
+| `System.Formats.Asn1` | Transitive dependency pulled in for cryptographic operations within the NuGet.Protocol dependency chain. |
+| `System.Text.Json` | Listed as a package reference; used indirectly via NuGet.Protocol's dependency graph. |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Metadata.Catalog` | Consumes this library to drive catalog-based metadata pipeline jobs (registration hive updates, flat container population, etc.). |
+| `Monitoring.PackageLag` | Consumes this library to monitor how quickly package publish events propagate through NuGet endpoints after they appear in the catalog. |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Commit-boundary cursor advancement.** The `CatalogProcessor` only writes to the cursor when transitioning from one commit timestamp to the next, not after every individual leaf. This means if processing fails mid-commit, the entire commit is retried on the next run. The `ICatalogLeafProcessor` contract explicitly states the same package/version pair may be delivered more than once and implementations must be idempotent.
+</Note>
+
+<Note>
+**Two-level timestamp filtering.** `GetPagesInBounds` filters the index to pages whose commit timestamp is strictly greater than the cursor value. `GetLeavesInBounds` then applies the same bounds at the leaf level within each page. A page is included even if only one of its leaves falls in range because a page's commit timestamp represents the maximum timestamp of all its leaves.
+</Note>
+
+<Tip>
+**`ExcludeRedundantLeaves` reduces work for burst edits.** When a package is edited multiple times within a single catalog page (e.g. metadata corrections in rapid succession), only the latest leaf for that package ID + version is delivered to the processor. This is on by default in `CatalogProcessorSettings` and is the recommended setting for consumers that only care about current state.
+</Tip>
+
+<Warning>
+**`GetLeafAsync` downloads the JSON body twice from memory.** When the leaf type is unknown in advance, `CatalogClient.GetLeafAsync` downloads the full JSON as a byte array, deserializes it once to read `@type`, then deserializes it a second time into the concrete type. This avoids a second HTTP request but does hold the entire leaf document in memory simultaneously. Prefer `GetPackageDetailsLeafAsync` or `GetPackageDeleteLeafAsync` when the leaf type is already known from the page summary item.
+</Warning>
+
+<Warning>
+**`CatalogLeafTypeConverter` handles JSON-LD array `@type`.** The `@type` field in full leaf documents may arrive as either a plain string or a JSON array of strings (as used by JSON-LD). The `CatalogLeafTypeConverter` handles both forms by iterating the array and returning the first recognized value. The page summary `CatalogLeafItemTypeConverter` does not handle arrays and expects a single `nuget:`-prefixed string.
+</Warning>
+
+<Tip>
+**`ModelExtensions.IsListed` handles legacy unlisted encoding.** Some very old NuGet.org catalog entries do not include a `listed` property. The extension method falls back to checking whether `Published.Year == 1900`, which is the legacy server-side convention for marking a package as unlisted. This is explicitly called out in the code with a catalog example URL.
+</Tip>

@@ -1,0 +1,81 @@
+---
+title: "AIpkg.org Specification Suite"
+description: "Design specifications for AIpkg.org — a package registry for AI platform plugins built by forking and transforming NuGetGallery."
+icon: "book-open"
+---
+
+AIpkg packages AI skills, commands, MCP server configurations, system prompts, and other plugin assets that work across multiple AI platforms (Claude Code, GitHub Copilot, Cursor, Windsurf, OpenCode, and more).
+
+## Spec Index
+
+<CardGroup cols={2}>
+  <Card title="01 · Package Format" icon="box-archive" href="01-aipkg-format">
+    `.aipkg` archive format, manifest naming, directory layout, conflict resolution
+  </Card>
+  <Card title="02 · Platform Targeting" icon="sitemap" href="02-platform-targeting">
+    AI Platform Moniker (APM) system, fallback graph, install paths
+  </Card>
+  <Card title="03 · Metadata Schema" icon="file-code" href="03-metadata-schema">
+    Full `.aispec` manifest schema with JSON Schema and examples
+  </Card>
+  <Card title="04 · Server Infrastructure" icon="server" href="04-server-infrastructure">
+    V3-only API, EasyAF architecture, what to keep/strip from NuGetGallery
+  </Card>
+  <Card title="05 · Frontend UI" icon="display" href="05-frontend-ui">
+    Blazor SSR + interactive islands design, page inventory
+  </Card>
+  <Card title="06 · SDK & Tooling" icon="terminal" href="06-sdk-tooling">
+    `AIpkg.Core` library, `aipkg` CLI (AOT), TypeScript SDK strategy
+  </Card>
+  <Card title="07 · Docs Platform" icon="book" href="07-docs-platform">
+    DotNetDocs.com for AIpkg.Core, docs.aipkg.org developer portal
+  </Card>
+  <Card title="08 · Migration Plan" icon="arrow-right-arrow-left" href="08-migration-plan">
+    Phased migration from NuGetGallery, project renames, deletions
+  </Card>
+</CardGroup>
+
+---
+
+## Conceptual Model
+
+AIpkg maps directly onto the NuGet conceptual model:
+
+| NuGet | AIpkg | Notes |
+|-------|-------|-------|
+| `.nupkg` | `.aipkg` | ZIP archive, same mechanism |
+| `.nuspec` | `{id}.aispec` | JSON instead of XML; named after the package ID |
+| Target Framework Moniker (TFM) | AI Platform Moniker (APM) | e.g., `claude-code`, `copilot`, `cursor` |
+| `lib/{tfm}/` | `apm/{moniker}/` | Platform-specific assets |
+| `contentFiles/` | `shared/` | Platform-agnostic assets |
+| Package Type | Capabilities | `mcp-server`, `skill`, `command`, `agent`, `prompt`, `config` |
+| `NuGet.org` | `AIpkg.org` | Registry |
+| `NuGetGallery` | `AIpkgGallery` | Server codebase |
+| `AIpkg.Core` | `AIpkg.Core` | Shared parsing/validation library |
+
+---
+
+## Key Principles
+
+1. **V3-only public API** — No V2/OData on the public surface. V3 JSON endpoints only.
+2. **APM-first design** — Every package operation is aware of platform targeting.
+3. **`.aispec` is JSON** — Not XML. The `{id}.aispec` naming mirrors `.nuspec` and `.csproj` conventions.
+4. **EasyAF for data layer** — SQL Server DB Project as schema source of truth; code-generated EF Core entities and repositories; OData Restier for admin/internal API only.
+5. **Blazor SSR** — No Razor views, no jQuery, no OWIN. Static SSR for public pages, interactive server for upload/admin.
+6. **AOT CLI** — `aipkg` ships as a single native binary with no runtime dependency.
+7. **Parallel workstreams** — Specs are written so frontend and backend teams can work independently after Phase 1.
+
+---
+
+## Verification Checklist
+
+A complete spec suite must allow:
+
+- [ ] Someone to implement a `.aipkg` parser from spec alone (→ [spec 01](01-aipkg-format))
+- [ ] Someone to implement APM resolution and install path logic (→ [spec 02](02-platform-targeting))
+- [ ] Someone to write a JSON Schema validator for `.aispec` (→ [spec 03](03-metadata-schema))
+- [ ] Someone to implement every V3 endpoint with correct request/response shapes (→ [spec 04](04-server-infrastructure))
+- [ ] Frontend and backend teams to proceed independently (→ [spec 04](04-server-infrastructure) + [spec 05](05-frontend-ui))
+- [ ] Someone to implement `AIpkg.Core` public API (→ [spec 06](06-sdk-tooling))
+- [ ] Someone to set up DotNetDocs.com hosting (→ [spec 07](07-docs-platform))
+- [ ] A migration engineer to execute Phase 0 without ambiguity (→ [spec 08](08-migration-plan))

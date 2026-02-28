@@ -1,0 +1,98 @@
+---
+title: NuGet.Services.CatalogValidation
+sidebarTitle: CatalogValidation
+description: Shared library that provides the Entity Framework DbContext and EF6 migrations for the dedicated CatalogValidation SQL database, which stores package validation state separately from the main Validation database.
+icon: shield-check
+---
+
+## Overview
+
+`NuGet.Services.CatalogValidation` is a small shared library with a single well-defined responsibility: it defines the EF6 `DbContext` and code-first migration history for the **CatalogValidation SQL database**. The CatalogValidation database holds the same logical schema as the Validation database — validation sets, validator statuses, package signatures, certificate chains, scan results, and so on — but is a physically separate SQL Server instance used specifically for catalog-level validation workflows.
+
+The library extends `ValidationEntitiesContext` from `NuGet.Services.Validation` rather than duplicating entity or fluent-API configuration. The only override it adds is `ConfigureBatchIdProperty`, which activates the `BatchId` column on `ValidatorStatuses`. This column exists in the CatalogValidation database but is intentionally absent (ignored) in the main Validation database, reflecting a schema divergence between the two stores.
+
+The project ships as a multi-targeted library (`net472` and `netstandard2.1`) so it can be referenced by both the full-.NET-Framework `DatabaseMigrationTools` executable and by any netstandard-compatible consumer. Its `InitialSchema` migration (timestamped `202512031702296`) bootstraps all required tables, schemas, and indexes in a single operation, making it straightforward to provision a new CatalogValidation database from scratch.
+
+<Note>
+The migration was introduced in December 2025 as the initial schema. `AutomaticMigrationsEnabled` is set to `false`, so all future schema changes must be expressed as explicit code-first migration classes added to this project.
+</Note>
+
+## Role in System
+
+```
+DatabaseMigrationTools (exe)
+  └── CatalogValidationDbMigrationContext
+        ├── CatalogValidationDbContextFactory   ← injectable factory
+        ├── CatalogValidationEntitiesContext     ← EF DbContext (this library)
+        └── CatalogValidationMigrationsConfiguration ← EF migration runner config
+                │
+                └──► NuGet.Services.CatalogValidation  (this library)
+                          ├── Entities/
+                          │     ├── CatalogValidationEntitiesContext
+                          │     └── CatalogValidationDbContextFactory
+                          └── Migrations/
+                                ├── CatalogValidationMigrationsConfiguration
+                                └── 202512031702296_InitialSchema
+```
+
+At runtime the `DatabaseMigrationTools` job receives `CatalogValidationDatabase` as the `MigrationTargetDatabase` argument, resolves a `CatalogValidationDbConfiguration` connection string, and passes the resulting `SqlConnection` to `CatalogValidationDbMigrationContext`. That context wires up the factory delegate and creates a `DbMigrator` backed by `CatalogValidationEntitiesContext` to apply any pending EF migrations.
+
+<CardGroup cols={2}>
+  <Card title="Schema parity with Validation DB" icon="copy">
+    The CatalogValidation database contains the same tables as the main Validation database (dbo, signature, scan schemas). The entire schema is established through a single `InitialSchema` migration that creates all tables and indexes in one pass.
+  </Card>
+  <Card title="BatchId column activation" icon="toggle-right">
+    The only schema difference relative to the Validation database is the `BatchId` column on `dbo.ValidatorStatuses`. `CatalogValidationEntitiesContext` overrides `ConfigureBatchIdProperty` to configure and index this column instead of ignoring it as the base context does.
+  </Card>
+  <Card title="Dual factory pattern" icon="factory">
+    `CatalogValidationDbContextFactory` exposes a static `Func` delegate (`CatalogValidationEntitiesContextFactory`) that `DatabaseMigrationTools` sets at startup. This lets the migration runner inject an authenticated `SqlConnection` without requiring a connection-string-based constructor path.
+  </Card>
+  <Card title="Migration timeout" icon="clock">
+    `CatalogValidationMigrationsConfiguration` sets `CommandTimeout` to 30 minutes, accommodating the long-running DDL statements that may be required against large production tables.
+  </Card>
+</CardGroup>
+
+## Key Files and Classes
+
+| File | Class / Type | Purpose |
+|------|-------------|---------|
+| `Entities/CatalogValidationEntitiesContext.cs` | `CatalogValidationEntitiesContext` | EF6 `DbContext` for the CatalogValidation database. Inherits all entity sets and fluent configuration from `ValidationEntitiesContext`; overrides `ConfigureBatchIdProperty` to map and index the `BatchId` column on `ValidatorStatuses`. |
+| `Entities/CatalogValidationEntitiesContext.cs` | `CatalogValidationDbContextFactory` | `IDbContextFactory<CatalogValidationEntitiesContext>` implementation. Uses a static `Func` delegate so the migration runner can inject an externally-created, authenticated `SqlConnection` at startup. |
+| `Migrations/CatalogValidationMigrationsConfiguration.cs` | `CatalogValidationMigrationsConfiguration` | `DbMigrationsConfiguration<CatalogValidationEntitiesContext>`. Disables automatic migrations and sets a 30-minute command timeout. |
+| `Migrations/202512031702296_InitialSchema.cs` | `InitialSchema` | The sole EF migration. Creates all tables across the `dbo`, `signature`, and `scan` schemas, including all foreign keys and indexes, in a single `Up()` pass. |
+| `app.config` | — | Local-only connection string (`CatalogValidation.SqlServer`) pointing to `(localdb)\mssqllocaldb` for running migrations from the command line during development. |
+
+## Dependencies
+
+### NuGet Package References
+
+| Package | Purpose |
+|---------|---------|
+| `EntityFramework` | EF6 `DbContext`, `DbMigrationsConfiguration`, `DbMigration`, and related migration infrastructure |
+| `Azure.Core` | Included transitively via `NuGet.Services.Validation`; supports Azure SDK primitives |
+| `NuGet.Versioning` | Included transitively; used by entity types in the validation schema |
+| `System.Text.Json` | Included transitively; used for serializing validation properties in the entity model |
+
+### Internal Project References
+
+| Project | Purpose |
+|---------|---------|
+| `NuGet.Services.Validation` | Provides `ValidationEntitiesContext` (the base `DbContext`), all entity classes (`PackageValidationSet`, `ValidatorStatus`, `PackageSignature`, etc.), and `IValidationEntitiesContext` |
+
+## Notable Patterns and Implementation Details
+
+<Note>
+**Schema divergence via virtual override.** `ValidationEntitiesContext` defines `ConfigureBatchIdProperty` as a `virtual` method that calls `modelBuilder.Entity<ValidatorStatus>().Ignore(s => s.BatchId)`. `CatalogValidationEntitiesContext` overrides this method and explicitly does NOT call `base`, instead mapping and indexing the column. This is the only customization applied by this library to the inherited schema.
+</Note>
+
+<Note>
+**Single initial migration.** All tables — across the `dbo`, `signature`, and `scan` database schemas — are created in a single `InitialSchema` migration rather than incremental migrations. This reflects that the CatalogValidation database is a new, purpose-built store rather than an evolved one.
+</Note>
+
+<Warning>
+**No consumer other than DatabaseMigrationTools.** As of the initial schema (December 2025), the only project that references this library is `DatabaseMigrationTools`. There is no runtime service (validator, orchestrator, or API) that reads from or writes to the CatalogValidation database yet — the library establishes the data layer in anticipation of future catalog validation workloads.
+</Warning>
+
+<Tip>
+The `app.config` connection string (`CatalogValidation.SqlServer`) is used only when running EF migrations directly from the Package Manager Console or `migrate.exe` during development. In deployed environments, the connection string is supplied through `CatalogValidationDbConfiguration` resolved via `JsonConfigurationJob`.
+</Tip>
