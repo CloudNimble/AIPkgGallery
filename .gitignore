@@ -437,3 +437,4 @@ src/NuGetGallery/App_Data/Files/*
 !src/NuGetGallery/Branding/Views/Packages/
 
 
+/docs/plans/2026-03-01-aipkg-home-page-design.md
