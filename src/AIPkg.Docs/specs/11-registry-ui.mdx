@@ -1,0 +1,194 @@
+---
+title: "Registry UI"
+sidebarTitle: "11 · Registry UI"
+description: "AIpkg Registry web UI — URL inventory, rendering requirements, performance targets, accessibility standards, and SEO requirements."
+icon: "display"
+---
+
+The AIpkg Registry web UI is the browser-facing surface of the registry. This spec defines the URL map, page inventory, rendering behavior requirements, performance SLAs, and accessibility standards. It does not prescribe an implementation technology.
+
+---
+
+## Rendering Requirements
+
+Each page or feature area has a normative rendering requirement:
+
+| Page / Feature | Rendering Requirement | Rationale |
+|----------------|----------------------|-----------|
+| Home page | Server-side rendered | SEO, CDN-cacheable |
+| Browse / category pages | Server-side rendered | SEO, performance |
+| Search results | Server-side rendered; reloads on filter change | No JavaScript required for basic search |
+| Package detail (read) | Server-side rendered | SEO critical |
+| Package detail version selector | Dynamically rendered without full-page reload | User experience |
+| Package upload wizard | Client-interactive | Multi-step, validation-heavy |
+| User profile / account settings | Client-interactive | Authenticated |
+| API key management | Client-interactive | Authenticated |
+| Admin panel | Client-interactive | Internal tool |
+| Login / OAuth callback | Server-side rendered | Standard auth flow |
+
+<Note>
+  The version selector on the package detail page must update without a full-page reload. All other behavior on the package detail page must be available without JavaScript.
+</Note>
+
+---
+
+## URL Inventory
+
+### Public Pages
+
+| URL | Page | Notes |
+|-----|------|-------|
+| `/` | Home | Featured packages, new packages, stats |
+| `/search` | Search results | Query: `?q=`, `?apm=`, `?capability=`, `?prerelease=`, `?page=` |
+| `/platforms` | Platform list | Cards for each canonical APM |
+| `/platforms/{moniker}` | Browse by platform | Packages compatible with given APM |
+| `/capabilities/{capability}` | Browse by capability | Packages with given capability |
+| `/packages/{id}` | Package detail | Redirects to latest listed version |
+| `/packages/{id}/{version}` | Package version detail | README, manifest, version history |
+| `/stats` | Statistics | Download stats, top packages |
+
+### Authenticated Pages
+
+| URL | Page | Notes |
+|-----|------|-------|
+| `/packages/upload` | Upload wizard | Multi-step push flow |
+| `/packages/manage/{id}` | Package management | Unlist, owners, stats |
+| `/account` | User profile | Display name, email, linked accounts |
+| `/account/api-keys` | API key management | Create, revoke, copy keys |
+| `/account/packages` | Owned packages | All packages for current user |
+
+### Auth Endpoints
+
+| URL | Method | Action |
+|-----|--------|--------|
+| `/auth/github` | GET | Initiates GitHub OAuth flow |
+| `/auth/github/callback` | GET | GitHub OAuth callback |
+| `/auth/logout` | POST | Clears session cookie (CSRF-protected) |
+
+### Admin Pages
+
+| URL | Page | Access |
+|-----|------|--------|
+| `/admin` | Admin dashboard | Admin role only |
+| `/admin/packages/{id}` | Package admin | Admin role only |
+| `/admin/users` | User admin | Admin role only |
+
+<Warning>
+  All admin pages must return `403 Forbidden` to non-admin authenticated users and `401 Unauthorized` to unauthenticated users.
+</Warning>
+
+---
+
+## Page Details
+
+### Home (`/`)
+- Hero section with search bar
+- "Featured" packages (editorially curated or algorithmically ranked)
+- "New packages" — 6 most recently published
+- Platform quick-filters: buttons for each APM moniker
+- Stats: total packages, total downloads, total platforms supported
+
+### Search Results (`/search`)
+- Filter sidebar: capability checkboxes, APM checkboxes, prerelease toggle
+- Result cards: icon, id, title, description snippet, capabilities, download count, publish date
+- Pagination
+- Sort options: Relevance, Downloads, Recently Updated
+
+### Package Version Detail (`/packages/{id}/{version}`)
+
+```
+┌─────────────────────────────────────────────────────┐
+│  [icon]  git-helpers  1.0.0  ▼ (version selector)  │
+│          Jane Developer · MIT · 8,432 downloads      │
+├───────────────────────────────┬─────────────────────┤
+│                               │ Install              │
+│  [README content]             │ ─────────────────── │
+│                               │ aipkg install       │
+│                               │   git-helpers       │
+│                               │                     │
+│                               │ Capabilities        │
+│                               │ skill               │
+│                               │                     │
+│                               │ Targets             │
+│                               │ claude-code         │
+│                               │ copilot-vscode      │
+│                               │ cursor              │
+│                               │                     │
+│                               │ Dependencies        │
+│                               │ (none)              │
+│                               │                     │
+│                               │ Versions            │
+│                               │ 1.0.0 (current)     │
+│                               │ 0.9.0               │
+└───────────────────────────────┴─────────────────────┘
+```
+
+Tabs:
+- **README tab:** renders embedded README (sanitized HTML from Markdown)
+- **Manifest tab:** shows the `.aispec` JSON, syntax-highlighted
+- **Version history tab:** all versions with dates and download counts
+
+### Upload Wizard (`/packages/upload`)
+
+Multi-step flow:
+
+<Steps>
+  <Step title="Select file">
+    File drop / select `.aipkg` file.
+  </Step>
+  <Step title="Review manifest">
+    Parsed fields shown for confirmation.
+  </Step>
+  <Step title="Additional metadata">
+    Tags, project URL (if not in manifest).
+  </Step>
+  <Step title="Permissions review">
+    Shows any permissions declared in the package.
+  </Step>
+  <Step title="Confirm and publish">
+    Final confirmation; shows progress indicator during upload.
+  </Step>
+</Steps>
+
+### API Keys (`/account/api-keys`)
+- List of active keys (masked)
+- Create new key: name, scopes, expiry, package glob
+- Revoke key
+- Copy newly created key (shown once)
+
+---
+
+## Performance Targets
+
+| Page | Target (p95 TTFB) | Cache Strategy |
+|------|-------------------|----------------|
+| Home | < 200ms | CDN cache 60s |
+| Search results | < 300ms | No cache (dynamic) |
+| Package detail | < 200ms | CDN cache 30s |
+| Package download | — | CDN cache forever (versioned URL) |
+| API responses | < 100ms | CDN cache varies |
+
+---
+
+## Accessibility
+
+- WCAG 2.1 AA target
+- All interactive elements keyboard-navigable
+- `aria-label` on icon-only buttons
+- Color contrast ratio ≥ 4.5:1 for normal text
+- Focus indicators visible
+
+---
+
+## SEO
+
+All public server-rendered pages must include:
+
+- `<title>{Package ID} · AIpkg.org</title>`
+- `<meta name="description">` from package description
+- Open Graph tags: `og:title`, `og:description`, `og:image` (package icon)
+- Structured data (JSON-LD): `schema.org/SoftwareApplication` for package detail pages
+- Canonical URL
+- `<link rel="alternate" type="application/json">` pointing to registration JSON
+
+**Sitemap:** `/sitemap.xml` — generated endpoint listing all listed packages and platform pages; updated nightly by a background job.

@@ -1,38 +1,330 @@
 ---
-title: AIPkg.Docs Documentation
-sidebarTitle: Home
-description: Welcome to the AIPkg.Docs documentation
-icon: house
+title: "AIpkg"
+sidebarTitle: "Home"
+description: "The universal package registry for AI platform plugins — package skills, MCP servers, commands, and prompts once, and install them on any AI platform."
+icon: "house"
+mode: "custom"
 ---
 
-# AIPkg.Docs
+<div className="aipkg-home">
 
-Welcome to the AIPkg.Docs documentation. This documentation is automatically generated from XML comments in the source code and kept up-to-date with every build.
+<div className="hero-section">
+  <div className="hero-eyebrow">
+    <span className="eyebrow-dot"></span>
+    Universal AI Package Registry
+  </div>
 
-## Getting Started
+  <h1 className="hero-heading">
+    <span className="hero-line-1">One Package.</span>
+    <span className="hero-line-2">Every AI Platform.</span>
+  </h1>
 
-<CardGroup cols={2}>
-  <Card title="Why AIPkg.Docs?" icon="square-question" href="why-aipkg-docs">
-    Learn about the motivation and design philosophy behind AIPkg.Docs
+  <p className="hero-subtext">
+    Every AI platform ships with its own config format, directory conventions, and plugin system.
+    AIpkg packages your skills, MCP servers, commands, and prompts once — then automatically
+    adapts them to every platform your users run.
+  </p>
+
+  <div className="terminal-demo">
+    <div className="terminal-topbar">
+      <div className="terminal-controls">
+        <span className="tc tc-close"></span>
+        <span className="tc tc-min"></span>
+        <span className="tc tc-max"></span>
+      </div>
+      <span className="terminal-label">Terminal — bash</span>
+    </div>
+    <div className="terminal-content">
+      <p className="t-line t-cmd">
+        <span className="t-prompt">❯</span>
+        <span className="t-text">aipkg install my-mcp-server</span>
+        <span className="t-cursor">▌</span>
+      </p>
+      <p className="t-line t-out t-delay-1">
+        <span className="t-check">✓</span> Detected platform: <strong className="t-platform">claude-code</strong>
+      </p>
+      <p className="t-line t-out t-delay-2">
+        <span className="t-check">✓</span> Resolving APM chain: claude-code → claude → ai → shared
+      </p>
+      <p className="t-line t-out t-delay-3">
+        <span className="t-check">✓</span> Collecting <strong className="t-num">4</strong> shared files, <strong className="t-num">2</strong> claude-code overrides
+      </p>
+      <p className="t-line t-out t-success t-delay-4">
+        <span className="t-check">✓</span> my-mcp-server@1.2.0 installed → .claude/settings.json
+      </p>
+    </div>
+  </div>
+
+  <div className="hero-cta-row">
+    <a href="/quickstart" className="cta-primary">Get Started →</a>
+    <a href="/why-aipkg" className="cta-ghost">Why AIpkg?</a>
+  </div>
+
+  <div className="platform-pill-row">
+    <div className="platform-pill pp-1">Claude Code</div>
+    <div className="platform-pill pp-2">GitHub Copilot</div>
+    <div className="platform-pill pp-3">Cursor</div>
+    <div className="platform-pill pp-4">Windsurf</div>
+    <div className="platform-pill pp-5">OpenCode</div>
+    <div className="platform-pill pp-6">Zed AI</div>
+    <div className="platform-pill pp-more">+ more</div>
+  </div>
+</div>
+
+<div className="metrics-strip">
+  <div className="metric">
+    <span className="metric-value">6+</span>
+    <span className="metric-label">AI Platforms</span>
+  </div>
+  <div className="metric-sep"></div>
+  <div className="metric">
+    <span className="metric-value">6</span>
+    <span className="metric-label">Package Types</span>
+  </div>
+  <div className="metric-sep"></div>
+  <div className="metric">
+    <span className="metric-value">1</span>
+    <span className="metric-label">Command to Install</span>
+  </div>
+  <div className="metric-sep"></div>
+  <div className="metric">
+    <span className="metric-value">0</span>
+    <span className="metric-label">Config Files to Maintain</span>
+  </div>
+</div>
+
+<div className="home-section problem-section">
+  <div className="hs-eyebrow">The Problem</div>
+  <h2 className="hs-title">AI tooling is fragmented.</h2>
+  <p className="hs-body">
+    To reach users across the major AI platforms, you must maintain a different config file,
+    directory layout, and update process for each one — and keep them all in sync, forever.
+  </p>
+
+  <div className="fragmentation-grid">
+    <div className="frag-card fc-1">
+      <div className="frag-header">
+        <div className="frag-indicator fi-claude"></div>
+        <span>Claude Code</span>
+      </div>
+      <div className="frag-file">.claude/settings.json</div>
+      <pre className="frag-code">{`{
+  "mcpServers": {
+    "my-tool": {
+      "command": "my-tool",
+      "args": ["--mcp"]
+    }
+  }
+}`}</pre>
+    </div>
+
+    <div className="frag-card fc-2">
+      <div className="frag-header">
+        <div className="frag-indicator fi-copilot"></div>
+        <span>GitHub Copilot</span>
+      </div>
+      <div className="frag-file">.github/copilot-instructions.md</div>
+      <pre className="frag-code">{`---
+mcp:
+  servers:
+    my-tool:
+      command: my-tool
+      args: [--mcp]
+---
+# Copilot Instructions...`}</pre>
+    </div>
+
+    <div className="frag-card fc-3">
+      <div className="frag-header">
+        <div className="frag-indicator fi-cursor"></div>
+        <span>Cursor</span>
+      </div>
+      <div className="frag-file">.cursor/rules/my-tool.mdc</div>
+      <pre className="frag-code">{`---
+description: My Tool Rules
+globs: ["**/*.ts"]
+alwaysApply: false
+---
+
+Always use my-tool when
+working with TypeScript.`}</pre>
+    </div>
+
+    <div className="frag-card fc-4">
+      <div className="frag-header">
+        <div className="frag-indicator fi-windsurf"></div>
+        <span>Windsurf</span>
+      </div>
+      <div className="frag-file">.windsurfrules</div>
+      <pre className="frag-code">{`# Global Rules
+Always use my-tool
+for all operations.
+
+mcp_server: my-tool
+path: ./bin/my-tool`}</pre>
+    </div>
+  </div>
+
+  <div className="frag-callout">
+    Four platforms. Four config formats. Four maintenance burdens. That's before any new platforms ship.
+  </div>
+</div>
+
+<div className="home-section solution-section">
+  <div className="hs-eyebrow">The Solution</div>
+  <h2 className="hs-title">Package once. The APM system handles the rest.</h2>
+  <p className="hs-body">
+    AIpkg introduces the <strong>AI Platform Moniker (APM)</strong> — a hierarchical identifier
+    for every AI platform. Your package ships platform-specific assets in the standard <code>.aipkg</code> archive.
+    The registry and CLI resolve, adapt, and install the right assets for each user's platform automatically.
+  </p>
+
+  <div className="sol-layout">
+    <div className="sol-package">
+      <div className="sol-package-title">
+        <span className="sol-pkg-icon">📦</span>
+        my-mcp-server.1.2.0.aipkg
+      </div>
+      <div className="sol-tree">
+        <div className="sol-tree-item si-manifest">
+          <span className="si-icon">📋</span>
+          <span className="si-name">my-mcp-server.aispec</span>
+          <span className="si-tag tag-required">required</span>
+        </div>
+        <div className="sol-tree-item si-shared">
+          <span className="si-icon">📁</span>
+          <span className="si-name">shared/</span>
+          <span className="si-hint">all platforms</span>
+        </div>
+        <div className="sol-tree-item si-shared-child">
+          <span className="si-icon">📄</span>
+          <span className="si-name">shared/mcp/config.json</span>
+        </div>
+        <div className="sol-tree-item si-apm">
+          <span className="si-icon">📁</span>
+          <span className="si-name">apm/</span>
+          <span className="si-hint">platform overrides</span>
+        </div>
+        <div className="sol-tree-item si-apm-child">
+          <span className="si-icon">📁</span>
+          <span className="si-name si-teal">apm/claude-code/</span>
+        </div>
+        <div className="sol-tree-item si-apm-grandchild">
+          <span className="si-icon">📄</span>
+          <span className="si-name">mcp/config.json</span>
+          <span className="si-hint">claude format</span>
+        </div>
+        <div className="sol-tree-item si-apm-child">
+          <span className="si-icon">📁</span>
+          <span className="si-name si-blue">apm/copilot/</span>
+        </div>
+        <div className="sol-tree-item si-apm-grandchild">
+          <span className="si-icon">📄</span>
+          <span className="si-name">copilot-instructions.md</span>
+        </div>
+      </div>
+    </div>
+
+    <div className="sol-graph">
+      <div className="sg-title">APM Fallback Graph</div>
+      <div className="sg-description">
+        When installing for <code>claude-code-2</code>, the full chain resolves automatically — most-specific match wins:
+      </div>
+      <div className="sg-chain">
+        <div className="sg-node sn-specific">
+          <span className="sn-label">claude-code-2</span>
+          <span className="sn-hint">most specific</span>
+        </div>
+        <div className="sg-arrow">↓</div>
+        <div className="sg-node sn-version">
+          <span className="sn-label">claude-code</span>
+          <span className="sn-hint">version family</span>
+        </div>
+        <div className="sg-arrow">↓</div>
+        <div className="sg-node sn-vendor">
+          <span className="sn-label">claude</span>
+          <span className="sn-hint">vendor family</span>
+        </div>
+        <div className="sg-arrow">↓</div>
+        <div className="sg-node sn-root">
+          <span className="sn-label">ai</span>
+          <span className="sn-hint">root family</span>
+        </div>
+        <div className="sg-arrow">↓</div>
+        <div className="sg-node sn-shared">
+          <span className="sn-label">shared/</span>
+          <span className="sn-hint">baseline</span>
+        </div>
+      </div>
+      <div className="sg-rule">
+        Unknown future platform versions fall back automatically — no republication needed.
+      </div>
+    </div>
+  </div>
+</div>
+
+<div className="home-section caps-section">
+  <div className="hs-eyebrow">Package Capabilities</div>
+  <h2 className="hs-title">Everything an AI platform can consume.</h2>
+  <p className="hs-body">
+    A single <code>.aipkg</code> archive can bundle any combination of capabilities.
+    The <code>capabilities</code> field in the <code>.aispec</code> manifest declares what the package contains.
+  </p>
+</div>
+
+<CardGroup cols={3}>
+  <Card title="MCP Server" icon="server" href="/specs/08-metadata-schema">
+    Bundle MCP server launch configuration and per-platform JSON schema overrides. The registry shows which platforms each server targets.
   </Card>
-  <Card title="Quickstart" icon="play" href="quickstart">
-    Get up and running with AIPkg.Docs in minutes
+  <Card title="Skill" icon="wand-magic-sparkles" href="/specs/08-metadata-schema">
+    Reusable AI skill definitions packaged as Markdown files, with platform-specific overrides in the `apm/` directory.
+  </Card>
+  <Card title="Command" icon="terminal" href="/specs/08-metadata-schema">
+    Slash command definitions with descriptions, argument schemas, and platform-adaptive behavior for each host tool.
+  </Card>
+  <Card title="Agent" icon="robot" href="/specs/08-metadata-schema">
+    Autonomous agent configurations with system prompts, tool permissions, and per-platform execution parameters.
+  </Card>
+  <Card title="Prompt" icon="message-square" href="/specs/08-metadata-schema">
+    System prompts and prompt templates distributed as versioned, signable packages with full dependency support.
+  </Card>
+  <Card title="Config" icon="sliders" href="/specs/08-metadata-schema">
+    Generic configuration files for tools, linters, or project templates — anything that fits the platform-aware install model.
   </Card>
 </CardGroup>
 
-## Features
+<div className="home-section quickstart-section">
+  <div className="hs-eyebrow">Quick Start</div>
+  <h2 className="hs-title">Ready in 60 seconds.</h2>
 
-- Feature 1: Description
-- Feature 2: Description
-- Feature 3: Description
+  <div className="qs-steps">
+    <div className="qs-step qss-1">
+      <div className="qs-num">01</div>
+      <div className="qs-content">
+        <div className="qs-step-title">Install the CLI</div>
+        <pre className="qs-cmd">{`winget install aipkg.cli`}</pre>
+      </div>
+    </div>
+    <div className="qs-step qss-2">
+      <div className="qs-num">02</div>
+      <div className="qs-content">
+        <div className="qs-step-title">Search packages</div>
+        <pre className="qs-cmd">{`aipkg search mcp-server`}</pre>
+      </div>
+    </div>
+    <div className="qs-step qss-3">
+      <div className="qs-num">03</div>
+      <div className="qs-content">
+        <div className="qs-step-title">Install on any platform</div>
+        <pre className="qs-cmd">{`aipkg install my-mcp-server`}</pre>
+      </div>
+    </div>
+  </div>
 
-## Documentation Sections
+  <div className="qs-cta-row">
+    <a href="/quickstart" className="cta-primary">Full Quickstart →</a>
+    <a href="/specs" className="cta-ghost">Read the Specs</a>
+  </div>
+</div>
 
-<CardGroup cols={2}>
-  <Card title="API Reference" icon="code" href="api-reference">
-    Complete API documentation for all public types and members
-  </Card>
-  <Card title="Guides" icon="book-open">
-    Step-by-step guides and tutorials
-  </Card>
-</CardGroup>
+</div>

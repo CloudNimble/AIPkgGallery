@@ -1,0 +1,150 @@
+---
+title: "Code Signing"
+sidebarTitle: "05 · Code Signing"
+description: "Normative specification for .aipkg package signing — what gets signed, the signature file format, supported signing mechanisms, trust anchors, verification algorithm, and timestamping."
+icon: "shield"
+---
+
+This document is the normative specification for `.aipkg` package signing. It defines the signing algorithm, signature file format, verification procedure, and trust anchor model.
+
+<Info>
+  **Current Status:** The `.signature.p7s` path is reserved in all `.aipkg` archives (see [Package Format](01-aipkg-format)). At MVP, unsigned packages are accepted with a warning. Signature enforcement for verified publishers is a post-MVP requirement.
+</Info>
+
+---
+
+## What Gets Signed
+
+The signature covers the **content** of the archive, not the ZIP metadata (timestamps, compression levels, etc.). This ensures bit-for-bit reproducibility across tools.
+
+The signed hash input is constructed as follows:
+
+1. For every entry in the archive **except** `.signature.p7s`:
+   - Normalize the entry path to forward slashes, lowercase
+   - Compute the SHA-256 hash of the **uncompressed** entry content
+   - Produce the string `{normalized-path}:{hex-hash}`
+2. Sort all such strings lexicographically
+3. Concatenate with newlines
+4. UTF-8 encode the resulting string
+5. Compute SHA-256 of the encoded string — this is the **content hash**
+
+---
+
+## Signature File
+
+The signature is stored at `.signature.p7s` at the archive root as a PKCS#7/CMS detached signature in DER encoding.
+
+The CMS `SignedData` structure contains:
+- The **content hash** (from the algorithm above) as the `messageDigest` signed attribute
+- An **RFC 3161 timestamp token** countersignature
+- The **signing certificate chain** up to (but not including) a trusted root
+
+The `.aispec` manifest is included in the content hash computation. This means any modification to the manifest invalidates the signature.
+
+---
+
+## Supported Signing Mechanisms
+
+| Mechanism | Badge | Notes |
+|-----------|-------|-------|
+| X.509 certificate from Microsoft Trusted Root CA | Verified | Standard code signing cert |
+| GitHub Actions OIDC via Sigstore (Fulcio) | Verified | Preferred for CI/CD pipelines |
+| Self-signed certificate | No badge | Accepted; flagged in UI as "unverified signature" |
+| No signature (unsigned) | No badge | Accepted at MVP with informational warning |
+
+<Tip>
+  For CI/CD publishing via GitHub Actions, Sigstore is the recommended mechanism. It requires no certificate management — identity is derived from the OIDC token of the GitHub Actions workflow.
+</Tip>
+
+---
+
+## Trust Anchors
+
+The registry maintains a list of trusted root certificates and Sigstore roots, updated quarterly. The current trust anchor list is published at:
+
+```http
+GET /api/trust-anchors
+```
+
+```json
+{
+  "version": "2025-Q1",
+  "roots": [
+    { "type": "x509", "subject": "CN=Microsoft Root Certificate Authority 2011", "thumbprint": "8f43288ad272..." },
+    { "type": "sigstore", "url": "https://fulcio.sigstore.dev", "fingerprint": "sha256:..." }
+  ]
+}
+```
+
+The trust anchor list is the sole authoritative source. Client implementations must not hardcode trust anchors.
+
+---
+
+## Signature Verification in `aipkg install`
+
+When a package has a `.signature.p7s` entry, `aipkg install` must verify the signature before installing any files:
+
+<Steps>
+  <Step title="Read signature">
+    Read and DER-decode `.signature.p7s` from the archive root.
+  </Step>
+  <Step title="Reconstruct hash input">
+    Recompute the content hash from the archive entries using the algorithm defined above.
+  </Step>
+  <Step title="Verify CMS signature">
+    Verify the CMS `SignedData` structure: the `messageDigest` attribute must match the computed content hash; the signature must validate against the signer's certificate.
+  </Step>
+  <Step title="Verify RFC 3161 timestamp">
+    Verify the embedded RFC 3161 timestamp countersignature. The timestamp must be from an approved TSA (see Timestamping section).
+  </Step>
+  <Step title="Verify certificate chain">
+    Verify the signing certificate chains to a trust anchor in the current trust anchor list. The certificate must not be revoked at the timestamp time.
+  </Step>
+</Steps>
+
+**Exit behavior:**
+- Any verification failure → non-zero exit code + error message; no files installed
+- Self-signed certificate → proceed with prominent warning; no badge
+- Unsigned package → proceed with informational notice; no badge
+
+---
+
+## Timestamping
+
+An **RFC 3161 timestamp** is required for all signatures submitted to verified publishers. The timestamp:
+- Must come from an approved Timestamp Authority (TSA) from the list below
+- Must be within **10 minutes** of the package push time (verified server-side at push)
+- Is embedded in the CMS `SignedData` as a countersignature
+
+**Approved Timestamp Authorities:**
+
+| TSA | URL |
+|-----|-----|
+| Sectigo | `http://timestamp.sectigo.com` |
+| DigiCert | `http://timestamp.digicert.com` |
+| GlobalSign | `http://timestamp.globalsign.com/scripts/timstamp.dll` |
+| Sigstore TSA | `https://tsa.sigstore.dev` |
+
+---
+
+## `aipkg sign` Command (Post-MVP)
+
+The `aipkg sign` command is reserved for a post-MVP release. It will:
+
+1. Compute the content hash from the archive
+2. Sign it using the specified certificate or Sigstore OIDC token
+3. Embed the RFC 3161 timestamp
+4. Write `.signature.p7s` into the archive
+
+See [SDK Interface](10-sdk-interface) for the planned command syntax.
+
+---
+
+## Registry Push Behavior
+
+| Publisher type | MVP behavior | Post-MVP behavior |
+|----------------|--------------|-------------------|
+| Any publisher, unsigned package | Accepted; warning in UI | Accepted; no verified badge |
+| Any publisher, self-signed | Accepted; "unverified signature" flag | Accepted; no verified badge |
+| Verified publisher, signed | Accepted; verified badge | Required; enforcement on push |
+| Verified publisher, unsigned | Accepted; warning in UI | Push rejected with `403 Forbidden` |

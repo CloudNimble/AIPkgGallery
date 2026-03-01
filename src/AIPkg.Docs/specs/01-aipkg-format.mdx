@@ -57,7 +57,7 @@ Files on disk follow the naming convention:
 The manifest is a JSON file stored at the root of the archive.
 
 <Note>
-  The manifest must be named exactly `{id}.aispec` where `{id}` matches the `id` field inside the manifest, be valid UTF-8 with no BOM, and conform to the schema defined in [spec 03](03-metadata-schema).
+  The manifest must be named exactly `{id}.aispec` where `{id}` matches the `id` field inside the manifest, be valid UTF-8 with no BOM, and conform to the schema defined in [Metadata Schema (spec 08)](08-metadata-schema).
 </Note>
 
 The `.aispec` extension was chosen to mirror NuGet's `.nuspec` and the `.csproj` naming pattern — the filename is self-identifying in a repository or file listing. Inside the archive, globbing for `*.aispec` reliably locates the manifest.
@@ -87,7 +87,7 @@ Files in `shared/` are installed on all platforms unless overridden by a platfor
 Files in `apm/{moniker}/` apply only to the named platform (and its children in the APM hierarchy). The same subdirectory conventions from `shared/` apply within each platform directory.
 
 <Note>
-  Valid moniker directory names are the canonical APM names defined in [spec 02](02-platform-targeting). Unknown monikers are silently ignored by installers.
+  Valid moniker directory names are the canonical APM names defined in [Platform Targeting (spec 06)](06-platform-targeting). Unknown monikers are silently ignored by installers.
 </Note>
 
 ---
@@ -148,9 +148,7 @@ The following paths inside the archive are reserved and must not be created by p
 
 ## Signing
 
-<Info>
-  Package signing is reserved for a future spec revision. When implemented, a detached signature will be stored at `.signature.p7s`, covering the full archive minus the signature entry itself. The registry will enforce signature validation for packages from verified authors.
-</Info>
+See [Code Signing (spec 05)](05-code-signing) for the normative signing specification. The `.signature.p7s` path is reserved in all archives; the signing algorithm, trust model, and verification procedure are defined in that document.
 
 ---
 
@@ -172,7 +170,7 @@ Use this when serving packages over HTTP.
   <Tab title="aipkg pack">
     The `aipkg pack` command reads an `.aispec` file from the current directory (or a specified path), validates it, collects referenced files, and produces a `{id}.{version}.aipkg` archive.
 
-    See [spec 06](06-sdk-tooling) for full CLI details.
+    See [SDK Interface (spec 10)](10-sdk-interface) for full CLI details.
   </Tab>
   <Tab title="aipkg install">
     The `aipkg install` command follows these steps:
@@ -188,7 +186,7 @@ Use this when serving packages over HTTP.
         Determines the target APM from CLI arg, project config, or auto-detection.
       </Step>
       <Step title="Resolve fallback chain">
-        Resolves the fallback chain for the APM. See [spec 02](02-platform-targeting).
+        Resolves the fallback chain for the APM. See [Platform Targeting (spec 06)](06-platform-targeting).
       </Step>
       <Step title="Collect baseline">
         Collects files from `shared/` as the baseline.

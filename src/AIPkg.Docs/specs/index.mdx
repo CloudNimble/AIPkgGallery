@@ -1,37 +1,67 @@
 ---
-title: "AIpkg.org Specification Suite"
-description: "Design specifications for AIpkg.org — a package registry for AI platform plugins built by forking and transforming NuGetGallery."
+title: "AIpkg Specification Suite"
+description: "Normative specifications for the AIpkg package format, platform targeting system, registry protocol, and SDK interface — everything needed to build a compatible tool or registry implementation."
 icon: "book-open"
 ---
 
 AIpkg packages AI skills, commands, MCP server configurations, system prompts, and other plugin assets that work across multiple AI platforms (Claude Code, GitHub Copilot, Cursor, Windsurf, OpenCode, and more).
 
+This specification suite is addressed to **third-party implementers**: tool authors, alternative registry operators, package authors, and anyone building compatible tooling. It contains no implementation-specific language.
+
+---
+
 ## Spec Index
+
+### Package Identity
 
 <CardGroup cols={2}>
   <Card title="01 · Package Format" icon="box-archive" href="01-aipkg-format">
-    `.aipkg` archive format, manifest naming, directory layout, conflict resolution
+    `.aipkg` archive format, manifest naming, directory layout, conflict resolution, size limits.
   </Card>
-  <Card title="02 · Platform Targeting" icon="sitemap" href="02-platform-targeting">
-    AI Platform Moniker (APM) system, fallback graph, install paths
+  <Card title="02 · Package Naming" icon="tag" href="02-package-naming">
+    ID syntax rules, forbidden patterns, reserved IDs, publisher scoping conventions.
   </Card>
-  <Card title="03 · Metadata Schema" icon="file-code" href="03-metadata-schema">
-    Full `.aispec` manifest schema with JSON Schema and examples
+  <Card title="03 · Versioning" icon="git-branch" href="03-versioning">
+    SemVer 2.0.0 compliance, pre-release, normalization, dependency ranges, immutability.
   </Card>
-  <Card title="04 · Server Infrastructure" icon="server" href="04-server-infrastructure">
-    V3-only API, EasyAF architecture, what to keep/strip from NuGetGallery
+  <Card title="04 · Prefix Reservations" icon="shield-check" href="04-prefix-reservations">
+    Exclusive prefix ownership for verified publishers, badge display, transfer policy.
   </Card>
-  <Card title="05 · Frontend UI" icon="display" href="05-frontend-ui">
-    Blazor SSR + interactive islands design, page inventory
+  <Card title="05 · Code Signing" icon="shield" href="05-code-signing">
+    Signing algorithm, PKCS#7/CMS format, trust anchors, verification procedure, timestamping.
   </Card>
-  <Card title="06 · SDK & Tooling" icon="terminal" href="06-sdk-tooling">
-    `AIpkg.Core` library, `aipkg` CLI (AOT), TypeScript SDK strategy
+</CardGroup>
+
+### Platform Targeting
+
+<CardGroup cols={2}>
+  <Card title="06 · Platform Targeting" icon="sitemap" href="06-platform-targeting">
+    AI Platform Moniker (APM) system, canonical table, fallback graph, compatibility rules.
   </Card>
-  <Card title="07 · Docs Platform" icon="book" href="07-docs-platform">
-    DotNetDocs.com for AIpkg.Core, docs.aipkg.org developer portal
+  <Card title="07 · Platform Versioning" icon="git-merge" href="07-platform-versioning">
+    Versioned APM monikers, breaking change policy, fallback behavior, publisher guidance.
   </Card>
-  <Card title="08 · Migration Plan" icon="arrow-right-arrow-left" href="08-migration-plan">
-    Phased migration from NuGetGallery, project renames, deletions
+</CardGroup>
+
+### Package Content
+
+<CardGroup cols={1}>
+  <Card title="08 · Metadata Schema" icon="file-code" href="08-metadata-schema">
+    Full `.aispec` JSON Schema, field reference, capability and permission enums, examples.
+  </Card>
+</CardGroup>
+
+### Registry Protocol
+
+<CardGroup cols={3}>
+  <Card title="09 · Registry API" icon="server" href="09-registry-api">
+    All registry endpoints — service index, registration, search, push, platform list.
+  </Card>
+  <Card title="10 · SDK Interface" icon="terminal" href="10-sdk-interface">
+    `AIpkg.Core` public API types, `aipkg` CLI command syntax, config file schemas.
+  </Card>
+  <Card title="11 · Registry UI" icon="display" href="11-registry-ui">
+    URL inventory, rendering requirements, performance targets, accessibility, SEO.
   </Card>
 </CardGroup>
 
@@ -50,20 +80,17 @@ AIpkg maps directly onto the NuGet conceptual model:
 | `contentFiles/` | `shared/` | Platform-agnostic assets |
 | Package Type | Capabilities | `mcp-server`, `skill`, `command`, `agent`, `prompt`, `config` |
 | `NuGet.org` | `AIpkg.org` | Registry |
-| `NuGetGallery` | `AIpkgGallery` | Server codebase |
-| `AIpkg.Core` | `AIpkg.Core` | Shared parsing/validation library |
 
 ---
 
 ## Key Principles
 
-1. **V3-only public API** — No V2/OData on the public surface. V3 JSON endpoints only.
-2. **APM-first design** — Every package operation is aware of platform targeting.
-3. **`.aispec` is JSON** — Not XML. The `{id}.aispec` naming mirrors `.nuspec` and `.csproj` conventions.
-4. **EasyAF for data layer** — SQL Server DB Project as schema source of truth; code-generated EF Core entities and repositories; OData Restier for admin/internal API only.
-5. **Blazor SSR** — No Razor views, no jQuery, no OWIN. Static SSR for public pages, interactive server for upload/admin.
-6. **AOT CLI** — `aipkg` ships as a single native binary with no runtime dependency.
-7. **Parallel workstreams** — Specs are written so frontend and backend teams can work independently after Phase 1.
+1. **APM-first design** — Every package operation is aware of platform targeting. The fallback graph ensures packages work across platform versions without requiring republication.
+2. **`.aispec` is JSON** — Not XML. The `{id}.aispec` naming mirrors `.nuspec` and `.csproj` conventions.
+3. **Forward compatibility** — Unknown APM monikers are silently skipped, never errors. No moniker is ever deleted from the canonical table.
+4. **Immutable versions** — Published versions cannot be overwritten. Unlisting is the only mechanism to hide a version.
+5. **Normative API-first** — Every registry behavior is defined by its API contract, not by server implementation details.
+6. **AOT-capable SDK** — `AIpkg.Core` is AOT-compatible; no dynamic code. The `aipkg` CLI ships as a single native binary.
 
 ---
 
@@ -72,10 +99,11 @@ AIpkg maps directly onto the NuGet conceptual model:
 A complete spec suite must allow:
 
 - [ ] Someone to implement a `.aipkg` parser from spec alone (→ [spec 01](01-aipkg-format))
-- [ ] Someone to implement APM resolution and install path logic (→ [spec 02](02-platform-targeting))
-- [ ] Someone to write a JSON Schema validator for `.aispec` (→ [spec 03](03-metadata-schema))
-- [ ] Someone to implement every V3 endpoint with correct request/response shapes (→ [spec 04](04-server-infrastructure))
-- [ ] Frontend and backend teams to proceed independently (→ [spec 04](04-server-infrastructure) + [spec 05](05-frontend-ui))
-- [ ] Someone to implement `AIpkg.Core` public API (→ [spec 06](06-sdk-tooling))
-- [ ] Someone to set up DotNetDocs.com hosting (→ [spec 07](07-docs-platform))
-- [ ] A migration engineer to execute Phase 0 without ambiguity (→ [spec 08](08-migration-plan))
+- [ ] Someone to implement package ID validation (→ [spec 02](02-package-naming))
+- [ ] Someone to implement version parsing and range resolution (→ [spec 03](03-versioning))
+- [ ] Someone to implement APM resolution and install path logic (→ [spec 06](06-platform-targeting))
+- [ ] Someone to handle platform evolution correctly (→ [spec 07](07-platform-versioning))
+- [ ] Someone to write a JSON Schema validator for `.aispec` (→ [spec 08](08-metadata-schema))
+- [ ] Someone to implement every registry endpoint with correct request/response shapes (→ [spec 09](09-registry-api))
+- [ ] Someone to implement `AIpkg.Core` public API (→ [spec 10](10-sdk-interface))
+- [ ] Someone to build a compatible registry web UI (→ [spec 11](11-registry-ui))

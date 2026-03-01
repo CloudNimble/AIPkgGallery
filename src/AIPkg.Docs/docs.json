@@ -4,7 +4,7 @@
     "light": "#419AC5",
     "primary": "#419AC5"
   },
-  "name": "AIPkg.Docs",
+  "name": "AIPkg",
   "navigation": {
     "pages": [
       {
@@ -21,14 +21,52 @@
         "icon": "book-open",
         "pages": [
           "specs/index",
-          "specs/01-aipkg-format",
-          "specs/02-platform-targeting",
-          "specs/03-metadata-schema",
-          "specs/04-server-infrastructure",
-          "specs/05-frontend-ui",
-          "specs/06-sdk-tooling",
-          "specs/07-docs-platform",
-          "specs/08-migration-plan"
+          {
+            "group": "Package Identity",
+            "pages": [
+              "specs/01-aipkg-format",
+              "specs/02-package-naming",
+              "specs/03-versioning",
+              "specs/04-prefix-reservations",
+              "specs/05-code-signing"
+            ]
+          },
+          {
+            "group": "Platform Targeting",
+            "pages": [
+              "specs/06-platform-targeting",
+              "specs/07-platform-versioning"
+            ]
+          },
+          {
+            "group": "Package Content",
+            "pages": [
+              "specs/08-metadata-schema"
+            ]
+          },
+          {
+            "group": "Registry Protocol",
+            "pages": [
+              "specs/09-registry-api",
+              "specs/10-sdk-interface",
+              "specs/11-registry-ui"
+            ]
+          }
+        ]
+      },
+      {
+        "group": "Implementation Plan",
+        "icon": "map",
+        "pages": [
+          "plan/index",
+          "plan/01-tech-stack",
+          "plan/02-solution-structure",
+          "plan/03-data-layer",
+          "plan/04-frontend-implementation",
+          "plan/05-server-implementation",
+          "plan/06-sdk-implementation",
+          "plan/07-docs-portal-setup",
+          "plan/08-migration"
         ]
       },
       {

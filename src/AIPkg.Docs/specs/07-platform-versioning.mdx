@@ -1,0 +1,187 @@
+---
+title: "Platform Versioning"
+sidebarTitle: "07 · Platform Versioning"
+description: "How APM versioning handles breaking changes in host platforms — what counts as a breaking change, versioned moniker children, fallback behavior, deprecation policy, and publisher guidance."
+icon: "git-merge"
+---
+
+AI platforms evolve. Claude Code may change its MCP JSON schema. GitHub Copilot may rename its instruction file format. Windsurf may move its config directory. When a platform makes a breaking change, packages targeting the old behavior break on new platform versions.
+
+APM versioning is the mechanism that allows packages to target specific platform generations without invalidating older packages.
+
+---
+
+## The Problem
+
+Consider a scenario:
+
+1. Claude Code 1.x reads MCP server configs from `.claude/mcp.json`
+2. A package ships `apm/claude-code/mcp/server-config.json`
+3. Claude Code 2.x changes to `.claude/mcp_servers.json` and uses a different schema
+4. All existing packages break on Claude Code 2.x
+
+Without APM versioning, the only solution is for every package author to immediately update and republish. With APM versioning, package authors can **add a new target** for the new platform version while the old version continues working.
+
+---
+
+## APM Version Tags
+
+A versioned APM moniker is a child of the unversioned moniker:
+
+```
+claude-code       ← unversioned (matches all versions via fallback)
+claude-code-2     ← versioned child (targets Claude Code 2.x specifically)
+claude-code-3     ← future version
+```
+
+Versioned monikers follow the same syntax rules as all APMs: lowercase, alphanumeric, hyphens only.
+
+### In the Fallback Graph
+
+```
+claude-code-2  →  claude-code  →  claude  →  ai  →  shared
+```
+
+A `claude-code-2` install walks the full chain. A package that only ships `apm/claude-code/` content **still works** on `claude-code-2` via fallback — it just uses the older content. The publisher is responsible for updating their package to add `apm/claude-code-2/` when the breaking change requires it.
+
+---
+
+## What Counts as a Breaking Change
+
+A breaking change in a platform is an event that causes previously working package content to fail or behave incorrectly on the new platform version.
+
+**Breaking changes** (trigger a new versioned moniker):
+
+| Category | Examples |
+|----------|---------|
+| Configuration schema changes | MCP JSON field renames or removals; `settings.json` format changes |
+| Hook event changes | Event name renames, removal of `matcher` support, payload schema changes |
+| Install path changes | `.claude/` moving to `.claude-code/` or similar |
+| File format changes | Skill file format changes from Markdown to a structured format |
+| API changes | Claude Code plugin API breaking changes |
+
+**Non-breaking changes** (do NOT trigger a new versioned moniker):
+
+| Category | Examples |
+|----------|---------|
+| Additive schema changes | New optional fields in `mcp.json` |
+| Performance improvements | Faster hook execution |
+| New capabilities | New hook event types added (old ones still work) |
+| UI changes | Different display of skills or commands in the IDE |
+
+---
+
+## Fallback Graph Behavior
+
+### Most-Specific Match Wins
+
+Given a `claude-code-2` install:
+
+1. Files in `apm/claude-code-2/` are installed (highest specificity)
+2. Files in `apm/claude-code/` are installed where `apm/claude-code-2/` has no override
+3. Files in `apm/claude/` → `apm/ai/` → `shared/` fill in the rest
+
+A package that only has `apm/claude-code/` content continues to work on `claude-code-2` via fallback — it will use the `claude-code` content on a `claude-code-2` host.
+
+### Unknown Versioned Monikers
+
+Clients MUST:
+- **Silently skip** `apm/{unknown-moniker}/` directories during extraction
+- **Not fail** and **not warn** the user when an unknown moniker directory is encountered
+- Log the skipped moniker for diagnostics (at `debug` verbosity or lower)
+
+This ensures that packages with `apm/claude-code-3/` content continue to install correctly on older `aipkg` CLI versions that don't know about `claude-code-3`.
+
+---
+
+## Deprecation Policy
+
+When a platform version is discontinued (e.g., a host platform drops support for a major version):
+
+1. The moniker is marked `deprecated` in the canonical table
+2. The registry shows a deprecation notice on package detail pages for packages that target only the deprecated moniker
+3. The moniker is **never deleted** — forward compatibility is a hard guarantee
+4. Package authors receive email notification (if opted in) when their targeted platform is deprecated
+
+---
+
+## Communication of Breaking Changes
+
+Platform maintainers communicate breaking changes via the registry's platform changelog:
+
+```http
+GET /v3/platforms/{moniker}/changelog
+```
+
+```json
+{
+  "moniker": "claude-code",
+  "entries": [
+    {
+      "version": "claude-code-2",
+      "date": "2025-06-01",
+      "summary": "MCP server config moved from mcp.json to mcp_servers.json; schema updated.",
+      "breakingChanges": [
+        "apm/claude-code/mcp/ files must use new schema; old format ignored",
+        "hook PreToolUse payload now includes tool version"
+      ],
+      "migrationGuide": "https://docs.claude.ai/claude-code/migration/v2"
+    }
+  ]
+}
+```
+
+Package authors are notified by email when a platform they target introduces a breaking change (i.e., a new versioned moniker is added).
+
+---
+
+## Publisher Guidance
+
+When a platform you target introduces a breaking change:
+
+<Steps>
+  <Step title="Read the changelog">
+    Fetch `GET /v3/platforms/{moniker}/changelog` and review the `breakingChanges` for the new versioned moniker.
+  </Step>
+  <Step title="Determine impact">
+    Assess whether your package's content in `apm/{moniker}/` is affected by the breaking change.
+  </Step>
+  <Step title="If affected: add a new target directory">
+    Add `apm/{moniker}-{version}/` to your package with content updated for the new platform version.
+
+    ```
+    my-tool.2.0.0.aipkg
+    ├── apm/
+    │   ├── claude-code/        ← Works on claude-code-1.x (unchanged)
+    │   │   └── mcp/
+    │   │       └── server-config.json  ← Old schema
+    │   └── claude-code-2/      ← New: works on claude-code-2.x
+    │       └── mcp/
+    │           └── server-config.json  ← New schema
+    ```
+  </Step>
+  <Step title="Bump version and publish">
+    Increment the package version (follow SemVer: new platform target is typically a minor bump unless it removes a previously supported platform). Publish the updated package.
+  </Step>
+</Steps>
+
+---
+
+## `shared/` Stability
+
+Content in `shared/` is by definition platform-agnostic. It is immune to platform breaking changes because it does not rely on any platform-specific schema or path.
+
+<Warning>
+  `AipkgValidator` emits a warning (code `SHARED_PLATFORM_SPECIFIC`) if `shared/` contains files that appear to target a specific platform (e.g., `shared/mcp/server-config.json` containing `claude-code`-specific fields). Consider moving such content to `apm/{moniker}/`.
+</Warning>
+
+---
+
+## Normative Rules for Clients
+
+Clients implementing the `aipkg install` behavior MUST comply with the following:
+
+1. **Unknown monikers MUST be silently skipped.** Clients MUST NOT fail or warn the user when encountering `apm/{unknown-moniker}/` directories.
+2. **Unknown monikers SHOULD be logged** at `debug` verbosity for diagnostics.
+3. **Fallback resolution MUST walk the full chain.** A `claude-code-2` install must still apply `apm/claude-code/`, `apm/claude/`, `apm/ai/`, and `shared/` content in order.
+4. **Monikers MUST NOT be deleted from client implementations** based on their deprecation status. A deprecated moniker in the canonical table must remain valid for resolution purposes.

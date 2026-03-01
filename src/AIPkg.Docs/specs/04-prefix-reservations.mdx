@@ -1,0 +1,125 @@
+---
+title: "Prefix Reservations"
+sidebarTitle: "04 · Prefix Reservations"
+description: "Exclusive prefix ownership for verified publishers — what it is, syntax rules, how to claim a prefix, badge display, what reservation does and does not protect, and transfer/release policy."
+icon: "shield-check"
+---
+
+Prefix reservations give verified publishers the exclusive right to publish packages whose IDs begin with a specific prefix. This prevents impersonation and establishes clear ownership boundaries for ecosystems of related packages.
+
+---
+
+## What It Is
+
+A prefix reservation associates a package ID prefix with a verified registry account. Once reserved:
+
+- Only the owning account (and accounts they delegate to) may push packages whose IDs start with the prefix
+- Packages from the owning account display a **verified badge** on search cards and detail pages
+- Packages from unverified accounts whose IDs start with the prefix are **quarantined** (push is accepted but package is held pending review)
+
+Prefix reservations are analogous to NuGet.org's [prefix reservation feature](https://learn.microsoft.com/en-us/nuget/nuget-org/id-prefix-reservation).
+
+---
+
+## Prefix Syntax Rules
+
+A valid prefix must:
+
+- End in `-` or `.` (the terminating separator)
+- Be at least **3 characters** long (including the separator)
+- Match the package ID character set: `[a-z][a-z0-9\-\.]*` followed by `-` or `.`
+- Not be a prefix of an already-reserved prefix owned by another account (no nesting conflicts)
+
+**Valid examples:**
+
+| Prefix | Packages it covers |
+|--------|--------------------|
+| `acme-` | `acme-tools`, `acme-git-helpers`, `acme-mcp` |
+| `acme.` | `acme.core`, `acme.tools.git` |
+| `openai-` | `openai-tools`, `openai-plugins` |
+
+**Invalid examples:**
+
+| Prefix | Reason |
+|--------|--------|
+| `ac-` | Too short (less than 3 chars before separator) |
+| `acme` | Does not end in `-` or `.` |
+| `ACME-` | Uppercase not permitted |
+
+---
+
+## How to Claim a Prefix
+
+<Steps>
+  <Step title="Submit a request">
+    Fill out the prefix reservation form in the registry UI at `/account/prefix-reservations/new`. Provide:
+    - The desired prefix
+    - Your GitHub organization or user handle
+    - A brief justification (e.g., "We maintain the official Acme MCP integrations")
+  </Step>
+  <Step title="Manual review">
+    The registry team reviews the request. Approval criteria:
+    - The prefix clearly maps to the requester's published identity or project
+    - The requester already owns (or intends to publish) packages under the prefix
+    - No existing packages from other accounts would be retroactively quarantined
+  </Step>
+  <Step title="Reservation active">
+    Once approved, the prefix is active. The account receives a notification, and their existing packages under that prefix gain the verified badge immediately.
+  </Step>
+</Steps>
+
+---
+
+## Verified Badge
+
+Packages from verified prefix owners display a shield badge (✓) on:
+- Search result cards
+- Package detail page headers
+- The `verified: true` field in search API responses
+
+The badge tooltip shows: *"Verified publisher: {account}"*
+
+---
+
+## What Reservation Does NOT Do
+
+Prefix reservations provide **registry-level** ownership, not legal protection:
+
+- **No trademark protection** — A reservation does not grant intellectual property rights. Trademark disputes are handled outside the registry.
+- **No domain verification** — Claiming `acme-` does not verify that you own `acme.com`.
+- **No retroactive cleanup** — Packages from other accounts that predate the reservation are not deleted. They are quarantined only if a new push arrives after the reservation is active.
+- **No subdomain enforcement** — Reserving `acme-` does not cover `my-acme-tool` (the prefix must appear at the start of the ID).
+
+---
+
+## Transfer and Release Policy
+
+### Transfer
+
+Transferring a prefix reservation to another account requires registry team involvement. Both the current owner and the receiving account must confirm the transfer via email.
+
+### Voluntary Release
+
+An owner may release a reservation voluntarily by submitting a request via the registry UI. Released prefixes become available for anyone to claim after a **30-day cooling period**.
+
+### Revocation
+
+The registry team may revoke a reservation for:
+- **Abuse** — using the prefix to impersonate another project or distribute malicious packages
+- **24-month inactivity** — no packages published under the prefix for 24 consecutive months, with no response to a warning email within 30 days
+
+---
+
+## Registry API
+
+There is **no public endpoint** for prefix reservation management at MVP. The `verified` boolean in search results and registration blobs is set server-side and is not directly queryable.
+
+```json
+{
+  "id": "acme-git-helpers",
+  "verified": true,
+  ...
+}
+```
+
+Future versions of the API may expose `GET /v3/prefixes/{prefix}` to query reservation status.

@@ -1,0 +1,124 @@
+---
+title: "Server Implementation"
+sidebarTitle: "05 · Server Implementation"
+description: "Authentication, storage, search index, background jobs, NuGet V3 → AIpkg endpoint mapping, and server-side implementation details."
+icon: "server"
+---
+
+This document covers the implementation details for `AIpkg.Server` that are specific to how we build the registry — not the public API contract (see [Registry API spec](../specs/09-registry-api)).
+
+---
+
+## Authentication
+
+<Tabs>
+  <Tab title="GitHub OAuth">
+    Used for web UI login. Scope: `read:user`, `user:email`.
+
+    Port the existing GitHub OAuth flow from NuGetGallery. No structural changes.
+  </Tab>
+  <Tab title="API Keys (PBKDF2)">
+    Used for `aipkg push` and programmatic access. Port the existing `ApiKeyV4` PBKDF2 system:
+
+    - Keys are hashed (PBKDF2-SHA256) on creation; plaintext is never stored
+    - Keys have scopes: `push`, `push:new-packages`, `unlist`
+    - Keys have expiry (max 365 days)
+    - Keys can be scoped to specific package ID prefixes
+  </Tab>
+  <Tab title="OIDC (Post-MVP)">
+    Add generic OIDC provider support for enterprise use cases. Implemented post-MVP alongside GitHub OAuth.
+  </Tab>
+</Tabs>
+
+---
+
+## Storage
+
+Azure Blob Storage containers:
+
+| Container | Contents |
+|-----------|----------|
+| `aipkg-packages` | `.aipkg` archive files |
+| `aipkg-manifests` | Extracted `.aispec` files (for fast manifest reads) |
+| `aipkg-registration` | Registration JSON blobs (registration pages) |
+| `aipkg-icons` | Extracted and resized package icons |
+| `aipkg-readmes` | Extracted README files |
+
+Port `ICoreFileStorageService` from NuGetGallery. Rename all `.nupkg` references to `.aipkg`.
+
+---
+
+## Search Index
+
+Azure AI Search index: `aipkg-packages`
+
+Port the indexing pipeline from `NuGet.Services.AzureSearch`. Replace `BaseMetadataDocument` with `AipkgSearchDocument`:
+
+| Field | Type | Searchable | Filterable | Sortable |
+|-------|------|------------|------------|----------|
+| `id` | string | yes | yes | yes |
+| `version` | string | no | no | no |
+| `title` | string | yes | no | no |
+| `description` | string | yes | no | no |
+| `authors` | string[] | yes | yes | no |
+| `tags` | string[] | yes | yes | no |
+| `capabilities` | string[] | no | yes | no |
+| `targets` | string[] | no | yes | no |
+| `permissions` | string[] | no | yes | no |
+| `totalDownloads` | int64 | no | no | yes |
+| `lastPublished` | DateTimeOffset | no | yes | yes |
+| `listed` | bool | no | yes | no |
+| `verified` | bool | no | yes | no |
+
+---
+
+## Background Jobs
+
+| Job | Source | Adaptation |
+|-----|--------|-----------|
+| CDN stats parsing | `src/Stats.*` | Parse `.aipkg` download events |
+| GitHub vulnerability | `src/GitHubVulnerabilities2Db/` | Adapt package ID resolution |
+| Search index sync | NuGet.Services.AzureSearch | New document model |
+| Registration blob builder | Catalog2Registration | Updated JSON-LD schema |
+| License scanning | Validation jobs | Evaluate; lower priority |
+
+All background jobs are consolidated into `AIpkg.Jobs/` (a single project). Each job is implemented as a hosted service or Azure Function, depending on runtime requirements.
+
+---
+
+## NuGet V3 → AIpkg Registry API Endpoint Mapping
+
+This table documents the mapping from NuGetGallery's V3 endpoints to AIpkg's registry endpoints. Use it when porting endpoint logic from `NuGetGallery/Controllers/ApiController.cs` and related sources.
+
+| NuGet V3 Source Endpoint | AIpkg Registry Endpoint | Delta |
+|--------------------------|-------------------------|-------|
+| `GET /v3/index.json` | `GET /v3/index.json` | Updated `@type` values for new resource types |
+| `GET /v3/registration/{id}/index.json` | `GET /v3/registration/{id}/index.json` | New fields: `capabilities`, `targets`, `permissions`; remove `requireLicenseAcceptance`, `semVerLevel` |
+| `GET /v3/registration/{id}/{lower}.json` | `GET /v3/registration/{id}/{lower}.json` | Same shape; AIpkg fields substituted |
+| `GET /v3/flatcontainer/{id}/index.json` | `GET /v3/flatcontainer/{id}/index.json` | No change |
+| `GET /v3/flatcontainer/{id}/{v}/{id}.{v}.nupkg` | `GET /v3/flatcontainer/{id}/{v}/{id}.{v}.aipkg` | Extension: `.nupkg` → `.aipkg`; MIME: `application/x-aipkg` |
+| _(none)_ | `GET /v3/flatcontainer/{id}/{v}/{id}.{v}.aispec` | **New**: manifest-only endpoint; no archive download needed |
+| `GET /v3/search` | `GET /v3/search` | New query params: `apm`, `capability`, `permission`; response fields renamed |
+| `GET /v3/autocomplete` | `GET /v3/autocomplete` | No change |
+| `PUT /v3/package` | `PUT /v3/package` | `.aipkg` payload; new validation rules |
+| `DELETE /v3/package/{id}/{version}` | `DELETE /v3/package/{id}/{version}` | Same behavior (unlist, not physical delete) |
+| _(none)_ | `GET /v3/platforms` | **New**: canonical APM platform list |
+| _(none)_ | `GET /v3/registration/{id}/{v}/install/{apm}` | **New**: per-APM resolved install manifest |
+
+---
+
+## Source Files to Port
+
+Key NuGetGallery source files and their AIpkg destinations:
+
+| NuGetGallery source | AIpkg destination | Action |
+|---------------------|-------------------|--------|
+| `src/NuGetGallery/Controllers/ApiController.cs` (V3 parts) | `AIpkg.Server/Api/V3/` | Port push/delete/autocomplete as Minimal APIs |
+| `src/NuGet.Jobs.Catalog2Registration/Schema/EntityBuilder.cs` | `AIpkg.Server/Jobs/RegistrationBuilder.cs` | Port; update JSON-LD schema |
+| `src/NuGetGallery/Services/PackageService.cs` | `AIpkg.Server/Services/PackageService.cs` | Port; strip symbol/V2 logic |
+| `src/NuGetGallery/Services/UserService.cs` | `AIpkg.Server/Services/UserService.cs` | Port PBKDF2 API key management |
+| `src/NuGetGallery/Authentication/` | `AIpkg.Server/Auth/` | Port GitHub OAuth + API key auth |
+| `src/NuGetGallery.Core/Services/CorePackageFileService.cs` | `AIpkg.Server/Storage/PackageStorageService.cs` | Port; rename `.nupkg` → `.aipkg` |
+| `src/NuGet.Services.AzureSearch/Models/BaseMetadataDocument.cs` | `AIpkg.Server.Search/AipkgSearchDocument.cs` | Port structure; adapt fields |
+| `src/Stats.*` | `src/AIpkg.Jobs/Stats/` | Port CDN stats parsing; adapt for `.aipkg` |
+| `src/GitHubVulnerabilities2Db/` | `src/AIpkg.Jobs/Vulnerabilities/` | Port; adapt package ID resolution |

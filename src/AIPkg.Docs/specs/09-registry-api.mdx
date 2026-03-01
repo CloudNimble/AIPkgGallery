@@ -1,0 +1,287 @@
+---
+title: "Registry API"
+sidebarTitle: "09 · Registry API"
+description: "AIpkg Registry API endpoint reference — service index, registration, flat container, search, autocomplete, push, platform list, and non-functional requirements."
+icon: "server"
+---
+
+The AIpkg Registry API provides all endpoints needed to publish, discover, and install packages. All endpoints are under `/v3/` and return JSON.
+
+<Info>
+  The registry publishes a machine-readable OpenAPI specification at `GET /v3/openapi.json`. Consuming this endpoint is the recommended way to generate client SDKs or interactive documentation for the registry.
+</Info>
+
+---
+
+## Service Index
+
+```http
+GET /v3/index.json
+```
+
+Returns the service index listing all available resource endpoints.
+
+```json
+{
+  "@context": { "@vocab": "http://schema.nuget.org/services#" },
+  "version": "3.0.0",
+  "resources": [
+    {
+      "@id": "https://aipkg.org/v3/registration/",
+      "@type": "RegistrationsBaseUrl/3.6.0",
+      "comment": "Base URL for package registration blobs."
+    },
+    {
+      "@id": "https://aipkg.org/v3/flatcontainer/",
+      "@type": "PackageBaseAddress/3.0.0",
+      "comment": "Base URL for package downloads."
+    },
+    {
+      "@id": "https://aipkg.org/v3/search",
+      "@type": "SearchQueryService/3.5.0",
+      "comment": "Search endpoint with APM and capability filters."
+    },
+    {
+      "@id": "https://aipkg.org/v3/autocomplete",
+      "@type": "SearchAutocompleteService/3.5.0",
+      "comment": "Autocomplete for package IDs."
+    },
+    {
+      "@id": "https://aipkg.org/v3/package",
+      "@type": "PackagePublish/2.0.0",
+      "comment": "Package push endpoint."
+    },
+    {
+      "@id": "https://aipkg.org/v3/platforms",
+      "@type": "PlatformList/1.0.0",
+      "comment": "List of known AI Platform Monikers."
+    }
+  ]
+}
+```
+
+---
+
+## Registration
+
+```http
+GET /v3/registration/{id}/index.json
+GET /v3/registration/{id}/{lower-version}.json
+```
+
+Returns package registration data. Uses paged blobs identical to NuGet registration blobs, but with updated JSON-LD schema fields:
+
+- Replace `packageTypes` → `capabilities`
+- Replace `targetFrameworks` → `targets` (APM monikers)
+- Add `permissions`, `mcpServers`, `modelCompatibility`
+- Remove: `requireLicenseAcceptance`, `developmentDependency`, `semVerLevel`
+
+---
+
+## Flat Container (Downloads)
+
+```http
+GET /v3/flatcontainer/{id}/index.json
+→ { "versions": ["1.0.0", "1.1.0", "2.0.0"] }
+
+GET /v3/flatcontainer/{id}/{version}/{id}.{version}.aipkg
+→ 200 application/x-aipkg  (binary stream)
+
+GET /v3/flatcontainer/{id}/{version}/{id}.{version}.aispec
+→ 200 application/json  (manifest only, unzipped)
+```
+
+<Tip>
+  The `.aispec` endpoint lets clients read manifest metadata without downloading the full archive.
+</Tip>
+
+---
+
+## Search
+
+```http
+GET /v3/search
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `q` | string | Full-text search query |
+| `skip` | integer | Pagination offset (default: 0) |
+| `take` | integer | Page size (default: 20, max: 100) |
+| `prerelease` | boolean | Include pre-release versions (default: false) |
+| `apm` | string | Filter by AI Platform Moniker (uses fallback graph expansion) |
+| `capability` | string | Filter by capability value |
+| `permission` | string | Filter by declared permission |
+
+**Response:**
+
+```json
+{
+  "@context": { "@vocab": "http://schema.nuget.org/services#" },
+  "totalHits": 142,
+  "data": [
+    {
+      "@id": "https://aipkg.org/v3/registration/git-helpers/index.json",
+      "@type": "Package",
+      "id": "git-helpers",
+      "version": "1.0.0",
+      "description": "A collection of Git workflow skills for AI coding assistants.",
+      "authors": ["Jane Developer"],
+      "capabilities": ["skill"],
+      "targets": ["claude-code", "copilot-vscode", "cursor"],
+      "tags": ["git", "workflow"],
+      "totalDownloads": 8432,
+      "verified": false,
+      "versions": [
+        { "version": "0.9.0", "@id": "...", "downloads": 1200 },
+        { "version": "1.0.0", "@id": "...", "downloads": 7232 }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## Autocomplete
+
+```http
+GET /v3/autocomplete?q={prefix}&take={n}
+→ { "totalHits": 5, "data": ["git-helpers", "git-flow", ...] }
+
+GET /v3/autocomplete?id={id}&prerelease=false
+→ { "totalHits": 3, "data": ["1.0.0", "1.1.0", "2.0.0"] }
+```
+
+---
+
+## Package Push
+
+```http
+PUT /v3/package
+Authorization: ApiKey {key}
+Content-Type: multipart/form-data
+
+Body: multipart with the .aipkg file
+```
+
+**Success:** `201 Created` with `Location: /v3/registration/{id}/{version}.json`
+
+**Error responses:**
+
+| Code | Condition |
+|------|-----------|
+| 400 | Invalid package (validation failure, malformed archive, missing manifest) |
+| 401 | Missing or invalid API key |
+| 403 | API key does not have push permission for this package ID |
+| 409 | Version already exists |
+| 413 | Archive exceeds 512 MB size limit |
+
+---
+
+## Package Delete (Unlist)
+
+```http
+DELETE /v3/package/{id}/{version}
+Authorization: ApiKey {key}
+```
+
+Marks the version as unlisted (sets `listed: false`). Does not physically delete the package from storage. Returns `204 No Content`.
+
+---
+
+## Platform List
+
+```http
+GET /v3/platforms
+```
+
+```json
+{
+  "version": "1.0.0",
+  "platforms": [
+    {
+      "moniker": "claude-code",
+      "displayName": "Claude Code",
+      "parent": "claude",
+      "installPath": ".claude/",
+      "stability": "stable"
+    },
+    {
+      "moniker": "cursor",
+      "displayName": "Cursor",
+      "parent": "ai",
+      "installPath": ".cursor/",
+      "stability": "stable"
+    }
+  ]
+}
+```
+
+---
+
+## Per-Platform Install Manifest
+
+```http
+GET /v3/registration/{id}/{version}/install/{apm}
+```
+
+Returns the list of files that would be installed for a given APM, with their source paths resolved through the fallback graph. Allows clients to preview what they will receive before downloading the full archive.
+
+```json
+{
+  "id": "git-helpers",
+  "version": "1.0.0",
+  "apm": "claude-code",
+  "resolvedChain": ["apm/claude-code", "apm/claude", "apm/ai", "shared"],
+  "files": [
+    {
+      "sourcePath": "shared/prompts/base-prompt.md",
+      "installPath": ".claude/prompts/base-prompt.md",
+      "resolvedFrom": "shared"
+    },
+    {
+      "sourcePath": "apm/claude-code/skills/my-tool.md",
+      "installPath": ".claude/plugins/git-helpers/skills/my-tool.md",
+      "resolvedFrom": "apm/claude-code"
+    }
+  ]
+}
+```
+
+---
+
+## Non-Functional Requirements
+
+| Requirement | Target |
+|-------------|--------|
+| Package push latency | < 10s for packages < 10 MB |
+| Search query p99 | < 500ms |
+| Registration blob cache TTL | 5 minutes |
+| Package download | Streaming; no buffering in server memory |
+| API rate limiting | 100 req/min per IP (unauthenticated), 1,000/min (authenticated) |
+| Max concurrent pushes per key | 5 |
+
+---
+
+## Search Index Fields
+
+The following fields are indexed and available for filtering in the search endpoint:
+
+| Field | Type | Searchable | Filterable | Sortable |
+|-------|------|------------|------------|----------|
+| `id` | string | yes | yes | yes |
+| `version` | string | no | no | no |
+| `title` | string | yes | no | no |
+| `description` | string | yes | no | no |
+| `authors` | string[] | yes | yes | no |
+| `tags` | string[] | yes | yes | no |
+| `capabilities` | string[] | no | yes | no |
+| `targets` | string[] | no | yes | no |
+| `permissions` | string[] | no | yes | no |
+| `totalDownloads` | int64 | no | no | yes |
+| `lastPublished` | DateTimeOffset | no | yes | yes |
+| `listed` | bool | no | yes | no |
+| `verified` | bool | no | yes | no |

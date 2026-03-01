@@ -9,7 +9,8 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:deepwiki.com)",
       "WebFetch(domain:smartscope.blog)",
-      "WebFetch(domain:undercodenews.com)"
+      "WebFetch(domain:undercodenews.com)",
+      "Bash(timeout /t 20:*)"
     ]
   }
 }

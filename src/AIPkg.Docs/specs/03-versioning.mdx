@@ -1,0 +1,131 @@
+---
+title: "Versioning"
+sidebarTitle: "03 · Versioning"
+description: "SemVer 2.0.0 compliance, pre-release versions, build metadata, version normalization, dependency version ranges, version ordering, and immutability rules."
+icon: "git-branch"
+---
+
+AIpkg uses **Semantic Versioning 2.0.0** (SemVer 2.0.0) for all package versions. This document is the normative versioning specification.
+
+---
+
+## SemVer 2.0.0 Compliance
+
+All AIpkg versions must be valid SemVer 2.0.0 strings. The full specification is at [semver.org](https://semver.org).
+
+**All three components are required.** Shorthand is not accepted:
+
+| Input | Status | Notes |
+|-------|--------|-------|
+| `1.2.3` | Valid | Standard release |
+| `1.0.0-alpha.1` | Valid | Pre-release |
+| `1.0.0+build.42` | Valid | Build metadata |
+| `1.0.0-beta.1+exp.sha.5114f85` | Valid | Pre-release + build metadata |
+| `1.0` | **Invalid** | Missing patch component |
+| `1` | **Invalid** | Missing minor and patch |
+| `v1.2.3` | **Invalid** | Leading `v` not permitted |
+
+---
+
+## Pre-Release Versions
+
+Versions with a pre-release identifier (the `-` suffix) are recognized as pre-release:
+
+| Identifier | Convention | Search behavior |
+|------------|------------|-----------------|
+| `-alpha`, `-alpha.1` | Alpha stage | Excluded from stable search by default |
+| `-beta`, `-beta.1` | Beta stage | Excluded from stable search by default |
+| `-rc`, `-rc.1` | Release candidate | Excluded from stable search by default |
+| `-preview`, `-preview.1` | Preview | Excluded from stable search by default |
+
+<Note>
+  Pre-release identifiers are not enforced — any SemVer-valid pre-release string is accepted. The values above are recognized conventions that affect UI labeling.
+</Note>
+
+Pre-release versions are:
+- Hidden from search results unless `prerelease=true` is passed
+- Listed below stable versions on the package detail page
+- Installable explicitly by specifying the full version string
+
+---
+
+## Build Metadata
+
+Build metadata (the `+` suffix) is:
+- **Stored** by the registry verbatim
+- **Stripped** for version comparison (two versions differing only in build metadata are equal)
+- **Not indexed** — `+build.42` is not searchable
+
+---
+
+## Version Normalization
+
+The registry applies normalization at push time. Normalized versions are stored and returned in all API responses.
+
+| Input | Normalized | Notes |
+|-------|------------|-------|
+| `1.0.0.0` | `1.0.0` | Trailing `.0` components removed |
+| `01.02.03` | `1.2.3` | Leading zeros removed from numeric parts |
+| `1.0.0-Alpha.1` | `1.0.0-Alpha.1` | Pre-release identifiers are case-preserved |
+| `1.0.0+build.SHA` | `1.0.0+build.SHA` | Build metadata is case-preserved |
+
+---
+
+## Dependency Version Ranges
+
+Dependency version constraints in `.aispec` use **NuGet version range notation**:
+
+| Notation | Meaning | Example |
+|----------|---------|---------|
+| `1.0.0` | Minimum version (inclusive), no upper bound | `≥ 1.0.0` |
+| `[1.0.0]` | Exact version | `= 1.0.0` |
+| `[1.0.0,2.0.0)` | Range: inclusive lower, exclusive upper | `≥ 1.0.0 and < 2.0.0` |
+| `[1.0.0,2.0.0]` | Range: both inclusive | `≥ 1.0.0 and ≤ 2.0.0` |
+| `(1.0.0,2.0.0)` | Range: both exclusive | `> 1.0.0 and < 2.0.0` |
+| `(,2.0.0)` | Any version less than 2.0.0 | `< 2.0.0` |
+| `[,2.0.0]` | Any version up to and including 2.0.0 | `≤ 2.0.0` |
+
+Version ranges are **resolved client-side** by the `aipkg` CLI using the version list from `GET /v3/flatcontainer/{id}/index.json`.
+
+---
+
+## Version Ordering
+
+Versions are ordered as follows:
+
+1. **Release versions** sort by major, minor, patch (numeric, descending for "latest")
+2. **Pre-release versions** sort below the corresponding release version
+3. **Pre-release identifiers** are compared per SemVer rules:
+   - Numeric identifiers are compared numerically: `rc.2` > `rc.1`
+   - Alphanumeric identifiers are compared lexically: `rc` > `beta` > `alpha` (alphabetically)
+   - Numeric identifiers always have lower precedence than alphanumeric: `1` < `alpha`
+
+**Example ordering (highest to lowest):**
+
+```
+2.0.0
+1.1.0
+1.0.1
+1.0.0
+1.0.0-rc.2
+1.0.0-rc.1
+1.0.0-beta.3
+1.0.0-beta.1
+1.0.0-alpha.1
+0.9.0
+```
+
+---
+
+## Immutability
+
+**Published versions cannot be overwritten.** A push of an `id`+`version` combination that already exists returns `409 Conflict`.
+
+The only mechanism to prevent a version from being installed is **unlisting** (`DELETE /v3/package/{id}/{version}`), which sets `listed: false`. Unlisted versions:
+- Remain in the registry and can be downloaded by explicit version reference
+- Do not appear in search results or version lists by default
+- Cannot be physically deleted at MVP
+
+<Warning>
+  There is no physical delete at MVP. Unlisting is the only way to hide a version from normal user flows.
+</Warning>

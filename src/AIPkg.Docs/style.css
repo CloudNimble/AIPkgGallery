@@ -62,3 +62,645 @@ code, kbd, pre, samp {
     font-size: 1em;
     line-height: 1.5em;
 }
+
+/* ══════════════════════════════════════════════════
+   AIpkg Home Page
+══════════════════════════════════════════════════ */
+
+/* ─── Additional Keyframes ─── */
+
+@keyframes slideInUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes glowPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(60, 208, 226, 0.7); }
+    50%       { box-shadow: 0 0 0 7px rgba(60, 208, 226, 0); }
+}
+
+@keyframes terminalBlink {
+    0%, 49%  { opacity: 1; }
+    50%, 100% { opacity: 0; }
+}
+
+@keyframes lineReveal {
+    from { opacity: 0; transform: translateX(-6px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes gradientShift {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+/* ─── Wrapper ─── */
+
+.aipkg-home {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 0.5rem;
+}
+
+/* ─── Hero Section ─── */
+
+.aipkg-home .hero-section {
+    padding: 3.5rem 0 2.5rem;
+    text-align: center;
+}
+
+.aipkg-home .hero-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #3CD0E2;
+    border: 1px solid rgba(60, 208, 226, 0.35);
+    background: rgba(60, 208, 226, 0.06);
+    padding: 0.35rem 1rem;
+    border-radius: 999px;
+    margin-bottom: 2rem;
+    animation: slideInUp 0.55s 0.1s ease both;
+}
+
+.aipkg-home .eyebrow-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #3CD0E2;
+    animation: glowPulse 2s 1s infinite;
+    flex-shrink: 0;
+}
+
+.aipkg-home .hero-heading {
+    font-size: clamp(2.6rem, 7vw, 4.8rem) !important;
+    font-weight: 800 !important;
+    line-height: 1.05 !important;
+    letter-spacing: -0.035em !important;
+    margin: 0 0 1.5rem !important;
+    animation: slideInUp 0.55s 0.2s ease both;
+}
+
+.aipkg-home .hero-line-1 {
+    display: block;
+    color: #f0f8ff;
+}
+
+.aipkg-home .hero-line-2 {
+    display: block;
+    background: linear-gradient(135deg, #3CD0E2 0%, #6ec8e8 40%, #419AC5 70%, #3CD0E2 100%);
+    background-size: 250% 250%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: gradientShift 5s ease infinite, slideInUp 0.55s 0.25s ease both;
+}
+
+.aipkg-home .hero-subtext {
+    font-size: 1.02rem;
+    line-height: 1.75;
+    color: rgba(240, 248, 255, 0.6);
+    max-width: 580px;
+    margin: 0 auto 2.5rem;
+    animation: slideInUp 0.55s 0.35s ease both;
+}
+
+/* ─── Terminal Demo ─── */
+
+.aipkg-home .terminal-demo {
+    background: #060d1a;
+    border: 1px solid rgba(60, 208, 226, 0.2);
+    border-radius: 10px;
+    max-width: 600px;
+    margin: 0 auto 2.5rem;
+    text-align: left;
+    overflow: hidden;
+    box-shadow:
+        0 0 0 1px rgba(60, 208, 226, 0.05),
+        0 0 50px rgba(60, 208, 226, 0.07),
+        0 24px 64px rgba(0, 0, 0, 0.5);
+    animation: slideInUp 0.55s 0.45s ease both;
+}
+
+.aipkg-home .terminal-topbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.aipkg-home .terminal-controls {
+    display: flex;
+    gap: 6px;
+}
+
+.aipkg-home .tc {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+}
+
+.aipkg-home .tc-close  { background: #ff5f57; }
+.aipkg-home .tc-min    { background: #febc2e; }
+.aipkg-home .tc-max    { background: #28c840; }
+
+.aipkg-home .terminal-label {
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.68rem;
+    color: rgba(255, 255, 255, 0.3);
+    margin-left: 0.4rem;
+}
+
+.aipkg-home .terminal-content {
+    padding: 1.2rem 1.4rem;
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.8rem;
+    line-height: 1.9;
+}
+
+.aipkg-home .t-line {
+    margin: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    opacity: 0;
+}
+
+.aipkg-home .t-cmd {
+    color: #e0eff8;
+    animation: lineReveal 0.3s 0.9s ease both;
+}
+
+.aipkg-home .t-prompt {
+    color: #3CD0E2;
+    flex-shrink: 0;
+}
+
+.aipkg-home .t-text { color: #c6e4f0; }
+
+.aipkg-home .t-cursor {
+    color: #3CD0E2;
+    animation: terminalBlink 0.9s 1.3s infinite;
+}
+
+.aipkg-home .t-out {
+    color: rgba(190, 225, 240, 0.65);
+}
+
+.aipkg-home .t-delay-1 { animation: lineReveal 0.3s 1.6s ease both; }
+.aipkg-home .t-delay-2 { animation: lineReveal 0.3s 2.2s ease both; }
+.aipkg-home .t-delay-3 { animation: lineReveal 0.3s 2.8s ease both; }
+.aipkg-home .t-delay-4 { animation: lineReveal 0.3s 3.4s ease both; }
+
+.aipkg-home .t-success { color: #3CD0E2 !important; }
+.aipkg-home .t-check   { color: #28c840; flex-shrink: 0; }
+.aipkg-home .t-platform { color: #3CD0E2; font-weight: 600; }
+.aipkg-home .t-num      { color: #f0f8ff; font-weight: 600; }
+
+/* ─── CTA Buttons ─── */
+
+.aipkg-home .hero-cta-row {
+    display: flex;
+    gap: 0.9rem;
+    justify-content: center;
+    margin-bottom: 2rem;
+    animation: slideInUp 0.55s 0.55s ease both;
+}
+
+.aipkg-home .cta-primary {
+    display: inline-flex;
+    align-items: center;
+    background: linear-gradient(135deg, #3CD0E2, #419AC5);
+    color: #050d1c !important;
+    font-weight: 700;
+    font-size: 0.875rem;
+    letter-spacing: 0.02em;
+    padding: 0.65rem 1.5rem;
+    border-radius: 8px;
+    text-decoration: none !important;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    box-shadow: 0 4px 20px rgba(60, 208, 226, 0.28);
+}
+
+.aipkg-home .cta-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(60, 208, 226, 0.42);
+}
+
+.aipkg-home .cta-ghost {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.65rem 1.5rem;
+    border: 1px solid rgba(60, 208, 226, 0.3);
+    border-radius: 8px;
+    color: rgba(240, 248, 255, 0.65) !important;
+    font-size: 0.875rem;
+    font-weight: 500;
+    text-decoration: none !important;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.aipkg-home .cta-ghost:hover {
+    border-color: #3CD0E2;
+    color: #3CD0E2 !important;
+    background: rgba(60, 208, 226, 0.06);
+}
+
+/* ─── Platform Pills ─── */
+
+.aipkg-home .platform-pill-row {
+    display: flex;
+    gap: 0.55rem;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.aipkg-home .platform-pill {
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.7rem;
+    padding: 0.28rem 0.72rem;
+    border-radius: 999px;
+    border: 1px solid rgba(65, 154, 197, 0.28);
+    color: rgba(65, 154, 197, 0.8);
+    background: rgba(65, 154, 197, 0.05);
+    opacity: 0;
+}
+
+.aipkg-home .pp-1    { animation: slideInUp 0.35s 4.0s ease both; }
+.aipkg-home .pp-2    { animation: slideInUp 0.35s 4.15s ease both; }
+.aipkg-home .pp-3    { animation: slideInUp 0.35s 4.3s ease both; }
+.aipkg-home .pp-4    { animation: slideInUp 0.35s 4.45s ease both; }
+.aipkg-home .pp-5    { animation: slideInUp 0.35s 4.6s ease both; }
+.aipkg-home .pp-6    { animation: slideInUp 0.35s 4.75s ease both; }
+.aipkg-home .pp-more {
+    animation: slideInUp 0.35s 4.9s ease both;
+    color: rgba(60, 208, 226, 0.55);
+    border-color: rgba(60, 208, 226, 0.2);
+}
+
+/* ─── Metrics Strip ─── */
+
+.aipkg-home .metrics-strip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 12px;
+    padding: 1.5rem 2rem;
+    margin: 1.5rem 0 3.5rem;
+    animation: slideInUp 0.55s 0.65s ease both;
+}
+
+.aipkg-home .metric {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+}
+
+.aipkg-home .metric-value {
+    font-family: "Cascadia Code", monospace;
+    font-size: 1.9rem;
+    font-weight: 700;
+    color: #3CD0E2;
+    line-height: 1;
+    margin-bottom: 0.35rem;
+}
+
+.aipkg-home .metric-label {
+    font-size: 0.68rem;
+    color: rgba(240, 248, 255, 0.35);
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    text-align: center;
+}
+
+.aipkg-home .metric-sep {
+    width: 1px;
+    height: 38px;
+    background: rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+}
+
+/* ─── Home Sections ─── */
+
+.aipkg-home .home-section {
+    margin-bottom: 4rem;
+}
+
+.aipkg-home .hs-eyebrow {
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: #3CD0E2;
+    margin-bottom: 0.65rem;
+}
+
+.aipkg-home .hs-title {
+    font-size: clamp(1.55rem, 4vw, 2.3rem) !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.025em !important;
+    color: #f0f8ff !important;
+    margin: 0 0 1rem !important;
+    line-height: 1.2 !important;
+}
+
+.aipkg-home .hs-body {
+    font-size: 0.97rem;
+    line-height: 1.78;
+    color: rgba(240, 248, 255, 0.58);
+    max-width: 660px;
+    margin-bottom: 2rem;
+}
+
+/* ─── Fragmentation Grid ─── */
+
+.aipkg-home .fragmentation-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.85rem;
+    margin-bottom: 1.5rem;
+}
+
+.aipkg-home .frag-card {
+    background: rgba(6, 13, 26, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 10px;
+    padding: 1rem;
+    transition: border-color 0.2s ease;
+}
+
+.aipkg-home .frag-card:hover {
+    border-color: rgba(60, 208, 226, 0.22);
+}
+
+.aipkg-home .frag-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.55rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: rgba(240, 248, 255, 0.78);
+}
+
+.aipkg-home .frag-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.aipkg-home .fi-claude   { background: #f97316; }
+.aipkg-home .fi-copilot  { background: #818cf8; }
+.aipkg-home .fi-cursor   { background: #3CD0E2; }
+.aipkg-home .fi-windsurf { background: #34d399; }
+
+.aipkg-home .frag-file {
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.65rem;
+    color: rgba(240, 248, 255, 0.3);
+    margin-bottom: 0.7rem;
+    padding: 0.18rem 0.45rem;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 4px;
+    display: inline-block;
+}
+
+.aipkg-home .frag-code {
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.7rem;
+    line-height: 1.65;
+    color: rgba(190, 225, 240, 0.6);
+    margin: 0;
+    white-space: pre;
+    overflow: hidden;
+    background: none;
+    border: none;
+    padding: 0;
+}
+
+.aipkg-home .frag-callout {
+    text-align: center;
+    font-size: 0.875rem;
+    color: rgba(240, 248, 255, 0.35);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 1.25rem;
+    font-style: italic;
+}
+
+/* ─── Solution Layout ─── */
+
+.aipkg-home .sol-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+    align-items: start;
+}
+
+.aipkg-home .sol-package {
+    background: rgba(6, 13, 26, 0.85);
+    border: 1px solid rgba(60, 208, 226, 0.18);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.aipkg-home .sol-package-title {
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.75rem;
+    color: rgba(240, 248, 255, 0.65);
+    padding: 0.7rem 1rem;
+    background: rgba(60, 208, 226, 0.05);
+    border-bottom: 1px solid rgba(60, 208, 226, 0.12);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.aipkg-home .sol-tree {
+    padding: 0.6rem 0;
+}
+
+.aipkg-home .sol-tree-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.28rem 1rem;
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.7rem;
+    color: rgba(190, 225, 240, 0.65);
+}
+
+.aipkg-home .si-manifest { color: rgba(240, 248, 255, 0.8); font-weight: 600; }
+.aipkg-home .si-shared   { color: rgba(240, 248, 255, 0.8); font-weight: 600; }
+.aipkg-home .si-apm      { color: rgba(240, 248, 255, 0.8); font-weight: 600; }
+
+.aipkg-home .si-shared-child   { padding-left: 1.7rem; }
+.aipkg-home .si-apm-child      { padding-left: 1.7rem; }
+.aipkg-home .si-apm-grandchild { padding-left: 3rem; }
+
+.aipkg-home .si-tag {
+    font-size: 0.58rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.aipkg-home .tag-required {
+    background: rgba(60, 208, 226, 0.12);
+    color: #3CD0E2;
+    border: 1px solid rgba(60, 208, 226, 0.28);
+}
+
+.aipkg-home .si-teal { color: #3CD0E2; }
+.aipkg-home .si-blue { color: #5badd4; }
+.aipkg-home .si-hint {
+    font-size: 0.62rem;
+    color: rgba(255, 255, 255, 0.22);
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* ─── APM Graph ─── */
+
+.aipkg-home .sol-graph {
+    padding: 1.4rem;
+    background: rgba(6, 13, 26, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 10px;
+}
+
+.aipkg-home .sg-title {
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: rgba(240, 248, 255, 0.3);
+    margin-bottom: 0.65rem;
+}
+
+.aipkg-home .sg-description {
+    font-size: 0.8rem;
+    color: rgba(240, 248, 255, 0.5);
+    margin-bottom: 1.1rem;
+    line-height: 1.55;
+}
+
+.aipkg-home .sg-chain {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    margin-bottom: 1rem;
+}
+
+.aipkg-home .sg-node {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.45rem 0.7rem;
+    border-radius: 6px;
+    border: 1px solid;
+}
+
+.aipkg-home .sn-specific { background: rgba(60, 208, 226, 0.1);  border-color: rgba(60, 208, 226, 0.38); }
+.aipkg-home .sn-version  { background: rgba(60, 208, 226, 0.06); border-color: rgba(60, 208, 226, 0.22); }
+.aipkg-home .sn-vendor   { background: rgba(65, 154, 197, 0.07); border-color: rgba(65, 154, 197, 0.22); }
+.aipkg-home .sn-root     { background: rgba(65, 154, 197, 0.04); border-color: rgba(65, 154, 197, 0.14); }
+.aipkg-home .sn-shared   { background: rgba(255, 255, 255, 0.03); border-color: rgba(255, 255, 255, 0.09); }
+
+.aipkg-home .sn-label {
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.75rem;
+    color: rgba(240, 248, 255, 0.82);
+}
+
+.aipkg-home .sn-hint {
+    font-size: 0.62rem;
+    color: rgba(240, 248, 255, 0.28);
+}
+
+.aipkg-home .sg-arrow {
+    text-align: left;
+    color: rgba(60, 208, 226, 0.35);
+    font-size: 0.85rem;
+    line-height: 1;
+    padding-left: 0.7rem;
+}
+
+.aipkg-home .sg-rule {
+    font-size: 0.72rem;
+    color: rgba(240, 248, 255, 0.3);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 0.75rem;
+    line-height: 1.55;
+}
+
+/* ─── Quick Start ─── */
+
+.aipkg-home .qs-steps {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.aipkg-home .qs-step {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.aipkg-home .qs-num {
+    font-family: "Cascadia Code", monospace;
+    font-size: 1.9rem;
+    font-weight: 700;
+    color: rgba(60, 208, 226, 0.18);
+    line-height: 1;
+}
+
+.aipkg-home .qs-step-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: rgba(240, 248, 255, 0.72);
+    margin-bottom: 0.3rem;
+}
+
+.aipkg-home .qs-cmd {
+    font-family: "Cascadia Code", monospace;
+    font-size: 0.75rem;
+    color: #3CD0E2;
+    background: rgba(6, 13, 26, 0.9);
+    border: 1px solid rgba(60, 208, 226, 0.18);
+    border-radius: 6px;
+    padding: 0.6rem 0.85rem;
+    margin: 0;
+    white-space: nowrap;
+    overflow-x: auto;
+}
+
+.aipkg-home .qs-cta-row {
+    display: flex;
+    gap: 0.9rem;
+    margin-top: 0.5rem;
+}
+
+/* ─── Responsive ─── */
+
+@media (max-width: 680px) {
+    .aipkg-home .fragmentation-grid { grid-template-columns: 1fr; }
+    .aipkg-home .sol-layout { grid-template-columns: 1fr; }
+    .aipkg-home .qs-steps { flex-direction: column; }
+    .aipkg-home .metrics-strip { flex-wrap: wrap; gap: 1rem; padding: 1.2rem 1rem; }
+    .aipkg-home .metric-sep { display: none; }
+    .aipkg-home .hero-cta-row { flex-direction: column; align-items: center; }
+    .aipkg-home .qs-cta-row { flex-direction: column; }
+}

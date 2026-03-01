@@ -1,0 +1,139 @@
+---
+title: "Package Naming"
+sidebarTitle: "02 · Package Naming"
+description: "Package ID syntax rules, allowed and forbidden characters, reserved IDs, publisher scoping conventions, display name vs ID, immutability, and validation error codes."
+icon: "tag"
+---
+
+Every AIpkg package has an **ID** — a globally unique, immutable string that identifies the package across all versions. This document defines the normative rules for package IDs and display names.
+
+---
+
+## Package ID Syntax
+
+A package ID must conform to the following rules:
+
+- **Pattern:** `^[a-z][a-z0-9\-\.]{0,127}$`
+- **Max length:** 128 characters
+- **First character:** lowercase ASCII letter (`a`–`z`)
+- **Remaining characters:** lowercase ASCII letters, digits (`0`–`9`), hyphens (`-`), or dots (`.`)
+- **Case:** all lowercase; uppercase is never accepted
+
+### Allowed Characters
+
+| Character class | Allowed |
+|-----------------|---------|
+| Lowercase letters `a`–`z` | Yes |
+| Digits `0`–`9` | Yes |
+| Hyphen `-` | Yes |
+| Dot `.` | Yes |
+| Uppercase letters `A`–`Z` | No |
+| Underscore `_` | No |
+| Spaces | No |
+| Any non-ASCII character | No |
+
+---
+
+## Forbidden Patterns
+
+Even if the character set is valid, the following patterns are rejected:
+
+| Pattern | Example | Reason |
+|---------|---------|--------|
+| Leading separator | `-my-tool`, `.my-tool` | Must start with a letter |
+| Trailing separator | `my-tool-`, `my-tool.` | Clean boundary |
+| Consecutive hyphens | `my--tool` | Reserved for future scoping syntax |
+| Consecutive dots | `my..tool` | Ambiguous hierarchy |
+| Single character | `a`, `x` | Too short to be meaningful |
+
+---
+
+## Reserved IDs
+
+The following IDs (and IDs matching these prefixes) are permanently reserved and cannot be registered:
+
+| Reserved | Notes |
+|----------|-------|
+| `aipkg`, `aipkg-*`, `aipkg.*` | Registry-owned namespace |
+| `test`, `example`, `sample` | Commonly used for demos; reserved to prevent pollution |
+| `api`, `admin`, `null`, `undefined`, `system`, `root` | System words that conflict with registry routes or tooling |
+
+A push attempting to use a reserved ID receives `400 Bad Request` with error code `ID_RESERVED`.
+
+---
+
+## Publisher Scoping Conventions
+
+AIpkg does not enforce namespacing at the syntax level — there is no `@scope/name` mechanism. Instead, publishers use two conventions:
+
+### Prefix convention
+
+Use a consistent prefix separated by a hyphen:
+
+```
+acme-git-helpers
+acme-code-review
+acme-typescript
+```
+
+### Dot-group convention
+
+Use dots to create an implicit hierarchy:
+
+```
+acme.tools.git
+acme.tools.typescript
+acme.core
+```
+
+Both conventions are just that — conventions. The registry does not parse or enforce them. Enforcement happens through **prefix reservations** (see [Prefix Reservations](04-prefix-reservations)), which give verified publishers exclusive use of a prefix.
+
+---
+
+## Display Names vs IDs
+
+| Property | Field | Notes |
+|----------|-------|-------|
+| Canonical identifier | `id` | Immutable; used in all API calls and URLs |
+| Human-readable label | `title` | Optional; shown in UI; no character restrictions except max 256 chars |
+
+If `title` is absent, the UI falls back to displaying `id`.
+
+**Examples:**
+
+| `id` | `title` |
+|------|---------|
+| `git-helpers` | "Git Helper Skills" |
+| `acme.tools.git` | "Acme Git Toolkit" |
+| `filesystem-mcp` | "Filesystem MCP Server" |
+
+---
+
+## ID Immutability and Transfer
+
+Once a package version is published:
+
+- The `id` **cannot be changed** — it is permanent for the life of the package
+- The `id` **cannot be reused** after a package is deleted — deleted IDs are tombstoned and permanently reserved
+- ID ownership can be **transferred** between registry accounts via a registry team support request
+
+### Tombstone Policy
+
+When a package is deleted (not just unlisted), its ID is permanently reserved. A subsequent push with the same ID from any account receives `409 Conflict` with error code `ID_TOMBSTONED`.
+
+This prevents dependency confusion attacks where a deleted package ID is re-registered with malicious content.
+
+---
+
+## Validation Error Codes
+
+The following error codes are returned by the registry and by `AipkgValidator` (see [SDK Interface](10-sdk-interface)):
+
+| Code | Condition |
+|------|-----------|
+| `ID_INVALID_PATTERN` | ID does not match `^[a-z][a-z0-9\-\.]{0,127}$` |
+| `ID_TOO_LONG` | ID exceeds 128 characters |
+| `ID_RESERVED` | ID matches a system-reserved pattern |
+| `ID_FORBIDDEN_PATTERN` | ID contains `--`, `..`, leading/trailing separator, or single character |
+| `ID_TOMBSTONED` | ID was previously registered and deleted |
+| `ID_PREFIX_CONFLICT` | ID uses a reserved prefix owned by another publisher |

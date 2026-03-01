@@ -1,0 +1,76 @@
+---
+title: "Implementation Plan"
+description: "How the AIpkg build team constructs AIpkg.org by transforming NuGetGallery — tech stack decisions, project structure, data layer, frontend, server, SDK, docs, and migration phases."
+icon: "map"
+---
+
+This section is for the **AIpkg build team**. It assumes NuGetGallery as the starting point and documents every decision about how we build and migrate to AIpkg.org. A third-party implementer building a compatible registry does not need this section — see the [Specifications](../specs/index) instead.
+
+---
+
+## Phase Summary
+
+| Phase | Goal | Key Deliverable |
+|-------|------|-----------------|
+| **0** | Clean SLNX solution, SQL DB project, EasyAF scaffolding | `dotnet build AIpkg.slnx` succeeds |
+| **1** | Core Registry API, push/download/registration, auth, `AIpkg.Core` | Package round-trip works |
+| **2** | Search + catalog pipeline (Azure AI Search) | Packages appear in search after push |
+| **3** | Blazor web UI | Full browser experience |
+| **4** | `aipkg` CLI MVP (Native AOT) | Single-binary install/push/search |
+
+---
+
+## Plan Documents
+
+<CardGroup cols={2}>
+  <Card title="01 · Tech Stack" icon="layer-group" href="01-tech-stack">
+    Technology choices for runtime, API framework, ORM, auth, storage, and search.
+  </Card>
+  <Card title="02 · Solution Structure" icon="folder-tree" href="02-solution-structure">
+    `AIpkg.slnx` project layout and how it maps from NuGetGallery source.
+  </Card>
+  <Card title="03 · Data Layer" icon="database" href="03-data-layer">
+    EasyAF setup, SQL Server DB Project schema, entity generation workflow.
+  </Card>
+  <Card title="04 · Frontend Implementation" icon="display" href="04-frontend-implementation">
+    Blazor component tree, Tailwind/Lucide styling, what NOT to include.
+  </Card>
+  <Card title="05 · Server Implementation" icon="server" href="05-server-implementation">
+    Auth, storage, search, background jobs, deletion lists, NuGet→AIpkg endpoint mapping.
+  </Card>
+  <Card title="06 · SDK Implementation" icon="terminal" href="06-sdk-implementation">
+    Native AOT publish flags, RID matrix, distribution channels, TypeScript SDK strategy.
+  </Card>
+  <Card title="07 · Docs Portal Setup" icon="book" href="07-docs-portal-setup">
+    DotNetDocs.com for `AIpkg.Core`, Mintlify developer portal, OpenAPI CI/CD.
+  </Card>
+  <Card title="08 · Migration" icon="arrow-right-arrow-left" href="08-migration">
+    Four migration phases: source file mapping, deletion lists, verification checklists.
+  </Card>
+</CardGroup>
+
+---
+
+## Quick Reference: What Stays vs. What Goes
+
+| NuGetGallery Component | AIpkg Fate |
+|------------------------|------------|
+| V3 API logic (push, download, registration, search) | **Keep & adapt** — new schemas, new field names |
+| V2/OData API | **Delete** |
+| OWIN / Autofac / Razor views | **Delete** |
+| Symbol package support | **Delete** — not applicable |
+| Azure Blob storage abstraction | **Keep & adapt** — rename `.nupkg` → `.aipkg` |
+| Azure AI Search integration | **Keep & adapt** — new document model |
+| CDN stats parsing jobs | **Keep & adapt** — `.aipkg` download events |
+| GitHub OAuth + PBKDF2 API keys | **Keep & port** — no structural changes |
+| `NuGetGallery.sln` (139 projects) | **Do not convert** — new `AIpkg.slnx` from scratch |
+
+---
+
+## Guiding Principles for Implementation
+
+1. **New SLNX, not converted solution** — `AIpkg.slnx` is created from scratch; NuGetGallery projects are ported, not referenced.
+2. **EasyAF owns the data layer** — `.sqlproj` is schema source of truth; no hand-written EF migrations.
+3. **Blazor SSR only** — no Razor views, no jQuery, no OWIN. Static SSR for public pages, Interactive Server for authenticated flows.
+4. **AOT-safe code** — `AIpkg.Core` must be AOT compatible; no reflection emit or dynamic code.
+5. **Port, don't preserve** — NuGetGallery source is a reference, not a constraint. Strip aggressively.

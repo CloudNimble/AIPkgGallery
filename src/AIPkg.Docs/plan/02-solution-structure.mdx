@@ -1,0 +1,88 @@
+---
+title: "Solution Structure"
+sidebarTitle: "02 · Solution Structure"
+description: "AIpkg.slnx project layout, directory structure, and mapping from NuGetGallery source projects to new AIpkg projects."
+icon: "folder-tree"
+---
+
+<Note>
+  The new solution file is `AIpkg.slnx` (SLNX format). Do **not** convert the existing `NuGetGallery.sln`. The SLNX is created from scratch.
+</Note>
+
+---
+
+## Solution Layout
+
+```
+AIpkg.slnx
+├── src/
+│   ├── AIpkg.Core/                  # Shared library (see SDK Interface spec)
+│   ├── AIpkg.Server/                # ASP.NET Core 10 web app (API + Blazor)
+│   ├── AIpkg.Server.Db/             # SQL Server Database Project (.sqlproj)
+│   ├── AIpkg.Server.Data/           # EasyAF-generated EF Core entities + repositories
+│   ├── AIpkg.Server.Search/         # Azure AI Search integration
+│   ├── AIpkg.CLI/                   # aipkg CLI (Native AOT) — see SDK Interface spec
+│   └── AIpkg.Jobs/                  # Background jobs (stats, vulnerability, catalog)
+├── tests/
+│   ├── AIpkg.Core.Tests/
+│   ├── AIpkg.Server.Tests/
+│   └── AIpkg.Server.Integration.Tests/
+└── src/AIPkg.Docs/
+    └── (this directory)
+```
+
+---
+
+## Project Descriptions
+
+### `AIpkg.Core`
+Cross-platform .NET 10 class library. Contains manifest parsing, archive reading/writing, APM fallback resolution, validation, and versioning. **AOT-compatible**: no reflection emit, no dynamic code. Published to NuGet as `AIpkg.Core`. Referenced by both `AIpkg.Server` and `AIpkg.CLI`.
+
+### `AIpkg.Server`
+ASP.NET Core 10 web application. Hosts:
+- Minimal API endpoints for the Registry API (under `/v3/`)
+- Blazor SSR components for the web UI
+- GitHub OAuth + API key authentication middleware
+
+### `AIpkg.Server.Db`
+SQL Server Database Project (`.sqlproj`). Contains all table definitions as `.sql` files. This is the **authoritative schema source**. Changes to the database always start here.
+
+### `AIpkg.Server.Data`
+EasyAF-generated EF Core 10 entities, repositories, and `AIpkgDbContext`. Generated from `AIpkg.Server.Db`. Committed to source control. Regenerated via EasyAF CLI whenever the DB project changes.
+
+### `AIpkg.Server.Search`
+Azure AI Search document models, indexing pipelines, and query translation. Contains `AipkgSearchDocument` and the pipeline that keeps the search index in sync with the database.
+
+### `AIpkg.CLI`
+Native AOT `aipkg` command-line tool. References `AIpkg.Core`. Published as a single self-contained binary per platform (see [SDK Implementation](06-sdk-implementation)).
+
+### `AIpkg.Jobs`
+Background jobs: CDN stats parsing, GitHub vulnerability ingestion, search index sync, and registration blob builder. Adapted from `src/Stats.*`, `src/GitHubVulnerabilities2Db/`, and related NuGetGallery projects.
+
+---
+
+## Project Rename Reference
+
+| NuGetGallery Original | AIpkg Project |
+|----------------------|---------------|
+| `NuGetGallery` (MVC app) | `AIpkg.Server` |
+| `NuGetGallery.Core` | `AIpkg.Core` + `AIpkg.Server.*` |
+| `NuGet.Services.Entities` | `AIpkg.Server.Data` (EasyAF-generated) |
+| `NuGet.Services.AzureSearch` | `AIpkg.Server.Search` |
+| `NuGetGallery.Core.Facts` | `AIpkg.Core.Tests` |
+| `NuGetGallery.Facts` | `AIpkg.Server.Tests` |
+| `Stats.*` | `AIpkg.Jobs` (combined) |
+| `GitHubVulnerabilities2Db` | Part of `AIpkg.Jobs` |
+| `NuGet.Packaging` (client) | `AIpkg.Core` (own reader/writer) |
+| `NuGetGallery.sln` | `AIpkg.slnx` |
+
+---
+
+## SLNX Format
+
+SLNX (`.slnx`) is the XML-based Visual Studio solution format introduced in Visual Studio 2022. It is:
+- Human-readable and diff-friendly (unlike `.sln`)
+- Supported by `dotnet build`, `dotnet test`, and Rider/VS 2022+
+- Created via `dotnet new sln --format slnx`
+
+Do **not** attempt to convert the existing `NuGetGallery.sln`. It contains 139 projects, most of which are being deleted. The new `AIpkg.slnx` adds projects incrementally during Phase 0.

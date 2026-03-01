@@ -1,6 +1,6 @@
 ---
 title: "Metadata Schema"
-sidebarTitle: "03 · Metadata Schema"
+sidebarTitle: "08 · Metadata Schema"
 description: "Full JSON Schema for the `.aispec` manifest file, field-by-field reference, capability and permission enums, worked examples, and validation rules."
 icon: "file-code"
 ---
@@ -281,8 +281,8 @@ The `.aispec` file is a UTF-8 JSON document stored at the root of an `.aipkg` ar
 | Field | Type | Notes |
 |-------|------|-------|
 | `schema` | string | Must be `"https://aipkg.org/schemas/aispec/1.0.0"` |
-| `id` | string | Package ID. Must match filename. |
-| `version` | string | SemVer 2.0.0 |
+| `id` | string | Package ID. Must match filename. See [Package Naming](02-package-naming). |
+| `version` | string | SemVer 2.0.0. See [Versioning](03-versioning). |
 | `description` | string | 1–500 chars |
 | `authors` | string[] | 1–10 authors |
 | `capabilities` | string[] | At least one capability |
@@ -536,7 +536,7 @@ Each entry in `hooks` declares one lifecycle hook the package installs. Requires
 
 ## Validation Rules
 
-Beyond JSON Schema conformance, the server enforces these additional rules:
+Beyond JSON Schema conformance, the registry enforces these additional rules:
 
 <AccordionGroup>
   <Accordion title="ID and version rules">
@@ -554,10 +554,10 @@ Beyond JSON Schema conformance, the server enforces these additional rules:
     10. **LSP capability:** Packages that declare entries in `lspServers[]` must include `"lsp-server"` in `capabilities`.
   </Accordion>
   <Accordion title="Dependency rules">
-    7. **Dependency cycles:** Circular dependencies are rejected at push time (server resolves the full graph).
+    11. **Dependency cycles:** Circular dependencies are rejected at push time (server resolves the full graph).
   </Accordion>
   <Accordion title="License recommendation">
-    8. **License:** At least one of `licenseExpression` or `licenseFile` is strongly recommended. A warning (not error) is emitted if both are absent.
+    12. **License:** At least one of `licenseExpression` or `licenseFile` is strongly recommended. A warning (not error) is emitted if both are absent.
   </Accordion>
 </AccordionGroup>
 

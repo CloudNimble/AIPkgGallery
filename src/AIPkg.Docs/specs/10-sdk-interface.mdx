@@ -1,31 +1,26 @@
 ---
-title: "SDK & Tooling"
-sidebarTitle: "06 · SDK & Tooling"
-description: "`AIpkg.Core` library public API, `aipkg` CLI command reference, configuration file formats, and the post-MVP TypeScript SDK strategy."
+title: "SDK Interface"
+sidebarTitle: "10 · SDK Interface"
+description: "`AIpkg.Core` public API types, `aipkg` CLI command syntax, and configuration file schemas — the normative interface for anyone building compatible tooling."
 icon: "terminal"
 ---
 
-The AIpkg SDK consists of three components:
+The AIpkg SDK has two public interfaces: the `AIpkg.Core` .NET library and the `aipkg` CLI. This spec defines the normative API surface for both. Anyone building a compatible tool, client, or alternative implementation should use this document as the reference.
 
-<CardGroup cols={3}>
+<CardGroup cols={2}>
   <Card title="AIpkg.Core" icon="cube">
-    Cross-platform .NET 10 class library. Consumed by both the server and CLI.
+    Cross-platform .NET 10 class library. Consumed by servers, CLI tools, and test harnesses.
   </Card>
   <Card title="aipkg CLI" icon="terminal">
-    .NET 10 Native AOT single-file binary. No runtime required.
-  </Card>
-  <Card title="TypeScript SDK" icon="code">
-    `@aipkg/core` and platform packages. Post-MVP.
+    Command-line tool. Single-file binary. No runtime required.
   </Card>
 </CardGroup>
 
 ---
 
-## Part 1: `AIpkg.Core`
+## Part 1: `AIpkg.Core` Public API
 
 ### Overview
-
-`AIpkg.Core` is the shared parsing, validation, and archive-handling library. It has no dependency on ASP.NET Core or any server infrastructure. Both `AIpkg.Server` and `AIpkg.CLI` reference it.
 
 | Property | Value |
 |----------|-------|
@@ -35,7 +30,7 @@ The AIpkg SDK consists of three components:
 | Serialization | `System.Text.Json` with source-generated serializers |
 | Third-party NuGet deps | None |
 
-### Public API Surface
+### Public Types
 
 <Tabs>
   <Tab title="AIpkg.Core (root)">
@@ -219,26 +214,12 @@ The AIpkg SDK consists of three components:
 </Tabs>
 
 <Note>
-  Documentation coverage requirement: 100% of public surface members must carry XML doc comments before the 1.0.0 release. See [spec 07](07-docs-platform) for DotNetDocs.com integration.
+  100% of public surface members must carry XML doc comments before the 1.0.0 release.
 </Note>
 
 ---
 
-## Part 2: `aipkg` CLI
-
-### Distribution
-
-| Channel | Command |
-|---------|---------|
-| Direct download | GitHub Releases |
-| Windows | `winget install aipkg` |
-| macOS | `brew install aipkg` |
-| Linux (future) | `apt install aipkg` |
-| Script | `curl -fsSL https://aipkg.org/install.sh \| sh` |
-
-Ships for: `win-x64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`. No .NET runtime required.
-
-Published with: `dotnet publish -r {rid} --self-contained`
+## Part 2: `aipkg` CLI Command Reference
 
 ### Command Reference
 
@@ -355,7 +336,7 @@ Published with: `dotnet publish -r {rid} --self-contained`
     Validates:
       - Archive integrity (ZIP validity)
       - Manifest schema (JSON Schema)
-      - Manifest business rules (see spec 03)
+      - Manifest business rules (see Metadata Schema spec)
       - File structure conventions
       - Icon dimensions and format
       - Size limits
@@ -389,7 +370,7 @@ Published with: `dotnet publish -r {rid} --self-contained`
 
 ---
 
-### Configuration Files
+## Part 3: Configuration File Schemas
 
 <Tabs>
   <Tab title="aipkg.config.json">
@@ -449,7 +430,9 @@ Published with: `dotnet publish -r {rid} --self-contained`
 
 ---
 
-## Part 3: TypeScript SDK (Post-MVP)
+## Part 4: TypeScript SDK Interface (Post-MVP)
+
+The TypeScript SDK packages provide registry client and manifest parsing functionality:
 
 | Package | Purpose |
 |---------|---------|

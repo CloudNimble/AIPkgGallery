@@ -1,0 +1,134 @@
+---
+title: "SDK Implementation"
+sidebarTitle: "06 · SDK Implementation"
+description: "Native AOT publish configuration, RID matrix, distribution channel setup, and TypeScript SDK strategy for the aipkg CLI."
+icon: "terminal"
+---
+
+This document covers how to build and distribute the `aipkg` CLI binary and `AIpkg.Core` NuGet package. For the public API surface and command syntax, see the [SDK Interface spec](../specs/10-sdk-interface).
+
+---
+
+## `AIpkg.Core` NuGet Package
+
+### Project Configuration
+
+Add to `AIpkg.Core.csproj`:
+
+```xml
+<PropertyGroup>
+  <TargetFramework>net10.0</TargetFramework>
+  <PackageId>AIpkg.Core</PackageId>
+  <IsAotCompatible>true</IsAotCompatible>
+  <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  <DocumentationFile>AIpkg.Core.xml</DocumentationFile>
+  <NoWarn>$(NoWarn);CS1591</NoWarn>
+</PropertyGroup>
+```
+
+### Publishing to NuGet.org
+
+1. Set `<PackageVersion>` in `AIpkg.Core.csproj`
+2. `dotnet pack -c Release`
+3. `dotnet nuget push AIpkg.Core.{version}.nupkg --api-key {key} --source https://api.nuget.org/v3/index.json`
+
+CI/CD: GitHub Actions workflow on `v*` tag push.
+
+---
+
+## `aipkg` CLI: Native AOT
+
+### Why Native AOT
+
+The `aipkg` CLI ships as a single self-contained binary with no .NET runtime requirement. Users on platforms where .NET is not installed (common for Claude Code users) get a zero-dependency install.
+
+### Publish Configuration
+
+Add to `AIpkg.CLI.csproj`:
+
+```xml
+<PropertyGroup>
+  <TargetFramework>net10.0</TargetFramework>
+  <PublishAot>true</PublishAot>
+  <StripSymbols>true</StripSymbols>
+  <InvariantGlobalization>true</InvariantGlobalization>
+</PropertyGroup>
+```
+
+Publish command per platform:
+
+```bash
+dotnet publish -r {rid} --self-contained -c Release -o ./dist/{rid}
+```
+
+### RID Matrix
+
+| RID | Platform | Binary Name |
+|-----|----------|-------------|
+| `win-x64` | Windows x64 | `aipkg.exe` |
+| `linux-x64` | Linux x64 | `aipkg` |
+| `linux-arm64` | Linux ARM64 | `aipkg` |
+| `osx-x64` | macOS Intel | `aipkg` |
+| `osx-arm64` | macOS Apple Silicon | `aipkg` |
+
+Target binary size: **< 30 MB** per platform.
+
+---
+
+## Distribution Channels
+
+| Channel | Command / URL | Notes |
+|---------|---------------|-------|
+| Direct download | GitHub Releases | Primary; all platforms |
+| Windows | `winget install aipkg` | Submit to Windows Package Repository |
+| macOS | `brew install aipkg` | Submit to Homebrew core or tap |
+| Linux (future) | `apt install aipkg` | Post-MVP; requires .deb packaging |
+| Script | `curl -fsSL https://aipkg.org/install.sh \| sh` | Detects platform, downloads from GitHub Releases |
+
+### GitHub Actions CI/CD Pipeline
+
+```yaml
+# .github/workflows/release-cli.yml
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+          - os: macos-latest
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+          - os: windows-latest
+            rid: win-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '10.x' }
+      - run: dotnet publish src/AIpkg.CLI -r ${{ matrix.rid }} --self-contained -c Release -o dist/${{ matrix.rid }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aipkg-${{ matrix.rid }}
+          path: dist/${{ matrix.rid }}/
+```
+
+---
+
+## TypeScript SDK Strategy (Post-MVP)
+
+The TypeScript SDK is scoped to post-MVP. When implemented:
+
+1. **`@aipkg/core`** — Registry client and manifest parsing. Published to npm.
+2. **Platform packages** — `@aipkg/claude-code`, `@aipkg/copilot`, `@aipkg/cursor` — thin wrappers with platform-specific install path logic.
+
+Source lives in a separate repository (`aipkg-js`). Build tooling: `tsc` + `tsup` for dual CJS/ESM output.
+
+See [SDK Interface spec](../specs/10-sdk-interface) for the normative TypeScript API surface.

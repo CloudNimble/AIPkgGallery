@@ -1,0 +1,137 @@
+---
+title: "Frontend Implementation"
+sidebarTitle: "04 · Frontend Implementation"
+description: "Blazor component architecture, Tailwind/Lucide styling setup, color palette, and what must NOT exist in AIpkg.Server."
+icon: "display"
+---
+
+The AIpkg web UI is built with Blazor SSR (server-side rendering) with selective interactive islands. There are no Razor (`.cshtml`) views, no jQuery, no Bootstrap scripts, and no OWIN startup code. The UI lives entirely within `AIpkg.Server/` alongside the Registry API.
+
+The design philosophy: public-facing pages are statically server-rendered for SEO and performance. Authenticated and data-mutation pages use Interactive Server rendering.
+
+For the full page inventory, URL map, SLAs, and accessibility requirements, see the [Registry UI spec](../specs/11-registry-ui).
+
+---
+
+## Component Architecture
+
+All Blazor components live in `AIpkg.Server/Components/`:
+
+```
+Components/
+├── App.razor
+├── Routes.razor
+├── Layout/
+│   ├── MainLayout.razor
+│   ├── AdminLayout.razor
+│   ├── NavBar.razor
+│   └── Footer.razor
+├── Pages/
+│   ├── Home.razor
+│   ├── Search.razor
+│   ├── PackageDetail.razor
+│   ├── PlatformList.razor
+│   ├── PlatformDetail.razor
+│   ├── Upload.razor
+│   ├── AccountApiKeys.razor
+│   ├── AccountPackages.razor
+│   └── Admin/
+│       ├── Dashboard.razor
+│       └── PackageAdmin.razor
+└── Shared/
+    ├── PackageCard.razor        ← Used in search results, browse
+    ├── VersionSelector.razor    ← Interactive island on package detail
+    ├── ManifestViewer.razor     ← Syntax-highlighted .aispec viewer
+    ├── PlatformBadge.razor      ← APM moniker badge chip
+    ├── CapabilityBadge.razor    ← Capability badge chip
+    ├── PermissionWarning.razor  ← Alert for sensitive permissions
+    ├── SearchBar.razor
+    ├── Pagination.razor
+    └── CopyButton.razor         ← One-click copy (interactive)
+```
+
+---
+
+## Render Mode by Component
+
+| Component / Feature | Render Mode | Notes |
+|---------------------|-------------|-------|
+| `Home.razor` | `@rendermode null` (Static SSR) | CDN-cacheable |
+| `Search.razor` | `@rendermode null` (Static SSR) | Form resubmit for filter changes |
+| `PackageDetail.razor` | `@rendermode null` (Static SSR) | SEO critical |
+| `VersionSelector.razor` | `@rendermode InteractiveServer` | Island within SSR page |
+| `Upload.razor` | `@rendermode InteractiveServer` | Multi-step wizard |
+| `AccountApiKeys.razor` | `@rendermode InteractiveServer` | Authenticated |
+| `AccountPackages.razor` | `@rendermode InteractiveServer` | Authenticated |
+| `Admin/*.razor` | `@rendermode InteractiveServer` | Internal tool |
+
+<Note>
+  `VersionSelector.razor` is the canonical example of a Blazor interactive island embedded in an otherwise SSR-rendered page.
+</Note>
+
+---
+
+## Styling
+
+<CardGroup cols={2}>
+  <Card title="Tailwind CSS" icon="paintbrush">
+    Via CDN for prototype; PostCSS build for production. No Bootstrap.
+  </Card>
+  <Card title="No jQuery" icon="ban">
+    All interactive behavior handled by Blazor or vanilla JS minimal helpers.
+  </Card>
+  <Card title="Dark Mode" icon="moon">
+    System preference (`prefers-color-scheme`) via Tailwind `dark:` classes.
+  </Card>
+  <Card title="Lucide Icons" icon="shapes">
+    SVG sprites or inline. Platform logos as SVG files in `wwwroot/img/platforms/`.
+  </Card>
+</CardGroup>
+
+**Color palette** (CSS custom properties):
+
+```css
+--color-primary:    #6d28d9;  /* purple */
+--color-accent:     #10b981;  /* green */
+--color-danger:     #ef4444;
+--color-surface:    #1e1e2e;  /* dark background */
+--color-on-surface: #cdd6f4;
+```
+
+These CSS variables are set in `AIpkg.Server/wwwroot/css/app.css` and consumed via Tailwind plugin or direct CSS.
+
+---
+
+## Authentication Flow
+
+<Steps>
+  <Step title="Sign In">
+    User clicks "Sign In" → redirected to `/auth/github`.
+  </Step>
+  <Step title="OAuth Callback">
+    GitHub OAuth callback → session cookie set → redirect to previous page.
+  </Step>
+  <Step title="Sign Out">
+    `POST /auth/logout` (CSRF-protected) → redirect to home.
+  </Step>
+</Steps>
+
+<Note>
+  No username/password login. GitHub is the only provider at MVP. OIDC providers added post-MVP.
+</Note>
+
+---
+
+## What is NOT in the UI
+
+<Warning>
+  The following must not exist in `AIpkg.Server/`:
+</Warning>
+
+- No `.cshtml` Razor views
+- No `_Layout.cshtml` master layout
+- No `@Html.*` helpers
+- No jQuery, Bootstrap JS, or `bundle.config.js`
+- No OWIN `Startup.cs`
+- No SignalR (use Blazor server circuit instead)
+- No Symbol package pages or upload flow

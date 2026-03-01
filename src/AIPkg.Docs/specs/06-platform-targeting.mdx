@@ -1,6 +1,6 @@
 ---
 title: "Platform Targeting"
-sidebarTitle: "02 · Platform Targeting"
+sidebarTitle: "06 · Platform Targeting"
 description: "AI Platform Monikers (APMs) — the hierarchical string identifiers that describe AI platforms, their fallback resolution graph, install paths, and compatibility rules."
 icon: "sitemap"
 ---
@@ -27,22 +27,22 @@ ai-{platform}-{variant}
 
 ## Canonical Moniker Table
 
-| Moniker | Display Name | Parent | Install Path |
-|---------|--------------|--------|--------------|
-| `ai` | All AI Platforms | — | _(root fallback only)_ |
-| `claude` | Claude (all) | `ai` | _(parent group only)_ |
-| `claude-code` | Claude Code | `claude` | `.claude/` |
-| `claude-desktop` | Claude Desktop | `claude` | See below |
-| `copilot` | GitHub Copilot (all) | `ai` | _(parent group only)_ |
-| `copilot-vscode` | Copilot in VS Code | `copilot` | `.github/` |
-| `copilot-github` | Copilot on GitHub.com | `copilot` | `.github/` |
-| `cursor` | Cursor | `ai` | `.cursor/` |
-| `windsurf` | Windsurf | `ai` | `.windsurf/` |
-| `continue` | Continue | `ai` | `.continue/` |
-| `opencode` | OpenCode | `ai` | `.opencode/` |
-| `aider` | Aider | `ai` | `.aider/` |
-| `cline` | Cline | `ai` | `.cline/` |
-| `zed` | Zed AI | `ai` | `.zed/` |
+| Moniker | Display Name | Parent | Install Path | Versioning |
+|---------|--------------|--------|--------------|------------|
+| `ai` | All AI Platforms | — | _(root fallback only)_ | Stable |
+| `claude` | Claude (all) | `ai` | _(parent group only)_ | Stable |
+| `claude-code` | Claude Code | `claude` | `.claude/` | See [Platform Versioning](07-platform-versioning) |
+| `claude-desktop` | Claude Desktop | `claude` | See below | See [Platform Versioning](07-platform-versioning) |
+| `copilot` | GitHub Copilot (all) | `ai` | _(parent group only)_ | Stable |
+| `copilot-vscode` | Copilot in VS Code | `copilot` | `.github/` | See [Platform Versioning](07-platform-versioning) |
+| `copilot-github` | Copilot on GitHub.com | `copilot` | `.github/` | Stable |
+| `cursor` | Cursor | `ai` | `.cursor/` | Stable |
+| `windsurf` | Windsurf | `ai` | `.windsurf/` | Stable |
+| `continue` | Continue | `ai` | `.continue/` | Stable |
+| `opencode` | OpenCode | `ai` | `.opencode/` | Stable |
+| `aider` | Aider | `ai` | `.aider/` | Stable |
+| `cline` | Cline | `ai` | `.cline/` | Stable |
+| `zed` | Zed AI | `ai` | `.zed/` | Stable |
 
 ### Claude Desktop Install Paths
 
@@ -106,7 +106,7 @@ A package is compatible with a target APM if any of the following are true:
 3. The package's `targets` array is **empty or contains only `ai`** (universal package).
 
 <Note>
-  Compatibility checking is performed by `PlatformCompatibilityService` in `AIpkg.Core`. See [spec 06](06-sdk-tooling) for the API surface.
+  Compatibility checking is performed by `PlatformCompatibilityService` in `AIpkg.Core`. See [SDK Interface](10-sdk-interface) for the API surface.
 </Note>
 
 ---
@@ -147,9 +147,9 @@ New monikers are added to the canonical table by opening a PR to the AIpkg spec 
 
 ---
 
-## APM in API Queries
+## APM in Search Queries
 
-The V3 search endpoint accepts an `apm` query parameter that filters results to packages compatible with the specified platform:
+The search endpoint accepts an `apm` query parameter that filters results to packages compatible with the specified platform:
 
 ```http
 GET /v3/search?q=mcp&apm=claude-code
@@ -171,7 +171,7 @@ The server expands `claude-code` to `[claude-code, claude, ai]` using the fallba
 | Any other moniker | Provisional until canonical registration |
 
 <Note>
-  Stable monikers will not be removed or renamed. If a platform is discontinued, its moniker is deprecated (marked in the registry) but not deleted.
+  Stable monikers will not be removed or renamed. If a platform is discontinued, its moniker is deprecated (marked in the registry) but not deleted. For how platforms evolve over time and how breaking changes in host platforms are handled, see [Platform Versioning](07-platform-versioning).
 </Note>
 
 ---

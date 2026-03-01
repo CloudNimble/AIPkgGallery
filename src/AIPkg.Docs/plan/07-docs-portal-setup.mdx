@@ -1,6 +1,6 @@
 ---
-title: "Docs Platform"
-sidebarTitle: "07 · Docs Platform"
+title: "Docs Portal Setup"
+sidebarTitle: "07 · Docs Portal Setup"
 description: "DotNetDocs.com setup for AIpkg.Core API reference, docs.aipkg.org developer portal structure, OpenAPI spec requirements, and documentation CI/CD pipeline."
 icon: "book"
 ---
@@ -108,10 +108,10 @@ docs.aipkg.org/
 ├── /                           ← Landing / overview
 ├── /quickstart                 ← 5-minute getting-started guide
 ├── /format/
-│   ├── /archive                ← .aipkg archive layout (from spec 01)
-│   ├── /manifest               ← .aispec schema reference (from spec 03)
-│   └── /platforms              ← APM moniker reference (from spec 02)
-├── /cli/                       ← aipkg CLI reference (from spec 06)
+│   ├── /archive                ← .aipkg archive layout (from Package Format spec)
+│   ├── /manifest               ← .aispec schema reference (from Metadata Schema spec)
+│   └── /platforms              ← APM moniker reference (from Platform Targeting spec)
+├── /cli/                       ← aipkg CLI reference (from SDK Interface spec)
 │   ├── /pack
 │   ├── /push
 │   ├── /install
@@ -124,7 +124,7 @@ docs.aipkg.org/
 │   ├── /cursor
 │   └── /...
 ├── /api/
-│   ├── /v3                     ← V3 REST API (OpenAPI-generated)
+│   ├── /v3                     ← Registry API reference (OpenAPI-generated)
 │   └── /core/                  ← AIpkg.Core .NET API (DotNetDocs)
 ├── /guides/
 │   ├── /creating-a-skill-package
@@ -134,9 +134,9 @@ docs.aipkg.org/
 └── /contributing/
 ```
 
-### V3 API Reference
+### Registry API Reference
 
-The V3 API reference at `/api/v3/` is generated from an OpenAPI specification published by the server:
+The Registry API reference at `/api/v3/` is generated from an OpenAPI specification published by the server:
 
 ```http
 GET https://aipkg.org/v3/openapi.json
@@ -194,7 +194,7 @@ project root (or `~/.claude/` for global installs).
 
 ## OpenAPI Spec Requirements
 
-Every V3 endpoint (see [spec 04](04-server-infrastructure)) must be represented with:
+Every Registry API endpoint (see [Registry API spec](../specs/09-registry-api)) must be represented with:
 
 - Correct HTTP method and path
 - All path parameters documented with types and examples
@@ -230,8 +230,8 @@ Every V3 endpoint (see [spec 04](04-server-infrastructure)) must be represented 
       <Step title="Validate completeness">
         Validates spec completeness (all endpoints documented).
       </Step>
-      <Step title="Deploy V3 reference">
-        Deploys updated V3 reference to docs portal.
+      <Step title="Deploy registry API reference">
+        Deploys updated Registry API reference to docs portal.
       </Step>
     </Steps>
   </Tab>

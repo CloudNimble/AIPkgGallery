@@ -9,7 +9,7 @@
         <ConceptualDocsEnabled>false</ConceptualDocsEnabled>
         <ShowPlaceholders>false</ShowPlaceholders>
         <MintlifyTemplate>
-            <Name>AIPkg.Docs</Name>
+            <Name>AIPkg</Name>
             <Theme>maple</Theme>
             <Colors>
                 <Primary>#419AC5</Primary>
@@ -28,15 +28,49 @@
                         </Group>
                         <Group Name="Specifications" Icon="book-open">
                             <Pages>
-                                specs/index;
-                                specs/01-aipkg-format;
-                                specs/02-platform-targeting;
-                                specs/03-metadata-schema;
-                                specs/04-server-infrastructure;
-                                specs/05-frontend-ui;
-                                specs/06-sdk-tooling;
-                                specs/07-docs-platform;
-                                specs/08-migration-plan
+                                specs/index
+                            </Pages>
+                            <Groups>
+                                <Group Name="Package Identity">
+                                    <Pages>
+                                        specs/01-aipkg-format;
+                                        specs/02-package-naming;
+                                        specs/03-versioning;
+                                        specs/04-prefix-reservations;
+                                        specs/05-code-signing
+                                    </Pages>
+                                </Group>
+                                <Group Name="Platform Targeting">
+                                    <Pages>
+                                        specs/06-platform-targeting;
+                                        specs/07-platform-versioning
+                                    </Pages>
+                                </Group>
+                                <Group Name="Package Content">
+                                    <Pages>
+                                        specs/08-metadata-schema
+                                    </Pages>
+                                </Group>
+                                <Group Name="Registry Protocol">
+                                    <Pages>
+                                        specs/09-registry-api;
+                                        specs/10-sdk-interface;
+                                        specs/11-registry-ui
+                                    </Pages>
+                                </Group>
+                            </Groups>
+                        </Group>
+                        <Group Name="Implementation Plan" Icon="map">
+                            <Pages>
+                                plan/index;
+                                plan/01-tech-stack;
+                                plan/02-solution-structure;
+                                plan/03-data-layer;
+                                plan/04-frontend-implementation;
+                                plan/05-server-implementation;
+                                plan/06-sdk-implementation;
+                                plan/07-docs-portal-setup;
+                                plan/08-migration
                             </Pages>
                         </Group>
                         <Group Name="Legacy (NuGetGallery)" Icon="box-archive">
