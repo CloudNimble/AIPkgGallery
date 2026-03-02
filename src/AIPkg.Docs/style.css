@@ -64,7 +64,39 @@ code, kbd, pre, samp {
 }
 
 /* ══════════════════════════════════════════════════
-   AIpkg Home Page
+   Custom mode layout overrides (mode: "custom" pages)
+══════════════════════════════════════════════════ */
+
+/* Remove Mintlify's prose max-width and padding on custom pages */
+.custom-mode article,
+.custom-mode .prose {
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+/* Hide the auto-injected title h1 and description paragraph */
+.custom-mode .prose > h1:first-child,
+.custom-mode .prose > p:first-child {
+    display: none !important;
+}
+
+/* Full-bleed main content area */
+.custom-mode main,
+[data-mintlify-mode="custom"] main {
+    padding: 0 !important;
+    max-width: 100% !important;
+}
+
+/* Remove any container constraints */
+.custom-mode .container,
+.custom-mode .max-w-7xl,
+.custom-mode .mx-auto {
+    max-width: 100% !important;
+}
+
+/* ══════════════════════════════════════════════════
+   AIpkg Home Page (legacy — kept for reference)
 ══════════════════════════════════════════════════ */
 
 /* ─── Additional Keyframes ─── */
