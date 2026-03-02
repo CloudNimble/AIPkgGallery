@@ -23,6 +23,7 @@
           "specs/index",
           {
             "group": "Package Identity",
+            "icon": "fingerprint",
             "pages": [
               "specs/01-aipkg-format",
               "specs/02-package-naming",
@@ -33,6 +34,7 @@
           },
           {
             "group": "Platform Targeting",
+            "icon": "bullseye",
             "pages": [
               "specs/06-platform-targeting",
               "specs/07-platform-versioning"
@@ -40,12 +42,14 @@
           },
           {
             "group": "Package Content",
+            "icon": "box-open",
             "pages": [
               "specs/08-metadata-schema"
             ]
           },
           {
             "group": "Registry Protocol",
+            "icon": "tower-broadcast",
             "pages": [
               "specs/09-registry-api",
               "specs/10-sdk-interface",

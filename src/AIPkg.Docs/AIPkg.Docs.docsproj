@@ -31,7 +31,7 @@
                                 specs/index
                             </Pages>
                             <Groups>
-                                <Group Name="Package Identity">
+                                <Group Name="Package Identity" Icon="fingerprint">
                                     <Pages>
                                         specs/01-aipkg-format;
                                         specs/02-package-naming;
@@ -40,18 +40,18 @@
                                         specs/05-code-signing
                                     </Pages>
                                 </Group>
-                                <Group Name="Platform Targeting">
+                                <Group Name="Platform Targeting" Icon="bullseye">
                                     <Pages>
                                         specs/06-platform-targeting;
                                         specs/07-platform-versioning
                                     </Pages>
                                 </Group>
-                                <Group Name="Package Content">
+                                <Group Name="Package Content" Icon="box-open">
                                     <Pages>
                                         specs/08-metadata-schema
                                     </Pages>
                                 </Group>
-                                <Group Name="Registry Protocol">
+                                <Group Name="Registry Protocol" Icon="tower-broadcast">
                                     <Pages>
                                         specs/09-registry-api;
                                         specs/10-sdk-interface;
