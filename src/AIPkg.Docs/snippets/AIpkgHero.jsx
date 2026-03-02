@@ -1,17 +1,40 @@
 export const AIpkgHero = () => {
-  const [started, setStarted] = React.useState(false);
-  const [termStep, setTermStep] = React.useState(0);
+  const CMD = 'aipkg create ~/.claude/plugins/my-mcp-server';
+  const [started,   setStarted]   = React.useState(false);
+  const [charCount, setCharCount] = React.useState(0);
+  const [termStep,  setTermStep]  = React.useState(0);
 
   React.useEffect(() => {
     setStarted(true);
-    const timers = [
-      setTimeout(() => setTermStep(1), 800),
-      setTimeout(() => setTermStep(2), 1500),
-      setTimeout(() => setTermStep(3), 2100),
-      setTimeout(() => setTermStep(4), 2700),
-      setTimeout(() => setTermStep(5), 3300),
-    ];
-    return () => timers.forEach(clearTimeout);
+    let char = 0;
+    let typeInterval = null;
+    const postTypeTimers = [];
+
+    // Start typing after a short pause
+    const startDelay = setTimeout(() => {
+      typeInterval = setInterval(() => {
+        char++;
+        setCharCount(char);
+        if (char >= CMD.length) {
+          clearInterval(typeInterval);
+          typeInterval = null;
+          // Output lines appear after typing completes
+          postTypeTimers.push(
+            setTimeout(() => setTermStep(1), 380),
+            setTimeout(() => setTermStep(2), 980),
+            setTimeout(() => setTermStep(3), 1600),
+            setTimeout(() => setTermStep(4), 2200),
+            setTimeout(() => setTermStep(5), 2900),  // platform pills
+          );
+        }
+      }, 44);
+    }, 420);
+
+    return () => {
+      clearTimeout(startDelay);
+      if (typeInterval) clearInterval(typeInterval);
+      postTypeTimers.forEach(clearTimeout);
+    };
   }, []);
 
   const platforms = [
@@ -175,7 +198,7 @@ export const AIpkgHero = () => {
 
         {/* Terminal */}
         <div style={{
-          width: '100%', maxWidth: '660px', borderRadius: '8px', overflow: 'hidden',
+          width: '100%', maxWidth: '720px', borderRadius: '8px', overflow: 'hidden',
           border: '1px solid rgba(60, 208, 226, 0.18)', background: '#04080F',
           boxShadow: '0 32px 80px rgba(0,0,0,0.7), 0 0 0 1px rgba(60,208,226,0.04) inset',
           marginBottom: '44px', ...anim(0.45),
@@ -193,48 +216,51 @@ export const AIpkgHero = () => {
             <span style={{
               flex: 1, textAlign: 'center', fontSize: '0.73rem',
               fontFamily: "'Cascadia Code', monospace", color: '#4A6A8A', letterSpacing: '0.05em',
-            }}>Terminal — bash</span>
+            }}>Terminal — zsh</span>
           </div>
 
           {/* Terminal body */}
           <div style={{
             padding: '20px 24px 28px',
             fontFamily: "'Cascadia Code', 'Courier New', monospace",
-            fontSize: '0.875rem', lineHeight: 2.1, minHeight: '130px',
+            fontSize: '0.875rem', lineHeight: 2.1, minHeight: '180px',
           }}>
-            {/* Command line */}
+            {/* Typed command line */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#E8F4FF' }}>
               <span style={{ color: '#3CD0E2', userSelect: 'none' }}>❯</span>
-              <span>aipkg install my-mcp-server</span>
-              {termStep < 1 && (
+              <span>{CMD.substring(0, charCount)}</span>
+              {charCount < CMD.length && (
                 <span style={{
                   display: 'inline-block', width: '2px', height: '15px', background: '#3CD0E2',
-                  animation: 'cursorBlink 1s ease-in-out infinite', verticalAlign: 'middle',
+                  animation: 'cursorBlink 0.75s ease-in-out infinite', verticalAlign: 'middle',
                 }} />
               )}
             </div>
             {/* Output lines */}
             <div style={termAnim(1)}>
               <span style={{ color: '#3CD0E2' }}>✓</span>
-              <span style={{ color: '#6B8FAF' }}> Detected platform: </span>
-              <span style={{ color: '#E8F4FF', fontWeight: 600 }}>claude-code</span>
+              <span style={{ color: '#6B8FAF' }}> Reading </span>
+              <span style={{ color: '#E8F4FF' }}>~/.claude/plugins/my-mcp-server/</span>
+              <span style={{ color: '#3CD0E2' }}>  found plugin</span>
             </div>
             <div style={termAnim(2)}>
               <span style={{ color: '#3CD0E2' }}>✓</span>
-              <span style={{ color: '#6B8FAF' }}> Resolving APM chain: </span>
-              <span style={{ color: '#419AC5' }}>claude-code → claude → ai → shared</span>
+              <span style={{ color: '#6B8FAF' }}> Bundling </span>
+              <span style={{ color: '#E8F4FF' }}>shared/</span>
+              <span style={{ color: '#6B8FAF' }}> (4 files) + </span>
+              <span style={{ color: '#E8F4FF' }}>3</span>
+              <span style={{ color: '#6B8FAF' }}> platform overrides</span>
             </div>
             <div style={termAnim(3)}>
               <span style={{ color: '#3CD0E2' }}>✓</span>
-              <span style={{ color: '#6B8FAF' }}> Collecting </span>
-              <span style={{ color: '#E8F4FF', fontWeight: 600 }}>4</span>
-              <span style={{ color: '#6B8FAF' }}> shared files, </span>
-              <span style={{ color: '#E8F4FF', fontWeight: 600 }}>2</span>
-              <span style={{ color: '#6B8FAF' }}> claude-code overrides</span>
+              <span style={{ color: '#6B8FAF' }}> Signing with </span>
+              <span style={{ color: '#419AC5' }}>code-signing key</span>
+              <span style={{ color: '#6B8FAF' }}>  (SHA-256)</span>
             </div>
             <div style={termAnim(4)}>
               <span style={{ color: '#4CAF7A' }}>✓</span>
-              <span style={{ color: '#4CAF7A' }}> my-mcp-server@1.2.0 installed → .claude/settings.json</span>
+              <span style={{ color: '#4CAF7A' }}> my-mcp-server.1.2.0.aipkg</span>
+              <span style={{ color: '#3A5A3A' }}>  14.2 KB  →  ready to publish</span>
             </div>
           </div>
         </div>
