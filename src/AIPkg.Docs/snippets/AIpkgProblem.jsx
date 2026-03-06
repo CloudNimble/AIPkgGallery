@@ -14,7 +14,7 @@ export const AIpkgProblem = () => {
 
   const platforms = [
     {
-      name: 'Claude Code', color: '#3CD0E2',
+      name: 'Claude Code', color: '#0E8077',
       file: '.claude/settings.json',
       code: `{
   "mcpServers": {
@@ -26,7 +26,7 @@ export const AIpkgProblem = () => {
 }`,
     },
     {
-      name: 'GitHub Copilot', color: '#4CAF7A',
+      name: 'GitHub Copilot', color: '#3061A6',
       file: '.github/copilot-instructions.md',
       code: `---
 mcp:
@@ -38,7 +38,7 @@ mcp:
 # Copilot Instructions...`,
     },
     {
-      name: 'Cursor', color: '#7C6EEA',
+      name: 'Cursor', color: '#8A57C6',
       file: '.cursor/rules/my-tool.mdc',
       code: `---
 description: My Tool Rules
@@ -50,7 +50,7 @@ Always use my-tool when
 working with TypeScript.`,
     },
     {
-      name: 'Windsurf', color: '#419AC5',
+      name: 'Windsurf', color: '#B98112',
       file: '.windsurfrules',
       code: `# Global Rules
 Always use my-tool
@@ -65,21 +65,21 @@ path: ./bin/my-tool`,
     <>
       <style>{`
         .frag-card {
-          background: #060E1A;
+          background: #111111;
           border-radius: 6px;
           overflow: hidden;
-          border: 1px solid rgba(255,255,255,0.06);
+          border: 1px solid rgba(255,255,255,0.07);
           transition: border-color 0.2s ease;
         }
         .frag-card:hover { border-color: rgba(255,255,255,0.14); }
         .frag-pre {
           margin: 0 !important;
           padding: 16px 18px !important;
-          background: #020810 !important;
+          background: #0A0A0A !important;
           font-family: 'Cascadia Code', 'Courier New', monospace !important;
           font-size: 0.77rem !important;
           line-height: 1.75 !important;
-          color: #7A9AB8 !important;
+          color: #555560 !important;
           border: none !important;
           border-radius: 0 !important;
           white-space: pre !important;
@@ -88,7 +88,7 @@ path: ./bin/my-tool`,
         }
       `}</style>
 
-      <section style={{ background: '#0A1628', padding: '100px 24px' }}>
+      <section style={{ background: '#080808', padding: '100px 24px' }}>
         <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
 
           {/* Header */}
@@ -96,19 +96,19 @@ path: ./bin/my-tool`,
             <div style={{
               display: 'inline-flex', alignItems: 'center', gap: '8px',
               marginBottom: '18px', padding: '5px 14px',
-              border: '1px solid rgba(226, 100, 60, 0.35)',
-              borderRadius: '4px', background: 'rgba(226, 100, 60, 0.06)',
+              border: '1px solid rgba(179,44,56,0.35)',
+              borderRadius: '4px', background: 'rgba(179,44,56,0.07)',
             }}>
               <span style={{
                 fontFamily: "'Cascadia Code', monospace", fontSize: '0.7rem',
-                letterSpacing: '0.13em', textTransform: 'uppercase', color: '#E2643C', fontWeight: 600,
+                letterSpacing: '0.13em', textTransform: 'uppercase', color: '#B32C38', fontWeight: 600,
               }}>The Problem</span>
             </div>
             <h2 style={{
-              fontSize: 'clamp(1.9rem, 4vw, 2.9rem)', fontWeight: 800, color: '#E8F4FF',
+              fontSize: 'clamp(1.9rem, 4vw, 2.9rem)', fontWeight: 800, color: '#E8E8F0',
               letterSpacing: '-0.025em', margin: '0 0 18px 0', lineHeight: 1.12,
             }}>AI tooling is fragmented.</h2>
-            <p style={{ fontSize: '1rem', color: '#6B8FAF', maxWidth: '580px', lineHeight: 1.7, margin: 0 }}>
+            <p style={{ fontSize: '1rem', color: '#6B6B7A', maxWidth: '580px', lineHeight: 1.7, margin: 0 }}>
               To reach users across major AI platforms, you must maintain a different config file,
               directory layout, and update process for each one — and keep them all in sync, forever.
             </p>
@@ -124,16 +124,16 @@ path: ./bin/my-tool`,
             {platforms.map((p) => (
               <div key={p.name} className="frag-card">
                 {/* Top accent */}
-                <div style={{ height: '3px', background: p.color, opacity: 0.75 }} />
+                <div style={{ height: '3px', background: p.color }} />
 
                 <div style={{ padding: '16px 18px 12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                     <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: p.color, flexShrink: 0 }} />
-                    <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#C0D8F0' }}>{p.name}</span>
+                    <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#C8C8D2' }}>{p.name}</span>
                   </div>
                   <div style={{
                     fontFamily: "'Cascadia Code', monospace", fontSize: '0.7rem',
-                    color: p.color, opacity: 0.75, letterSpacing: '0.02em',
+                    color: p.color, opacity: 0.8, letterSpacing: '0.02em',
                     marginBottom: '12px',
                   }}>{p.file}</div>
                 </div>
@@ -146,15 +146,15 @@ path: ./bin/my-tool`,
           {/* Warning callout */}
           <div style={{
             marginTop: '28px', padding: '16px 22px',
-            background: 'rgba(226, 100, 60, 0.05)',
-            border: '1px solid rgba(226, 100, 60, 0.2)',
+            background: 'rgba(179,44,56,0.06)',
+            border: '1px solid rgba(179,44,56,0.2)',
             borderRadius: '6px', ...anim(0.5),
           }}>
             <span style={{
               fontFamily: "'Cascadia Code', monospace", fontSize: '0.83rem',
-              color: '#C07050', lineHeight: 1.6,
+              color: '#A04050', lineHeight: 1.6,
             }}>
-              ⚠ Four platforms. Four config formats. Four maintenance burdens. That's before any new platforms ship.
+              &#9888; Four platforms. Four config formats. Four maintenance burdens. That&#39;s before any new platforms ship.
             </span>
           </div>
 

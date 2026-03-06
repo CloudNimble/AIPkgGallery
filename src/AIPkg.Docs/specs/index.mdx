@@ -65,6 +65,14 @@ This specification suite is addressed to **third-party implementers**: tool auth
   </Card>
 </CardGroup>
 
+### Security
+
+<CardGroup cols={1}>
+  <Card title="12 · Package Security" icon="shield-halved" href="12-security">
+    Multi-layer security model — static analysis, AV scanning, AI-powered prompt injection detection, signature enforcement, immutability guarantees, and incident response.
+  </Card>
+</CardGroup>
+
 ---
 
 ## Conceptual Model
@@ -91,6 +99,7 @@ AIpkg maps directly onto the NuGet conceptual model:
 4. **Immutable versions** — Published versions cannot be overwritten. Unlisting is the only mechanism to hide a version.
 5. **Normative API-first** — Every registry behavior is defined by its API contract, not by server implementation details.
 6. **AOT-capable SDK** — `AIpkg.Core` is AOT-compatible; no dynamic code. The `aipkg` CLI ships as a single native binary.
+7. **Defense in depth** — Security is layered: static analysis, AV scanning, AI content audit, cryptographic signing, and runtime anomaly detection. No single layer is the sole gate.
 
 ---
 
@@ -107,3 +116,4 @@ A complete spec suite must allow:
 - [ ] Someone to implement every registry endpoint with correct request/response shapes (→ [spec 09](09-registry-api))
 - [ ] Someone to implement `AIpkg.Core` public API (→ [spec 10](10-sdk-interface))
 - [ ] Someone to build a compatible registry web UI (→ [spec 11](11-registry-ui))
+- [ ] Someone to implement the full security scanning pipeline (→ [spec 12](12-security))

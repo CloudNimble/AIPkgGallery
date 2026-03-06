@@ -14,7 +14,8 @@
       "mcp__playwright__browser_navigate",
       "mcp__playwright__browser_take_screenshot",
       "mcp__playwright__browser_evaluate",
-      "WebFetch(domain:www.mintlify.com)"
+      "WebFetch(domain:www.mintlify.com)",
+      "WebFetch(domain:skills.sh)"
     ]
   }
 }

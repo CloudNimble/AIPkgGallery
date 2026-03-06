@@ -1,0 +1,450 @@
+---
+title: "AIPkg Brand Guidelines"
+description: "Official brand identity guidelines for AIPkg — colors, logo usage, typography, and visual standards."
+icon: "palette"
+---
+
+import { LogoAnatomy } from "/snippets/LogoAnatomy.jsx"
+import { BrandGradientShowcase } from "/snippets/BrandGradientShowcase.jsx"
+import { ColorWheelHarmony } from "/snippets/ColorWheelHarmony.jsx"
+import { TypographySpecimen } from "/snippets/TypographySpecimen.jsx"
+
+# AIPkg Brand Guidelines
+
+AIPkg is an AI package management platform. The brand identity is built around a **purple isometric package box** with four floating icon elements — each representing a core capability — rendered in distinct, color-theory-validated accent colors.
+
+This guide defines the official color palette, logo construction, usage rules, and visual standards for all AIPkg materials.
+
+---
+
+## Logo Overview
+
+The AIPkg logo consists of two primary elements: the **isometric package box** (rendered in the core purple palette) and four **floating capability icons** that appear to be emerging from or entering the box. Below the box sits the **AIPkg wordmark** in Purple Deep.
+
+<CardGroup cols={2}>
+  <Card title="Primary Logo" icon="box-open">
+    The full-color logo on a white or light background. This is the default usage for most contexts.
+  </Card>
+  <Card title="Icon-Only Mark" icon="cube">
+    The isometric box with floating icons, without the wordmark. Use when space is constrained or the brand name appears elsewhere nearby.
+  </Card>
+</CardGroup>
+
+### Logo Anatomy
+
+Hover over any chip to identify each element, its color family, and its role in the unified mark.
+
+<LogoAnatomy />
+
+<br />
+
+The logo is composed of these structural groups:
+
+| Element | Description | Color Family |
+|---------|-------------|-------------|
+| **Box Body** | Isometric package with front face, lid panels, and center crease | Core Purple (gradient) |
+| **Box Ribbons** | Left ribbon and right swooping ribbon | Purple Medium + Lavender |
+| **Wordmark** | "AIPkg" letterforms beneath the box | Purple Deep |
+| **Servers Icon** | Three-tier rack with status indicators (top-right) | Teal |
+| **Database Icon** | Cylinder with horizontal striations (bottom-left) | Amber |
+| **Prompt Icon** | Terminal window with text lines (top-center) | Blue |
+| **Code Icon** | Editor window with angle brackets (center-right) | Red |
+
+<Note>
+  The four floating icons always appear as a complete set. Never isolate a single icon from the logo for standalone use — they are part of the unified mark.
+</Note>
+
+---
+
+## Color Palette
+
+The AIPkg palette is divided into two families: the **Core Purple** palette (used for the box, ribbons, strokes, and wordmark) and the **Chromatic Icon** palette (one distinct color per floating icon element).
+
+### Core Purple Palette
+
+These colors form the structural foundation of the logo and all primary brand materials.
+
+<Color variant="table">
+  <Color.Row title="Core Purple">
+    <Color.Item name="Purple Deep" value="#471B78" />
+    <Color.Item name="Purple Primary" value="#7840AE" />
+    <Color.Item name="Purple Medium" value="#8A57C6" />
+    <Color.Item name="Purple Light" value="#C279F0" />
+    <Color.Item name="Purple Soft" value="#9A66E2" />
+    <Color.Item name="Lavender Pale" value="#F1E8F1" />
+  </Color.Row>
+</Color>
+
+| Token | HEX | Role |
+|-------|-----|------|
+| **Purple Deep** | `#471B78` | Strokes, outlines, wordmark, dark accents |
+| **Purple Primary** | `#7840AE` | Box face fills, general-purpose brand purple |
+| **Purple Medium** | `#8A57C6` | Ribbons and secondary structural fills |
+| **Purple Light** | `#C279F0` | Gradient top stop on box face and lid gradients |
+| **Purple Soft** | `#9A66E2` | Gradient bottom stop on lid panels |
+| **Lavender Pale** | `#F1E8F1` | Box side panel, ribbon highlight, light accents |
+
+### Gradients
+
+The box uses linear gradients to create the isometric 3D effect. These should be preserved exactly as specified. Click **Copy CSS** on any swatch to copy the gradient definition.
+
+<BrandGradientShowcase />
+
+<Warning>
+  Never flatten the box gradients to solid fills. The dimensional gradient is essential to the isometric visual identity.
+</Warning>
+
+### Chromatic Icon Palette
+
+Each of the four floating capability icons has its own color family. These were selected using HSL color-wheel analysis to ensure a minimum 40° hue separation between every pair and at least 30° separation from the core purple (270°).
+
+<Color variant="table">
+  <Color.Row title="Teal (Servers — Infrastructure)">
+    <Color.Item name="Teal Accent" value="#0E8077" />
+    <Color.Item name="Teal Background" value="#E5EFEE" />
+    <Color.Item name="Teal Panel" value="#EFF4F4" />
+  </Color.Row>
+  <Color.Row title="Amber (Database — Storage)">
+    <Color.Item name="Amber Accent" value="#B98112" />
+    <Color.Item name="Amber Background" value="#EFECE5" />
+    <Color.Item name="Amber Panel" value="#F4F3EF" />
+  </Color.Row>
+  <Color.Row title="Blue (Prompt — Interaction)">
+    <Color.Item name="Blue Accent" value="#3061A6" />
+    <Color.Item name="Blue Background" value="#E7EAED" />
+    <Color.Item name="Blue Panel" value="#F0F1F3" />
+  </Color.Row>
+  <Color.Row title="Red (Code — Creation)">
+    <Color.Item name="Red Accent" value="#B32C38" />
+    <Color.Item name="Red Background" value="#EEE6E7" />
+    <Color.Item name="Red Panel" value="#F3F0F0" />
+  </Color.Row>
+</Color>
+
+<Tabs>
+  <Tab title="Servers — Teal">
+    **Hue position:** 175° · **Semantic meaning:** Infrastructure, reliability, uptime
+
+    | Role | HEX | RGB | Usage |
+    |------|-----|-----|-------|
+    | **Accent** | `#0E8077` | `14, 128, 119` | Server middle panel fill |
+    | **Background** | `#E5EFEE` | `229, 239, 238` | *Reserved for UI contexts* |
+    | **Panel** | `#EFF4F4` | `239, 244, 244` | Server top and bottom panel fills |
+
+    The teal accent provides strong visual contrast against the warm purple box. It sits near purple's complement on the color wheel, creating natural tension and energy.
+  </Tab>
+
+  <Tab title="Database — Amber">
+    **Hue position:** 40° · **Semantic meaning:** Storage, value, data richness
+
+    | Role | HEX | RGB | Usage |
+    |------|-----|-----|-------|
+    | **Accent** | `#B98112` | `185, 129, 18` | Database cylinder body fill |
+    | **Background** | `#EFECE5` | `239, 236, 229` | Database container background |
+    | **Panel** | `#F4F3EF` | `244, 243, 239` | Database cylinder top fill |
+
+    Gold/amber paired with purple is a classic regal combination — authoritative and warm. The amber accent provides the strongest warm-cool contrast in the icon set.
+  </Tab>
+
+  <Tab title="Prompt — Blue">
+    **Hue position:** 215° · **Semantic meaning:** Interaction, input, command
+
+    | Role | HEX | RGB | Usage |
+    |------|-----|-----|-------|
+    | **Accent** | `#3061A6` | `48, 97, 166` | Prompt window title bar fill |
+    | **Background** | `#E7EAED` | `231, 234, 237` | Prompt window container background |
+    | **Panel** | `#F0F1F3` | `240, 241, 243` | *Reserved for UI contexts* |
+
+    A controlled royal blue that reads as professional and structured. Positioned between teal and purple on the wheel, bridging the cool-tone range without overlapping either.
+  </Tab>
+
+  <Tab title="Code — Red">
+    **Hue position:** 355° · **Semantic meaning:** Creation, syntax, building
+
+    | Role | HEX | RGB | Usage |
+    |------|-----|-----|-------|
+    | **Accent** | `#B32C38` | `179, 44, 56` | Code editor title bar fill |
+    | **Background** | `#EEE6E7` | `238, 230, 231` | Code editor container background |
+    | **Panel** | `#F3F0F0` | `243, 240, 240` | *Reserved for UI contexts* |
+
+    A warm crimson-red that conveys energy and creation. Paired with the amber database, it forms the warm pole of the palette, while teal and blue form the cool pole — creating balanced visual weight.
+  </Tab>
+</Tabs>
+
+### Color Harmony Visualization
+
+The four icon hues are placed on the color wheel with verified angular separation. Hover over any color in the diagram to see its connections.
+
+<ColorWheelHarmony />
+
+<br />
+
+| Pair | Hue Distance | Status |
+|------|-------------|--------|
+| Servers ↔ Database | 135° | Well-separated |
+| Servers ↔ Prompt | 40° | Distinguishable |
+| Servers ↔ Code | 180° | Complementary |
+| Database ↔ Prompt | 175° | Near-complementary |
+| Database ↔ Code | 45° | Distinguishable |
+| Prompt ↔ Code | 140° | Well-separated |
+
+<Tip>
+  All four icon accents achieve ≥3.5:1 contrast ratio against white, meeting WCAG AA requirements for large text and graphical elements.
+</Tip>
+
+---
+
+## Logo Usage
+
+### Clear Space
+
+Maintain a minimum clear space around the logo equal to the height of the "A" in the wordmark on all sides. No other graphic elements, text, or visual clutter should enter this boundary.
+
+### Minimum Size
+
+The full logo (box + wordmark) should not be reproduced smaller than **48px wide** on screen or **12mm wide** in print. The icon-only mark (box without wordmark) should not be smaller than **32px wide** on screen or **8mm wide** in print.
+
+### Background Requirements
+
+<CardGroup cols={2}>
+  <Card title="Preferred: White" icon="check">
+    The logo was designed for white or very light backgrounds. This is the default and preferred usage.
+  </Card>
+  <Card title="Acceptable: Light Neutral" icon="check">
+    Light grey (`#F5F5F5` or lighter) or light warm-neutral backgrounds are acceptable.
+  </Card>
+  <Card title="Acceptable: Dark" icon="moon">
+    On dark backgrounds (`#1A1A2E` or similar), the logo remains legible because the box gradients and icon backgrounds provide their own contrast. The wordmark may need to be rendered in white (`#FFFFFF`) instead of Purple Deep.
+  </Card>
+  <Card title="Avoid: Colored" icon="xmark">
+    Avoid placing the logo on saturated colored backgrounds, especially purples, blues, or teals that compete with the palette.
+  </Card>
+</CardGroup>
+
+### Logo Don'ts
+
+<Steps>
+  <Step title="Don't recolor the box">
+    The purple box is the brand anchor. Never change its gradient fills, stroke color, or ribbon colors.
+  </Step>
+  <Step title="Don't isolate individual icons">
+    The four floating icons are part of the unified mark. Never extract a single icon (e.g., the database cylinder) for standalone use as a brand element.
+  </Step>
+  <Step title="Don't rotate or skew">
+    The isometric perspective is carefully constructed. Never rotate, skew, distort, or apply 3D transforms to the logo.
+  </Step>
+  <Step title="Don't add effects">
+    No drop shadows, glows, bevels, or other raster effects should be applied to the logo. The SVG is designed to be used as-is.
+  </Step>
+  <Step title="Don't swap icon colors">
+    Each icon has a specific assigned color (teal=servers, amber=database, blue=prompt, red=code). These semantic assignments are fixed and should not be swapped.
+  </Step>
+  <Step title="Don't outline the wordmark">
+    The AIPkg wordmark is set in a specific custom letterform. Never convert it to an outlined stroke, apply a different typeface, or retype it.
+  </Step>
+</Steps>
+
+---
+
+## Typography
+
+### Primary Typeface
+
+The AIPkg wordmark is set in **Poppins SemiBold** — a geometric sans-serif with a pointed "A" apex, single-story open "g", angular "k" arms, and a high x-height. Poppins is the recommended primary typeface for all brand materials to maintain consistency with the wordmark.
+
+| Role | Typeface | Weight | Usage |
+|------|----------|--------|-------|
+| **Headlines** | Poppins | Bold (700) | Page titles, section headers, hero text |
+| **Subheadings** | Poppins | SemiBold (600) | Card titles, sidebar labels, feature names |
+| **Body** | Poppins | Regular (400) | Paragraphs, descriptions, documentation text |
+| **Code / Technical** | JetBrains Mono | Regular (400) | Code snippets, CLI commands, API references |
+| **Small / Captions** | Poppins | Medium (500) | Labels, metadata, footnotes |
+
+<Info>
+  **Why Poppins?** The wordmark's letterform geometry — pointed A apex, open single-story g, rounded P bowl, and angular k — matches Poppins most closely among available typefaces. Using Poppins throughout brand materials creates a cohesive typographic identity that extends naturally from the logo. Poppins is open-source (Google Fonts) and has excellent multi-language support.
+</Info>
+
+### Type Scale Specimen
+
+The scale uses a **1.25 ratio** (Major Third) for consistent visual rhythm. The specimen below loads Poppins live.
+
+<TypographySpecimen />
+
+<br />
+
+| Level | Size | Line Height | Usage |
+|-------|------|-------------|-------|
+| Display | 36px / 2.25rem | 1.2 | Hero sections, landing pages |
+| H1 | 28px / 1.75rem | 1.3 | Page titles |
+| H2 | 22px / 1.375rem | 1.35 | Section headers |
+| H3 | 18px / 1.125rem | 1.4 | Subsection headers |
+| Body | 16px / 1rem | 1.6 | Default body text |
+| Small | 14px / 0.875rem | 1.5 | Captions, labels, metadata |
+| Code | 14px / 0.875rem | 1.6 | Monospace content |
+
+---
+
+## Iconography
+
+When creating custom icons or illustrations for AIPkg materials beyond the logo, follow these principles:
+
+<CardGroup cols={2}>
+  <Card title="Stroke-Based" icon="pen-line">
+    Prefer 2px rounded-cap strokes on a transparent background, matching the logo's illustration style.
+  </Card>
+  <Card title="Isometric When Applicable" icon="cube">
+    For 3D or dimensional illustrations, use the same isometric projection angle as the box logo.
+  </Card>
+  <Card title="Use Brand Colors" icon="palette">
+    All icon and illustration colors should be drawn from the defined brand palette — core purples for structural elements, chromatic accents for category-specific elements.
+  </Card>
+  <Card title="Consistent Weight" icon="ruler">
+    Maintain consistent stroke weight and corner radius across all iconography. The logo uses 2–2.5px strokes with round caps.
+  </Card>
+</CardGroup>
+
+---
+
+## Voice & Tone
+
+AIPkg's brand voice is **technical, confident, and approachable** — the kind of voice that can explain a complex package dependency graph without being condescending about it.
+
+| Attribute | Do | Don't |
+|-----------|-----|-------|
+| **Precise** | "Resolves transitive dependencies in under 200ms" | "Super fast dependency resolution" |
+| **Confident** | "AIPkg manages your AI packages" | "AIPkg tries to help with package management" |
+| **Approachable** | "Get started in three commands" | "Initiate the bootstrapping protocol" |
+| **Honest** | "Currently supports Python and Node.js" | "Works with everything" |
+
+---
+
+## Digital Applications
+
+### Favicon
+
+Use the isometric box icon-only mark (without wordmark or floating icons) as the favicon. At 16×16 and 32×32, the floating icons are too small to render clearly.
+
+### Social Media Avatar
+
+Use the full icon-only mark (box with floating icons) on a white circular or rounded-square background. Ensure the clear space rules are respected within the avatar boundary.
+
+### Documentation Site
+
+The AIPkg documentation uses the brand purple as the primary accent color for navigation, links, and interactive elements:
+
+<Color variant="table">
+  <Color.Row title="Documentation Site Tokens">
+    <Color.Item name="Primary links" value="#7840AE" />
+    <Color.Item name="Hover state" value="#8A57C6" />
+    <Color.Item name="Active / Focus" value="#471B78" />
+    <Color.Item name="Code highlights" value="#C279F0" />
+  </Color.Row>
+  <Color.Row title="Semantic Callout Colors">
+    <Color.Item name="Info" value="#3061A6" />
+    <Color.Item name="Warning" value="#B98112" />
+    <Color.Item name="Error" value="#B32C38" />
+    <Color.Item name="Success" value="#0E8077" />
+  </Color.Row>
+</Color>
+
+---
+
+## CSS Custom Properties
+
+For web implementations, use these CSS custom properties:
+
+```css
+:root {
+  /* Core Purple Palette */
+  --aipkg-purple-deep: #471B78;
+  --aipkg-purple-primary: #7840AE;
+  --aipkg-purple-medium: #8A57C6;
+  --aipkg-purple-light: #C279F0;
+  --aipkg-purple-soft: #9A66E2;
+  --aipkg-lavender-pale: #F1E8F1;
+
+  /* Chromatic Icon Accents */
+  --aipkg-teal: #0E8077;
+  --aipkg-teal-bg: #E5EFEE;
+  --aipkg-teal-panel: #EFF4F4;
+
+  --aipkg-amber: #B98112;
+  --aipkg-amber-bg: #EFECE5;
+  --aipkg-amber-panel: #F4F3EF;
+
+  --aipkg-blue: #3061A6;
+  --aipkg-blue-bg: #E7EAED;
+  --aipkg-blue-panel: #F0F1F3;
+
+  --aipkg-red: #B32C38;
+  --aipkg-red-bg: #EEE6E7;
+  --aipkg-red-panel: #F3F0F0;
+
+  /* Semantic Mapping */
+  --color-primary: var(--aipkg-purple-primary);
+  --color-primary-hover: var(--aipkg-purple-medium);
+  --color-primary-active: var(--aipkg-purple-deep);
+  --color-info: var(--aipkg-blue);
+  --color-success: var(--aipkg-teal);
+  --color-warning: var(--aipkg-amber);
+  --color-error: var(--aipkg-red);
+}
+```
+
+---
+
+## Tailwind CSS Configuration
+
+For Tailwind CSS projects, extend the default theme:
+
+```js
+// tailwind.config.js
+module.exports = {
+  theme: {
+    extend: {
+      colors: {
+        aipkg: {
+          'purple-deep': '#471B78',
+          'purple': '#7840AE',
+          'purple-medium': '#8A57C6',
+          'purple-light': '#C279F0',
+          'purple-soft': '#9A66E2',
+          'lavender': '#F1E8F1',
+          'teal': { DEFAULT: '#0E8077', bg: '#E5EFEE', panel: '#EFF4F4' },
+          'amber': { DEFAULT: '#B98112', bg: '#EFECE5', panel: '#F4F3EF' },
+          'blue': { DEFAULT: '#3061A6', bg: '#E7EAED', panel: '#F0F1F3' },
+          'red': { DEFAULT: '#B32C38', bg: '#EEE6E7', panel: '#F3F0F0' },
+        },
+      },
+    },
+  },
+}
+```
+
+---
+
+## Asset Checklist
+
+<Steps>
+  <Step title="Primary Logo SVG">
+    Full-color logo with box, floating icons, and wordmark. Format: SVG (vector).
+  </Step>
+  <Step title="Icon-Only Mark SVG">
+    Box with floating icons, no wordmark. Format: SVG (vector).
+  </Step>
+  <Step title="Favicon Package">
+    16×16, 32×32, and 180×180 (Apple Touch) PNG exports of the box-only mark.
+  </Step>
+  <Step title="Social Media Kit">
+    Avatar (512×512), banner (1500×500), and Open Graph image (1200×630) templates.
+  </Step>
+  <Step title="Color Palette File">
+    `.ase` (Adobe Swatch Exchange) and `.sketchpalette` exports of the full brand palette.
+  </Step>
+</Steps>
+
+---
+
+<Note>
+  **Version:** 1.0 · **Last updated:** March 2026 · **Palette variant:** Chromatic (Option B)
+</Note>

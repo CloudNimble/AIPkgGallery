@@ -61,18 +61,20 @@ Claude Desktop uses OS-specific config directories:
 The fallback graph defines which platform directories the installer checks, ordered from most specific to most general:
 
 ```
-claude-code     →  claude  →  ai  →  shared
-claude-desktop  →  claude  →  ai  →  shared
-copilot-vscode  →  copilot →  ai  →  shared
-copilot-github  →  copilot →  ai  →  shared
-cursor          →  ai  →  shared
-windsurf        →  ai  →  shared
-continue        →  ai  →  shared
-opencode        →  ai  →  shared
-aider           →  ai  →  shared
-cline           →  ai  →  shared
-zed             →  ai  →  shared
+claude-code     →  claude  →  lib/shared
+claude-desktop  →  claude  →  lib/shared
+copilot-vscode  →  copilot →  lib/shared
+copilot-github  →  copilot →  lib/shared
+cursor          →  lib/shared
+windsurf        →  lib/shared
+continue        →  lib/shared
+opencode        →  lib/shared
+aider           →  lib/shared
+cline           →  lib/shared
+zed             →  lib/shared
 ```
+
+Each step in the chain maps to a directory inside `lib/`. For example, `claude-code` maps to `lib/claude-code/`, `claude` maps to `lib/claude/`, and the terminal step always maps to `lib/shared/`.
 
 ### Resolution Algorithm
 
@@ -83,17 +85,14 @@ Given a target APM `T`, build the chain:
     Begin the chain with `[T]`.
   </Step>
   <Step title="Walk to parent">
-    Find the parent of `T` in the canonical table. If the parent is not `ai`, append it to the chain.
-  </Step>
-  <Step title="Append ai">
-    Append `ai` to the chain.
+    Find the parent of `T` in the canonical table. If a parent exists, append it to the chain and repeat until no parent remains.
   </Step>
   <Step title="Append shared">
-    Append `shared` (always last).
+    Append `lib/shared` (always last).
   </Step>
 </Steps>
 
-For file resolution, iterate the chain from **end to start** (least specific first), applying each directory's files. The last write wins, so most-specific files override less-specific ones.
+For file resolution, iterate the chain from **end to start** (least specific first), applying each `lib/{entry}/` directory's files. The last write wins, so most-specific files override less-specific ones.
 
 ---
 
@@ -127,7 +126,7 @@ APMs are always lowercased. During ingestion and search, the server normalizes A
 A package may declare a dependency on or include files for a moniker not in the canonical table. Installers must:
 
 - **Warn** (not error) when encountering an unknown moniker in `targets[]`
-- **Silently skip** unknown `apm/{unknown-moniker}/` directories during extraction
+- **Silently skip** unknown `lib/{unknown-moniker}/` directories during installation
 - **Not fail validation** solely due to an unknown moniker (forward compatibility)
 
 <Info>
@@ -155,7 +154,7 @@ The search endpoint accepts an `apm` query parameter that filters results to pac
 GET /v3/search?q=mcp&apm=claude-code
 ```
 
-The server expands `claude-code` to `[claude-code, claude, ai]` using the fallback graph, then returns packages whose `targets` array intersects with the expanded set (plus universal packages).
+The server expands `claude-code` to `[claude-code, claude]` using the fallback graph, then returns packages whose `targets` array intersects with the expanded set (plus universal packages targeting `lib/shared/`).
 
 ---
 
@@ -163,7 +162,6 @@ The server expands `claude-code` to `[claude-code, claude, ai]` using the fallba
 
 | Moniker | Stability |
 |---------|-----------|
-| `ai` | Stable — never removed |
 | `claude`, `claude-code`, `claude-desktop` | Stable |
 | `copilot`, `copilot-vscode`, `copilot-github` | Stable |
 | `cursor`, `windsurf`, `continue` | Stable |
@@ -183,27 +181,27 @@ A package that ships different skill files for Claude Code vs Copilot but shares
 ```
 my-tool.1.0.0.aipkg
 ├── my-tool.aispec
-├── shared/
-│   └── prompts/
-│       └── base-prompt.md          ← All platforms
-├── apm/
-│   ├── claude-code/
-│   │   └── skills/
-│   │       └── my-tool.md          ← Claude Code only
-│   └── copilot/
-│       └── instructions/
-│           └── my-tool.md          ← All Copilot variants
+└── lib/
+    ├── shared/
+    │   └── prompts/
+    │       └── base-prompt.md          ← All platforms
+    ├── claude-code/
+    │   └── skills/
+    │       └── my-tool.md              ← Claude Code only
+    └── copilot/
+        └── instructions/
+            └── my-tool.md              ← All Copilot variants
 ```
 
 <Tabs>
   <Tab title="claude-code install">
-    - `base-prompt.md` is installed (from `shared/`)
-    - `skills/my-tool.md` is installed (from `apm/claude-code/`)
+    - `base-prompt.md` is installed (from `lib/shared/`)
+    - `skills/my-tool.md` is installed (from `lib/claude-code/`)
     - `instructions/my-tool.md` is **not** installed (wrong platform)
   </Tab>
   <Tab title="copilot-vscode install">
-    - `base-prompt.md` is installed (from `shared/`)
-    - `instructions/my-tool.md` is installed (from `apm/copilot/` via parent fallback)
+    - `base-prompt.md` is installed (from `lib/shared/`)
+    - `instructions/my-tool.md` is installed (from `lib/copilot/` via parent fallback)
     - `skills/my-tool.md` is **not** installed (wrong platform)
   </Tab>
 </Tabs>

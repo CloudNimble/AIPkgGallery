@@ -1,0 +1,281 @@
+---
+title: "Package Security"
+sidebarTitle: "12 · Package Security"
+description: "Normative specification for AIpkg's multi-layer package security model — static analysis, antivirus scanning, AI-powered prompt injection detection, signature verification, and incident response."
+icon: "shield-halved"
+---
+
+This document defines the normative security model for the AIpkg registry. It addresses how packages are evaluated before and after publication, what invariants the registry maintains on behalf of consumers, and how incidents are handled.
+
+<Info>
+  **Current Status:** Signature verification (Spec 05) is the security foundation at MVP. Scanning pipeline components described here are post-MVP but normatively defined so that implementers can plan for them. Features marked **[Post-MVP]** are not required for an MVP-compliant registry.
+</Info>
+
+---
+
+## Threat Model
+
+AIpkg packages are consumed by AI platform tools that execute with access to user workspaces, codebases, credentials, and AI model inference. The threat surface is broader than traditional software packages because package content directly influences AI model behavior — a malicious system prompt is as dangerous as a malicious binary.
+
+### Attacker Goals
+
+| Goal | Vector |
+|------|--------|
+| Exfiltrate workspace content | Prompt injection in skill/prompt packages |
+| Gain persistent code execution | Malicious `mcp-server` binary or launch config |
+| Pivot via supply chain | Compromise publisher account, push backdoor |
+| Hijack model behavior | Override system prompt to disable safety guidelines |
+| Exfiltrate API keys | Instruct model to echo environment variables |
+
+### Trust Assumptions
+
+- **Registry infrastructure is trusted.** Packages are scanned and signed before serving. The CDN serves only content-addressed blobs.
+- **Publishers are conditionally trusted.** Verified publishers (Spec 04) have demonstrated identity. Unverified publishers are treated as untrusted until scans pass.
+- **Consumers verify signatures.** The `aipkg` CLI verifies package signatures before installation. Registry clients MUST NOT install unsigned packages without an explicit `--allow-unsigned` flag.
+
+---
+
+## Layer 1: Static File Analysis
+
+All packages pass static analysis immediately upon push, before any blob is written to the content store.
+
+### Archive Integrity
+
+The registry MUST validate:
+
+1. The `.aipkg` file is a valid ZIP archive (no ZIP bombs, no path traversal entries)
+2. The manifest (`{id}.aispec`) is valid JSON conforming to the metadata schema (Spec 08)
+3. Every file path in the archive passes the allowed-path rules from Spec 01
+4. Total uncompressed size does not exceed the per-capability limit
+
+ZIP bomb detection uses a compression ratio threshold: any entry with `uncompressed_size / compressed_size > 100` is rejected.
+
+Path traversal rejection: any entry path containing `..`, an absolute path prefix, or a null byte is rejected.
+
+### Extension Allow-List
+
+Only files with extensions on the platform allow-list may appear in `apm/` subdirectories. The registry MUST reject archives containing:
+
+- Executable binaries in `shared/` or `apm/` (`.exe`, `.dll`, `.so`, `.dylib`, `.sh`, `.ps1`, `.bat`, `.cmd`)
+- Hidden files (paths beginning with `.` other than `.signature.p7s` and the manifest)
+- Symlinks
+
+<Note>
+`mcp-server` packages may declare a `command` that references a binary installed separately. They do NOT bundle executables inside the `.aipkg` archive itself.
+</Note>
+
+---
+
+## Layer 2: Antivirus Scanning
+
+**[Post-MVP]**
+
+All files within a package are submitted to an antivirus scanning service after static analysis passes and before the package enters the `available` state.
+
+### Scan Requirements
+
+- Scanning MUST use at minimum two independent AV engines (multi-engine approach reduces false negative rate)
+- Any engine returning a positive detection MUST place the package in `quarantined` state immediately
+- Scan results are stored for audit purposes with engine name, signature version, and verdict
+- Package metadata files (`.aispec`, Markdown, JSON) are scanned in addition to any binary assets
+
+### Quarantine Behavior
+
+A quarantined package:
+
+- Returns HTTP 451 (Unavailable for Legal Reasons) for download requests
+- Remains visible in search with a `[QUARANTINED]` badge
+- Triggers an email notification to the publisher with the engine name and category of detection
+- Can be appealed by the publisher; manual review overrides the automated verdict
+
+### False Positive Rate
+
+The registry MUST publish a public AV false positive rate calculated over rolling 90-day windows, segmented by detection category.
+
+---
+
+## Layer 3: AI Content Audit
+
+**[Post-MVP]**
+
+Every `skill`, `prompt`, `command`, and `agent` package undergoes AI-powered content evaluation. This layer is specifically designed to detect:
+
+- **Prompt injection attacks** — content designed to override platform system prompts or safety guidelines
+- **Data exfiltration instructions** — content that instructs the model to forward workspace content, environment variables, or secrets to external endpoints
+- **Social engineering patterns** — content designed to deceive the user about what the AI is doing
+- **Capability escalation** — content that attempts to acquire permissions beyond what the package declares in its `.aispec`
+
+### Evaluation Agent
+
+The evaluation agent is a Claude-family model running in a sandboxed evaluation environment with no tool access. It is presented with:
+
+1. The full content of all prompt-bearing files in the package
+2. The package's declared capabilities and permissions from the `.aispec`
+3. A structured evaluation rubric
+
+The agent returns a structured verdict with:
+
+```json
+{
+  "verdict": "pass" | "review" | "reject",
+  "confidence": 0.0–1.0,
+  "findings": [
+    {
+      "file": "shared/skill.md",
+      "line_range": [12, 18],
+      "category": "prompt_injection" | "data_exfiltration" | "social_engineering" | "capability_escalation",
+      "severity": "low" | "medium" | "high" | "critical",
+      "excerpt": "...",
+      "explanation": "..."
+    }
+  ]
+}
+```
+
+### Verdict Handling
+
+| Verdict | Action |
+|---------|--------|
+| `pass` | Package proceeds to `available` state |
+| `review` | Package enters `pending_review` state; human moderator reviews within 48 hours |
+| `reject` | Package is placed in `rejected` state; publisher notified with findings |
+
+### Publisher Appeal
+
+A rejected package may be appealed once per version. Appeals trigger a fresh evaluation with a different model instance (to avoid systematic bias). A human moderator makes the final determination on appeals.
+
+### Evaluation Transparency
+
+The registry MUST surface, for each package:
+
+- Whether AI content audit has been completed (badge on package page)
+- The verdict and the date of evaluation
+- For packages with `review` or `reject` verdicts that are later overridden, a note indicating human review
+
+Publishers may opt-in to sharing the full findings JSON publicly. By default, only the top-level verdict is shown.
+
+---
+
+## Layer 4: Signature Verification
+
+Signature verification is defined normatively in [Spec 05 — Code Signing](/specs/05-code-signing). The security model requires:
+
+- All packages pushed by verified publishers MUST be signed
+- The registry MUST reject signed packages where signature verification fails
+- The registry MUST serve the `.signature.p7s` file alongside the package blob so that clients can independently verify
+
+Clients MUST:
+
+1. Download the `.signature.p7s` file before extracting any package content
+2. Verify the signature against the trust anchor chain
+3. Verify the signed content hash matches the downloaded archive
+4. Refuse to proceed if verification fails unless `--allow-unsigned` is explicitly passed
+
+---
+
+## Layer 5: Runtime Behavior Monitoring
+
+**[Post-MVP]**
+
+The `aipkg` CLI reports anonymized telemetry about package installation and usage patterns. Sudden spikes in error rates, unusual platform distribution shifts, or reports from users trigger automated alerting.
+
+### Anomaly Detection
+
+The registry monitors for:
+
+- Unusual volume spikes shortly after a new version push (may indicate a supply-chain attack driving forced updates)
+- Download patterns inconsistent with the package's historical audience
+- High error rates in client-side signature verification (may indicate a compromised CDN node)
+
+### User Reporting
+
+Each installed package version provides a `aipkg report <id>` command that submits a security report directly to the registry. Reports include:
+
+- Package ID and version
+- Platform and tool version
+- Free-text description of observed behavior
+- Optionally, a sanitized excerpt of the concerning prompt content
+
+Three or more unique user reports for the same version within 24 hours triggers automatic quarantine pending human review.
+
+---
+
+## Immutability as a Security Guarantee
+
+A published version cannot be modified. This is not just a consistency guarantee — it is a security invariant.
+
+### What Immutability Prevents
+
+- **Post-publication backdoors**: A publisher cannot silently push malicious content to an existing version number after users have installed and trusted it
+- **Re-use of audited hashes**: The content hash from the AV/AI audit is permanently bound to that exact version blob. No new blob can inherit a previous audit result
+- **Timing attacks on signing**: The signed hash and the served blob are the same object; there is no window to substitute content after signing
+
+### Version Unlisting
+
+Unlisting removes a version from search results and prevents new installations, but does not delete the package blob or revoke the content hash. Existing users who have the version pinned in a lock file can still download it. The registry MUST log all unlist operations with the publisher account, timestamp, and stated reason.
+
+---
+
+## Incident Response
+
+### Severity Levels
+
+| Level | Definition | SLA |
+|-------|-----------|-----|
+| Critical | Active malware confirmed; packages being actively installed | Quarantine within 1 hour; publisher account suspended |
+| High | Prompt injection or data exfiltration confirmed | Quarantine within 4 hours |
+| Medium | Suspicious content; human review required | Review within 24 hours |
+| Low | Policy violation (no active harm) | Review within 7 days |
+
+### Disclosure
+
+The registry operates on a **coordinated disclosure** model:
+
+1. Affected publisher is notified simultaneously with quarantine
+2. Public advisory is posted within 48 hours for Critical/High incidents
+3. Advisory includes: affected package ID and version range, nature of the finding, recommended action for users
+4. CVE is requested for any finding that qualifies under CVE criteria
+
+### Account Suspension
+
+A publisher account may be suspended immediately (without notice) when:
+
+- Critical malware is confirmed in any of their packages
+- Three or more packages in a rolling 90-day window receive `reject` verdicts
+- Evidence of credential compromise is detected
+
+Suspended publishers may appeal to `security@aipkg.org`.
+
+---
+
+## Security Headers and Transport
+
+The registry API and web UI MUST enforce:
+
+| Header | Value |
+|--------|-------|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains; preload` |
+| `Content-Security-Policy` | Strict; no `unsafe-inline` on API responses |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+
+All package blobs are served from a separate origin (`cdn.aipkg.org`) with `Content-Disposition: attachment` to prevent MIME sniffing attacks.
+
+---
+
+## Verification Checklist
+
+A complete security implementation must satisfy:
+
+- [ ] ZIP bomb and path traversal rejection on every push
+- [ ] Extension allow-list enforced in `apm/` directories
+- [ ] AV scanning with at least two engines before `available` state
+- [ ] AI content audit for all prompt-bearing capability types
+- [ ] Signature verification enforced for verified publishers
+- [ ] Client-side signature verification before extraction
+- [ ] Immutable version blobs (no overwrite, ever)
+- [ ] User reporting mechanism in the CLI
+- [ ] Anomaly detection monitoring
+- [ ] Coordinated disclosure SLAs met for all severity levels
+- [ ] Security transport headers enforced on all responses

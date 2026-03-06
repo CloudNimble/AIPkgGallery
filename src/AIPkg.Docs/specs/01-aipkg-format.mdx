@@ -23,29 +23,48 @@ Files on disk follow the naming convention:
 {id}.{version}.aipkg
 ├── {id}.aispec                  # Required. Package manifest (JSON).
 ├── README.md                    # Optional. Embedded readme shown on registry.
-├── icon.png                     # Optional. Square PNG, ≥128×128. Shown on registry.
 ├── LICENSE.txt                  # Optional. License text.
-├── shared/                      # Optional. Platform-agnostic files (all platforms receive these).
-│   ├── skills/
-│   │   └── my-skill.md
-│   ├── commands/
-│   │   └── my-command.md
-│   ├── agents/
-│   │   └── my-agent.md
-│   ├── prompts/
-│   │   └── system-prompt.md
-│   ├── hooks/
-│   │   └── pre-tool-use.md     # Hook script or prompt file.
-│   ├── mcp/
-│   │   └── server-config.json
-│   └── lsp/
-│       └── lsp-config.json     # LSP server configuration or bundled server scripts.
-├── apm/                         # Optional. Platform-specific overrides.
-│   ├── claude-code/             # Files for Claude Code only.
+├── lib/                         # Optional. AI content (skills, commands, MCP configs, etc.).
+│   ├── shared/                  # Files installed on all platforms (universal baseline).
+│   │   ├── skills/
+│   │   │   └── my-skill.md
+│   │   ├── commands/
+│   │   │   └── my-command.md
+│   │   ├── agents/
+│   │   │   └── my-agent.md
+│   │   ├── prompts/
+│   │   │   └── system-prompt.md
+│   │   ├── hooks/
+│   │   │   └── pre-tool-use.md
+│   │   ├── mcp/
+│   │   │   └── server-config.json
+│   │   └── lsp/
+│   │       └── lsp-config.json
+│   ├── claude-code/             # Files for Claude Code only (overrides lib/shared/).
 │   │   └── skills/
-│   │       └── my-skill.md     # Overrides shared/skills/my-skill.md on claude-code.
+│   │       └── my-skill.md     # Overrides lib/shared/skills/my-skill.md on claude-code.
 │   ├── claude/                  # Files for all claude/* platforms.
 │   └── copilot/                 # Files for all copilot/* platforms.
+├── tools/                       # Optional. Executables (MCP server binaries, helper tools).
+│   ├── win-x64/
+│   │   └── my-mcp-server.exe
+│   ├── win-arm64/
+│   │   └── my-mcp-server.exe
+│   ├── osx-x64/
+│   │   └── my-mcp-server
+│   ├── osx-arm64/
+│   │   └── my-mcp-server
+│   ├── linux-x64/
+│   │   └── my-mcp-server
+│   ├── linux-arm64/
+│   │   └── my-mcp-server
+│   ├── linux-musl-x64/          # Alpine / containerized Linux.
+│   │   └── my-mcp-server
+│   └── any/                     # Platform-agnostic scripts or JARs.
+│       └── my-tool.sh
+├── images/                      # Optional. Visual assets for registry display.
+│   ├── icon.png                 # Square PNG, ≥128×128. Shown on registry.
+│   └── (images referenced in README.md)
 └── _rels/                       # Reserved. Do not use in user packages.
     └── .rels                    # Optional Open Packaging Conventions relationship file.
 ```
@@ -66,9 +85,13 @@ The `.aispec` extension was chosen to mirror NuGet's `.nuspec` and the `.csproj`
 
 ## Directory Conventions
 
-### `shared/`
+### `lib/`
 
-Files in `shared/` are installed on all platforms unless overridden by a platform-specific file. There are no mandatory subdirectory names inside `shared/`, but the following are conventional:
+The `lib/` folder is the primary content container. It holds all AI content the runtime deploys to the target platform. The runtime reads the manifest and `lib/` together — it does not simply unzip files, but interprets content declarations and installs assets to the correct platform locations.
+
+#### `lib/shared/`
+
+Files in `lib/shared/` are the universal baseline — installed on all platforms unless overridden by a platform-specific directory. There are no mandatory subdirectory names, but the following are conventional:
 
 | Subdirectory | Contents |
 |--------------|----------|
@@ -76,37 +99,61 @@ Files in `shared/` are installed on all platforms unless overridden by a platfor
 | `commands/` | Slash command definition files |
 | `agents/` | Agent definition files |
 | `prompts/` | System prompt and prompt template files |
-| `hooks/` | Hook scripts or prompt files, keyed by event name |
+| `hooks/` | Hook event handlers, keyed by event name |
 | `mcp/` | MCP server configuration files (JSON) |
-| `lsp/` | LSP server configuration files or bundled server scripts |
+| `lsp/` | LSP server configuration files |
 | `config/` | Generic configuration files |
-| `docs/` | Documentation included with the package |
 
-### `apm/`
+#### `lib/{moniker}/`
 
-Files in `apm/{moniker}/` apply only to the named platform (and its children in the APM hierarchy). The same subdirectory conventions from `shared/` apply within each platform directory.
+Files in `lib/{moniker}/` apply only to the named platform (and its children in the APM fallback hierarchy). The same subdirectory conventions from `lib/shared/` apply. A file at `lib/claude-code/skills/my-skill.md` overrides `lib/shared/skills/my-skill.md` when installing for `claude-code`.
 
 <Note>
-  Valid moniker directory names are the canonical APM names defined in [Platform Targeting (spec 06)](06-platform-targeting). Unknown monikers are silently ignored by installers.
+  Valid moniker directory names are the canonical APM names defined in [Platform Targeting (spec 06)](06-platform-targeting). Unknown monikers are silently ignored by the runtime.
 </Note>
+
+### `tools/`
+
+The `tools/` folder contains executable binaries (MCP server executables, helper tools, scripts). The runtime extracts and registers these based on the host OS and architecture. Subdirectory names follow .NET RID conventions:
+
+| Subdirectory | Platform |
+|---|---|
+| `win-x64/` | Windows x64 |
+| `win-arm64/` | Windows ARM64 |
+| `osx-x64/` | macOS x64 |
+| `osx-arm64/` | macOS ARM64 (Apple Silicon) |
+| `linux-x64/` | Linux x64 |
+| `linux-arm64/` | Linux ARM64 |
+| `linux-musl-x64/` | Alpine / musl-based Linux x64 |
+| `any/` | Platform-agnostic (scripts, JARs, etc.) |
+
+The runtime selects the most specific matching subdirectory for the current host. If no exact match is found, `any/` is used as a fallback.
+
+### `images/`
+
+The `images/` folder holds visual assets used by the registry and package documentation. No subdirectory structure is required.
+
+| File | Purpose |
+|------|---------|
+| `icon.png` | Package icon. Square PNG, ≥128×128. Referenced in `.aispec` via `iconPath`. |
+| Any `.png`, `.jpg`, `.svg`, `.webp` | Images embedded in `README.md` via relative paths. |
 
 ---
 
 ## File Conflict Resolution
 
-When a file exists in both `shared/` and an `apm/{moniker}/` directory with the same relative path, the platform-specific file wins.
+When the same relative path exists in multiple `lib/` subdirectories, the most platform-specific file wins.
 
-Resolution order (highest priority first):
+Resolution order within `lib/` (highest priority first):
 
-1. `apm/{exact-moniker}/` — most specific platform match
-2. `apm/{parent-moniker}/` — parent in fallback graph (e.g., `claude` when installing for `claude-code`)
-3. `apm/ai/` — root platform fallback
-4. `shared/` — platform-agnostic baseline
+1. `lib/{exact-moniker}/` — most specific platform match
+2. `lib/{parent-moniker}/` — parent in fallback graph (e.g., `lib/claude/` when installing for `claude-code`)
+3. `lib/shared/` — universal baseline
 
 If the same relative path appears at multiple specificity levels, only the highest-priority copy is installed.
 
 <Tip>
-  For a `claude-code` install, `apm/claude-code/skills/demo.md` takes precedence over `apm/claude/skills/demo.md`, which takes precedence over `shared/skills/demo.md`.
+  For a `claude-code` install, `lib/claude-code/skills/demo.md` takes precedence over `lib/claude/skills/demo.md`, which takes precedence over `lib/shared/skills/demo.md`.
 </Tip>
 
 ---
@@ -189,13 +236,13 @@ Use this when serving packages over HTTP.
         Resolves the fallback chain for the APM. See [Platform Targeting (spec 06)](06-platform-targeting).
       </Step>
       <Step title="Collect baseline">
-        Collects files from `shared/` as the baseline.
+        Collects files from `lib/shared/` as the baseline.
       </Step>
       <Step title="Apply overlays">
-        Overlays files from each APM directory in the fallback chain, highest specificity last (most specific wins).
+        Overlays files from each `lib/{moniker}/` directory in the fallback chain, highest specificity last (most specific wins).
       </Step>
-      <Step title="Copy files">
-        Copies the resolved file set to the platform's install path.
+      <Step title="Deploy content">
+        Deploys the resolved file set to the platform's install path via the runtime.
       </Step>
       <Step title="Update lockfile">
         Updates `aipkg.lock.json`.
@@ -214,8 +261,10 @@ Use this when serving packages over HTTP.
 |--------|----------|----------|
 | Container format | ZIP | ZIP |
 | Manifest | `{id}.nuspec` (XML) | `{id}.aispec` (JSON) |
-| Targeting dirs | `lib/{tfm}/` | `apm/{moniker}/` |
-| Content files | `contentFiles/` | `shared/` |
+| Platform-targeted content | `lib/{tfm}/` | `lib/{moniker}/` |
+| Universal baseline | `lib/netstandard2.0/` (by convention) | `lib/shared/` |
+| Executables | `tools/` | `tools/{rid}/` |
+| Visual assets | `images/` | `images/` |
 | Compression | deflate | deflate |
 | Signing | `.signature.p7s` | `.signature.p7s` (reserved) |
 
