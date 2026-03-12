@@ -1,0 +1,696 @@
+---
+title: Amazon Q Developer
+description: Platform specification for Amazon Q Developer (formerly Amazon CodeWhisperer), the AI-powered coding assistant from AWS
+icon: aws
+---
+
+## Overview
+
+[Amazon Q Developer](https://aws.amazon.com/q/developer/) is an AI-powered software development assistant built by **Amazon Web Services (AWS)**. It is the direct successor to **Amazon CodeWhisperer**, which was rebranded and expanded into Amazon Q Developer in April 2024. All features previously available in CodeWhisperer are now part of Amazon Q Developer.
+
+Amazon Q Developer is a full-lifecycle AI assistant that goes beyond code completion to include chat, autonomous agents for feature development, code transformation, testing, documentation generation, security scanning, and deep AWS integration. It is fine-tuned on over 20 years of AWS best practices, internal documentation, and high-quality open-source code.
+
+<Info>
+  Amazon Q Developer is available in a perpetual **Free Tier** (50 agentic requests/month) and a **Pro Tier** ($19/user/month, 1,000 agentic requests/month). The Pro plan includes data isolation, IP indemnity, and SSO support via IAM Identity Center.
+</Info>
+
+### Key AI Features
+
+| Feature | Description |
+|---|---|
+| **Inline Code Suggestions** | Real-time single-line and multi-line code completions as you type |
+| **Chat** | Conversational AI assistant with codebase and AWS awareness |
+| **Agent `/dev`** | Generate new features or implement changes from natural language descriptions |
+| **Agent `/test`** | Automatically generate unit tests for selected code |
+| **Agent `/review`** | Identify code quality issues, security vulnerabilities, and anti-patterns |
+| **Agent `/doc`** | Generate project documentation including READMEs and data flow diagrams |
+| **Agent `/transform`** | Modernize and upgrade legacy code (Java version upgrades, .NET porting) |
+| **Security Scanning** | SAST, secrets detection, and IaC scanning with automated remediation |
+| **MCP Support** | Model Context Protocol integration for external tools and data sources |
+| **Custom Rules** | Project-level rules in `.amazonq/rules/` to enforce coding standards |
+
+### Supported Platforms
+
+| Platform | Status | Access |
+|---|---|---|
+| **VS Code** | Generally available | Extension: "Amazon Q" from AWS |
+| **JetBrains** | Generally available | Plugin from JetBrains Marketplace |
+| **Visual Studio** | Generally available | Extension from Marketplace |
+| **Eclipse** | Preview | Plugin |
+| **CLI** | Generally available | `q` command (macOS, Linux, WSL) |
+| **AWS Console** | Generally available | Built into the AWS Management Console |
+
+### Supported Languages
+
+Amazon Q Developer supports **Python, Java, JavaScript, TypeScript, C#, Go, Rust, PHP, Ruby, Kotlin, C, C++, shell scripting, SQL, Scala, JSON, YAML, and HCL**, with security scanning covering thousands of detectors across more than a dozen languages.
+
+---
+
+## Configuration
+
+### File Locations
+
+Amazon Q Developer uses configuration files at both global and workspace levels.
+
+<Tabs>
+  <Tab title="IDE (VS Code / JetBrains)">
+    | File | Location | Purpose |
+    |---|---|---|
+    | `default.json` | `~/.aws/amazonq/default.json` | Global MCP server and settings configuration |
+    | `default.json` | `<project>/.amazonq/default.json` | Workspace-level MCP server configuration |
+    | `mcp.json` (legacy) | `~/.aws/amazonq/mcp.json` | Legacy global MCP configuration |
+    | `mcp.json` (legacy) | `<project>/.amazonq/mcp.json` | Legacy workspace MCP configuration |
+    | Rules (`*.md`) | `<project>/.amazonq/rules/` | Project-specific rules and guidelines |
+  </Tab>
+  <Tab title="CLI">
+    | File | Location | Purpose |
+    |---|---|---|
+    | `mcp.json` | `~/.aws/amazonq/mcp.json` | Global MCP server configuration |
+    | `mcp.json` | `<project>/.amazonq/mcp.json` | Workspace MCP server configuration |
+    | Rules (`*.md`) | `<project>/.amazonq/rules/` | Project-specific rules and guidelines |
+    | Profiles | `~/.aws/amazonq/profiles/` | CLI context profiles |
+    | History | `~/.aws/amazonq/history/` | Chat session history |
+    | Cache | `~/.aws/amazonq/cache/` | Local cache |
+    | Prompts | `~/.aws/amazonq/prompts/` | Saved prompts |
+  </Tab>
+</Tabs>
+
+### The `.amazonq/` Directory Structure
+
+The `.amazonq/` directory at the project root is the primary location for workspace-level configuration:
+
+```
+project-root/
+├── .amazonq/
+│   ├── default.json            # MCP servers and settings (IDE)
+│   ├── mcp.json                # MCP servers (CLI, or legacy IDE)
+│   └── rules/
+│       ├── coding-standards.md
+│       ├── architecture-guidelines.md
+│       ├── security-policies.md
+│       ├── team-conventions.md
+│       └── memory-bank/        # Auto-generated project context
+│           ├── product.md      # Project overview
+│           ├── structure.md    # Architecture and folder organization
+│           ├── tech.md         # Technology stack and dependencies
+│           └── guidelines.md   # Development standards and patterns
+└── src/
+```
+
+### Global Configuration Directory
+
+```
+~/.aws/
+└── amazonq/
+    ├── default.json   # Global MCP + settings (IDE)
+    ├── mcp.json       # Global MCP (CLI)
+    ├── profiles/      # CLI context profiles
+    ├── cache/         # Cache data
+    ├── history/       # Chat history
+    └── prompts/       # Saved prompts
+```
+
+### Authentication
+
+Amazon Q Developer requires authentication through one of two methods:
+
+| Method | Use Case |
+|---|---|
+| **AWS Builder ID** | Free tier for individual developers. Sign up during first use. |
+| **IAM Identity Center** | Enterprise/Pro tier. Requires organizational setup in AWS. |
+
+---
+
+## Custom Rules / Instructions
+
+Amazon Q Developer uses **project rules** -- Markdown files stored in `.amazonq/rules/` -- to define how Q Developer should behave in your project. Rules can cover coding standards, architecture patterns, team conventions, security guidelines, and any other project-specific requirements.
+
+### Rule File Format
+
+Rules are plain Markdown files (`.md`) with no special frontmatter required. Write your guidelines as natural language instructions:
+
+<CodeGroup>
+
+```markdown .amazonq/rules/coding-standards.md
+# Coding Standards
+
+- Use TypeScript strict mode for all new files
+- Prefer functional components with React hooks over class components
+- All public functions must have JSDoc comments
+- Use named exports instead of default exports
+- Error handling must use custom error classes, not generic Error
+```
+
+```markdown .amazonq/rules/aws-best-practices.md
+# AWS Best Practices
+
+- All Amazon S3 buckets must have encryption enabled, enforce SSL, and block public access
+- All Amazon DynamoDB tables must have encryption enabled
+- All Amazon SNS topics must have encryption enabled and enforce SSL
+- Use environment variables for configuration, never hardcode credentials
+- All Lambda functions must have appropriate IAM roles with least-privilege permissions
+```
+
+```markdown .amazonq/rules/testing-guidelines.md
+# Testing Guidelines
+
+- All new features must include unit tests with at least 80% code coverage
+- Use Jest for JavaScript/TypeScript testing
+- Use PyTest for Python testing
+- Mock external service calls in unit tests
+- Integration tests must use localstack for AWS service emulation
+```
+
+</CodeGroup>
+
+### How Rules Are Applied
+
+<Steps>
+  <Step title="Automatic Discovery">
+    When you interact with Amazon Q Developer in a project, it scans the `.amazonq/rules/` directory and loads all applicable rules into its context.
+  </Step>
+  <Step title="Evaluation">
+    Before generating a response, Amazon Q evaluates your request against the loaded rules to determine which ones are relevant.
+  </Step>
+  <Step title="Application">
+    While crafting its response, Amazon Q follows the instructions from applicable rules.
+  </Step>
+  <Step title="Live Reloading">
+    If you modify existing rules or add new ones during a session, Amazon Q detects the changes and updates its behavior accordingly.
+  </Step>
+</Steps>
+
+### Toggling Rules
+
+In the IDE, you can click on a rule in the Rules panel to toggle it on or off for the current chat session. Rules with a check mark are active; rules without are inactive for the session.
+
+### Memory Bank
+
+Amazon Q can auto-generate a **memory bank** -- a set of context files placed in `.amazonq/rules/memory-bank/` that provide persistent project context:
+
+| File | Purpose |
+|---|---|
+| `product.md` | Overview of your project |
+| `structure.md` | Architecture and folder organization |
+| `tech.md` | Technology stack and dependencies |
+| `guidelines.md` | Development standards and patterns |
+
+These files are automatically used as context when chatting with Amazon Q, giving it deep background knowledge about your project without manual configuration.
+
+### CLI Context Management
+
+In the CLI, you can manage rules and context using built-in commands:
+
+- `/context add` -- add project rules to your context
+- `/context show` -- display the current context
+- `/load` -- load a previous chat session
+- `/save` -- save the current chat session
+
+<Note>
+  Keep rule files focused and concise. Very large files consume significant token budget, reducing the context available for your actual queries. Organize rules into logical, domain-specific files with descriptive filenames.
+</Note>
+
+---
+
+## MCP Server Configuration
+
+Amazon Q Developer supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) for connecting to external tools and data sources. Configuration differs between IDE and CLI environments.
+
+### IDE Configuration (VS Code / JetBrains)
+
+MCP servers in the IDE are configured in `default.json` files. The IDE provides a GUI for managing servers, but the underlying configuration is JSON.
+
+<Tabs>
+  <Tab title="Global (all projects)">
+    File: `~/.aws/amazonq/default.json`
+
+    ```json
+    {
+      "mcpServers": [
+        {
+          "name": "aws-docs",
+          "transport": "stdio",
+          "command": "uvx",
+          "arguments": ["awslabs.aws-documentation-mcp-server@latest"],
+          "environmentVariables": {
+            "FASTMCP_LOG_LEVEL": "ERROR",
+            "AWS_DOCUMENTATION_PARTITION": "aws"
+          },
+          "timeout": 60
+        }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab title="Workspace (single project)">
+    File: `<project>/.amazonq/default.json`
+
+    ```json
+    {
+      "mcpServers": [
+        {
+          "name": "project-db",
+          "transport": "http",
+          "url": "https://api.example.com/mcp",
+          "headers": {
+            "Authorization": "Bearer token"
+          },
+          "timeout": 30
+        }
+      ]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### IDE MCP Server Properties
+
+| Field | Type | Transport | Description |
+|---|---|---|---|
+| `name` | string | Both | Unique server identifier |
+| `transport` | string | Both | `stdio` or `http` |
+| `command` | string | STDIO | Shell command to execute |
+| `arguments` | array | STDIO | Command arguments |
+| `environmentVariables` | object | STDIO | Environment variable key-value pairs |
+| `url` | string | HTTP | MCP server endpoint URL |
+| `headers` | object | HTTP | Optional HTTP headers |
+| `timeout` | number | Both | Timeout in seconds |
+
+<Note>
+  Legacy `mcp.json` files are still supported in the IDE. The `useLegacyMcpJson` field in `default.json` controls whether legacy files are read (defaults to `true`).
+</Note>
+
+### CLI Configuration
+
+MCP servers for the CLI are configured in `mcp.json` files using the standard `mcpServers` object format.
+
+<Tabs>
+  <Tab title="Global">
+    File: `~/.aws/amazonq/mcp.json`
+  </Tab>
+  <Tab title="Workspace">
+    File: `<project>/.amazonq/mcp.json`
+  </Tab>
+</Tabs>
+
+```json
+{
+  "mcpServers": {
+    "awslabs.cdk-mcp-server": {
+      "command": "uvx",
+      "args": ["awslabs.cdk-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    },
+    "awslabs.cost-analysis-mcp-server": {
+      "command": "uvx",
+      "args": ["awslabs.cost-analysis-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR",
+        "AWS_PROFILE": "my-profile"
+      }
+    }
+  }
+}
+```
+
+#### CLI MCP Server Properties
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `command` | string | Yes (stdio) | Shell command to execute |
+| `args` | array | No | Command arguments |
+| `env` | object | No | Environment variables |
+| `url` | string | Yes (http) | Remote MCP server URL |
+| `type` | string | For HTTP | Set to `"http"` for remote servers |
+| `timeout` | number | No | Timeout in milliseconds (default: 60,000) |
+
+<Warning>
+  If both global and workspace `mcp.json` files define the same server name, the workspace definition takes precedence and a warning is displayed.
+</Warning>
+
+### Remote (HTTP) MCP Servers
+
+The CLI supports remote MCP servers that communicate over HTTP, with optional OAuth authentication:
+
+```json
+{
+  "mcpServers": {
+    "remote-service": {
+      "type": "http",
+      "url": "https://api.example.com/mcp"
+    }
+  }
+}
+```
+
+### Tool Permissions
+
+MCP tools have three permission levels:
+
+| Level | Behavior |
+|---|---|
+| **Ask** | Prompt for permission each time the tool is invoked |
+| **Always allow** | Run without prompting (auto-approved) |
+| **Deny** | Never use this tool |
+
+### MCP Governance (Enterprise)
+
+Pro-tier customers using IAM Identity Center can control MCP access organization-wide:
+
+- Administrators can entirely disable MCP servers or specify a vetted allowlist
+- Q Developer fetches the MCP registry at startup and every 24 hours
+- If a locally installed server is removed from the registry, Q Developer terminates it
+- If a version differs, Q Developer relaunches the server with the registry-defined version
+
+### Progressive Loading
+
+Amazon Q loads MCP servers in the background, allowing you to start interacting immediately. Tools become available progressively as their respective servers finish initializing.
+
+---
+
+## Agent Capabilities
+
+Amazon Q Developer provides specialized agents accessible through slash commands in the IDE chat panel.
+
+### `/dev` -- Development Agent
+
+The `/dev` agent transforms natural language descriptions into fully implemented features, handling complex multi-file changes with contextual awareness. It analyzes your codebase, generates a step-by-step implementation plan, and executes approved changes.
+
+**Supported languages:** Java, Python, JavaScript, TypeScript
+
+```
+/dev Add a REST API endpoint to create new users with email validation
+```
+
+### `/test` -- Testing Agent
+
+The `/test` agent automatically generates unit tests for selected code. It identifies necessary test cases, generates appropriate mocks and stubs, and produces test code.
+
+**Supported frameworks:**
+- **Java**: JUnit 4, JUnit 5, JUnit Jupiter, Mockito
+- **Python**: PyTest, Unittest
+
+```
+/test Generate unit tests for the UserService class
+```
+
+You can also highlight a function, right-click, and select **Amazon Q > Generate Unit Tests**.
+
+### `/review` -- Review Agent
+
+The `/review` agent identifies code quality issues including:
+
+- Code smells and anti-patterns
+- Naming convention violations
+- Potential bugs and logical errors
+- Code duplication
+- Poor documentation
+- Security vulnerabilities
+
+It provides detailed issue reports with explanations and actionable recommendations, including in-place code fixes.
+
+```
+/review Check this file for security issues
+```
+
+### `/doc` -- Documentation Agent
+
+The `/doc` agent generates comprehensive documentation that reflects your project structure, including READMEs and data flow diagrams.
+
+```
+/doc Generate a README for this project
+```
+
+### `/transform` -- Transformation Agent
+
+The `/transform` agent modernizes legacy code through automated upgrades:
+
+- **Java**: Upgrade from Java 8 or 11 to Java 17, including code updates, unit tests, and deployment readiness verification
+- **.NET**: Port from .NET Framework to cross-platform .NET, including dependency mapping, code analysis, and refactoring
+
+```
+/transform Upgrade this project from Java 8 to Java 17
+```
+
+<Info>
+  The Free tier includes 50 agentic chat interactions, 5 `/dev` sessions, and 1,000 lines of `/transform` code per month. The Pro tier increases these limits significantly.
+</Info>
+
+---
+
+## Security Scanning
+
+Amazon Q Developer provides comprehensive code security scanning powered by both generative AI and rule-based automatic reasoning.
+
+### Scanning Modes
+
+| Mode | Description | Availability |
+|---|---|---|
+| **Scan as You Code** | Real-time background scanning that flags issues as you write | Pro tier only |
+| **Full Project Scan** | On-demand scan of all files in your project or workspace | Free and Pro |
+| **File Scan** | Scan a single file on demand | Free and Pro |
+
+### Detection Categories
+
+| Category | Description |
+|---|---|
+| **SAST** | Static application security testing for vulnerabilities like SQL injection, XSS, and resource leaks |
+| **Secrets Detection** | Identifies hardcoded passwords, database connection strings, API keys, and other sensitive data |
+| **IaC Scanning** | Evaluates infrastructure-as-code files for misconfigurations, compliance, and security issues |
+| **Code Quality** | Detects performance issues, ML rule violations, and AWS best practice deviations |
+
+### Automated Remediation
+
+When Amazon Q discovers a vulnerability or quality issue, it generates a finding with:
+- A description of the issue
+- A recommended fix
+- For some findings, an automatic one-click fix that updates your code in-place
+
+### Initiating a Scan
+
+You can initiate scans from:
+- The chat panel using `/review`
+- Right-click context menu in the editor
+- The Amazon Q status bar
+- Automatically in the background (Pro tier)
+
+<Note>
+  Amazon Q security scanning incorporates thousands of security detectors informed by years of AWS and Amazon.com security best practices. Detectors are continuously updated to ensure compliance with the latest security policies.
+</Note>
+
+---
+
+## CLI Usage
+
+Amazon Q Developer CLI (`q`) brings agentic AI capabilities to your terminal. It is available on macOS, Linux, and Windows (via WSL).
+
+### Installation
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    brew install amazon-q
+    ```
+  </Tab>
+  <Tab title="Linux">
+    Follow the installation instructions from the [AWS Getting Started guide](https://aws.amazon.com/q/developer/getting-started/).
+  </Tab>
+  <Tab title="Windows">
+    Use Windows Subsystem for Linux (WSL) and follow the Linux installation instructions.
+  </Tab>
+</Tabs>
+
+### Core Commands
+
+```bash
+# Start an interactive chat session
+q chat
+
+# Ask a specific question
+q chat "How do I set up an S3 bucket with encryption?"
+
+# Non-interactive mode with auto-approved tools
+q chat --no-interactive --trust-all-tools "Show me the current directory"
+
+# Resume a previous chat session
+q chat --resume
+
+# Use a specific agent
+q chat --agent my-agent "Help me with CDK"
+
+# Use context from shell history
+q chat "@history Update my CloudFront distribution"
+
+# Translate natural language to shell commands
+q translate "list all files in the current directory"
+q translate "find all Python files modified in the last week"
+q translate "compress all log files older than 30 days"
+
+# Diagnose issues with your Q Developer setup
+q doctor
+
+# Show help
+q help
+```
+
+### Chat Session Commands
+
+Within a `q chat` session, the following slash commands are available:
+
+| Command | Description |
+|---|---|
+| `/context add` | Add project rules or files to context |
+| `/context show` | Display current context |
+| `/load` | Load a previous chat session |
+| `/save` | Save the current chat session |
+| `/quit` | Exit the chat (or use Ctrl+D) |
+
+### Debugging
+
+```bash
+# Enable debug logging
+export Q_LOG_LEVEL=debug
+q chat
+
+# Log files are stored in $TMPDIR/qlog
+```
+
+<Warning>
+  The CLI currently only supports local MCP servers via STDIO. MCP tools function exclusively within the chat interface and are not available for command completion or translate features.
+</Warning>
+
+---
+
+## Model Configuration
+
+Amazon Q Developer uses AWS-managed models and does not expose user-facing model selection in the same way that tools like Cody or Continue do. The underlying models are hosted on **Amazon Bedrock** and are selected by AWS based on the task.
+
+### Enterprise Customization
+
+Pro-tier customers can **customize** Amazon Q Developer by connecting it to internal code repositories. This fine-tunes Q Developer's recommendations to be more relevant to your organization's codebases, APIs, and coding patterns. Customizations are configured through the AWS Console, not through local files.
+
+### Key Points for Model Configuration
+
+- Models are managed server-side by AWS; there is no local model selection
+- An internet connection is required, as inference runs on AWS infrastructure
+- Enterprise customers can customize recommendations using private code repositories
+- The Pro plan provides data isolation (your code is not used for model training)
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Amazon Q Developer platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="IDE (VS Code / JetBrains)">
+    - **Global MCP + settings**: `~/.aws/amazonq/default.json`
+    - **Workspace MCP + settings**: `<project>/.amazonq/default.json`
+    - **Legacy global MCP**: `~/.aws/amazonq/mcp.json`
+    - **Legacy workspace MCP**: `<project>/.amazonq/mcp.json`
+    - **Project rules**: `<project>/.amazonq/rules/*.md`
+  </Tab>
+  <Tab title="CLI">
+    - **Global MCP**: `~/.aws/amazonq/mcp.json`
+    - **Workspace MCP**: `<project>/.amazonq/mcp.json`
+    - **Project rules**: `<project>/.amazonq/rules/*.md`
+  </Tab>
+</Tabs>
+
+### Installing MCP Servers
+
+There are two distinct configuration formats depending on the target:
+
+<CodeGroup>
+
+```json IDE: default.json (array-based)
+{
+  "mcpServers": [
+    {
+      "name": "package-server-name",
+      "transport": "stdio",
+      "command": "npx",
+      "arguments": ["-y", "@scope/mcp-server-package"],
+      "environmentVariables": {
+        "API_KEY": "value"
+      },
+      "timeout": 60
+    }
+  ]
+}
+```
+
+```json CLI: mcp.json (object-based)
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+<Warning>
+  The IDE `default.json` and CLI `mcp.json` use **different schemas**. The IDE uses an array of server objects with `name`, `transport`, `arguments`, and `environmentVariables` fields. The CLI uses an object keyed by server name with `args` and `env` fields. Installers must handle both formats.
+</Warning>
+
+**Key considerations for MCP installation:**
+
+- Server names must be unique across both global and workspace configuration files
+- Server names must not exceed 250 characters
+- If both global and workspace configs define the same server, the workspace definition wins
+- The IDE supports both `stdio` and `http` transports; the CLI primarily supports `stdio`
+- The `default.json` format also supports legacy `mcp.json` via the `useLegacyMcpJson` field
+- Merge carefully -- do not overwrite existing server entries
+
+### Installing Project Rules
+
+To install custom rules, create Markdown files in the project's `.amazonq/rules/` directory:
+
+1. Ensure the `.amazonq/rules/` directory exists in the project root
+2. Write rule content as plain Markdown (no frontmatter required)
+3. Use descriptive filenames (e.g., `security-policies.md`, `react-guidelines.md`)
+4. Rules are automatically discovered and loaded by Amazon Q Developer
+
+### Authentication
+
+Amazon Q Developer requires authentication before any features are available:
+
+- **AWS Builder ID**: Free, created during first sign-in flow in the IDE or CLI
+- **IAM Identity Center**: Enterprise setup via AWS Console, provides SSO
+
+An installer cannot programmatically authenticate. The user must complete the authentication flow through the IDE extension or CLI (`q login`).
+
+### Extension / Plugin Installation
+
+The Amazon Q extension must be installed before configuration takes effect:
+
+```bash
+# VS Code
+code --install-extension amazonwebservices.amazon-q-vscode
+
+# JetBrains
+# Install "Amazon Q" from JetBrains Marketplace
+
+# CLI (macOS)
+brew install amazon-q
+```
+
+### Platform Detection
+
+To detect if Amazon Q Developer is already configured:
+
+- Check for the existence of `~/.aws/amazonq/` directory
+- Check for `default.json` or `mcp.json` in that directory
+- Check for the VS Code extension: look for `amazonwebservices.amazon-q-vscode` in installed extensions
+- Check for the CLI: run `q --version`
