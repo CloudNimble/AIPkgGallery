@@ -1,0 +1,575 @@
+---
+title: "ChatGPT"
+sidebarTitle: "ChatGPT"
+description: "Comprehensive reference for OpenAI's ChatGPT platform — Custom GPTs, Actions, Projects, custom instructions, memory, Canvas, Code Interpreter, MCP support, and desktop app configuration."
+icon: "comments"
+---
+
+ChatGPT is OpenAI's flagship conversational AI product, available as a web application at [chatgpt.com](https://chatgpt.com), native desktop apps for macOS and Windows, and mobile apps for iOS and Android. Unlike file-driven developer tools (Claude Code, Cursor, etc.), ChatGPT is primarily a **hosted platform** where customization happens through its web UI, Custom GPTs, and API integrations rather than local configuration files.
+
+---
+
+## Overview
+
+### What Is ChatGPT?
+
+ChatGPT is a general-purpose AI assistant built on OpenAI's large language models. It supports text, image, audio, and file-based interactions across multiple surfaces:
+
+| Surface | Notes |
+|---------|-------|
+| **Web** | [chatgpt.com](https://chatgpt.com) — universal access via any modern browser; continuous deployment of new features |
+| **macOS Desktop** | Requires macOS 14+ with Apple Silicon (M1 or later). Supports MCP via Developer Mode. |
+| **Windows Desktop** | Windows 10 x64/arm64 version 17763.0+. Available via Microsoft Store. |
+| **iOS / Android** | Mobile apps with home-screen widgets (iOS), push notifications, and voice mode |
+
+### Subscription Tiers
+
+| Tier | Price | Key Limits |
+|------|-------|------------|
+| **Free** | $0 | Limited messages, lightweight memory, can use GPTs but not create them |
+| **Plus** | $20/month | Higher message caps, GPT creation, Canvas, Advanced Data Analysis |
+| **Pro** | $200/month | Highest limits, priority access to new models, extended file uploads (40 per project) |
+| **Team** | $25-30/user/month | Workspace admin controls, shared GPTs, shared Projects |
+| **Enterprise** | Custom | SSO, domain-scoped GPTs, admin analytics, data retention controls |
+| **Edu** | Custom | Academic-focused, similar to Enterprise |
+
+### Model Landscape
+
+ChatGPT's model lineup has evolved rapidly. As of early 2026, key models include:
+
+- **GPT-5.2** (Instant, Thinking, and Pro tiers) — current flagship, knowledge cutoff August 2025
+- **GPT-5 / GPT-5 Pro** — predecessor to 5.2, replaced o3-pro for the most challenging tasks
+- **o3 / o4-mini** — reasoning-focused models optimized for multi-step analysis and cost-efficient reasoning respectively
+
+<Warning>
+  As of February 13, 2026, GPT-4o, GPT-4.1, GPT-4.1 mini, o4-mini, and GPT-5 (Instant and Thinking) have been retired from ChatGPT. Custom GPT builders should migrate to GPT-5.2. API access to retired models remains unchanged on a separate deprecation timeline.
+</Warning>
+
+---
+
+## Custom GPTs
+
+Custom GPTs are tailored versions of ChatGPT that embed instructions, reference files, tools, and workflows — all without writing code. They are the primary extension mechanism for the ChatGPT platform.
+
+### Who Can Create Them?
+
+Creating and publishing GPTs requires a **paid plan** (Plus, Pro, Team, Enterprise, or Edu). Free-tier users can use published GPTs but cannot create or modify them.
+
+### Creating a Custom GPT
+
+<Steps>
+  <Step title="Open the Builder">
+    Navigate to the left sidebar in ChatGPT and select **GPTs > Create**, or go directly to [chatgpt.com/gpts](https://chatgpt.com/gpts).
+  </Step>
+  <Step title="Choose Your Approach">
+    Use the **Create** tab for conversational authoring ("Build me a GPT that analyzes marketing data") or the **Configure** tab for manual, fine-grained control.
+  </Step>
+  <Step title="Set Metadata">
+    Provide a name, description, profile image, and conversation starters. These are visible to users in the GPT Store.
+  </Step>
+  <Step title="Write Instructions">
+    The instructions field is the system prompt for your GPT. It governs tone, behavior, guardrails, and domain focus. This is the most important configuration surface.
+  </Step>
+  <Step title="Upload Knowledge Files">
+    Under the **Knowledge** section, upload up to **20 files** (PDF, DOCX, TXT, CSV, etc.). ChatGPT uses these as its source of truth via retrieval when answering questions.
+  </Step>
+  <Step title="Select Model">
+    Choose the underlying model. As of 2025-2026, builders can select from GPT-5.2, o3, and other available models, each optimized for different use cases.
+  </Step>
+  <Step title="Enable Capabilities">
+    Toggle built-in capabilities: **Web Browsing**, **Code Interpreter / Data Analysis**, **Image Generation (DALL-E)**, and **Actions**.
+  </Step>
+  <Step title="Test in Preview">
+    Use the Preview pane to simulate real user prompts. Test edge cases, adversarial prompts, and error paths before publishing.
+  </Step>
+</Steps>
+
+### Publishing Options
+
+| Visibility | Description |
+|-----------|-------------|
+| **Only me** | Private — only visible to the creator |
+| **Anyone with the link** | Unlisted — shareable via URL but not discoverable in the Store |
+| **Public (GPT Store)** | Discoverable by all ChatGPT users; requires builder verification and a privacy policy URL if Actions are used |
+
+<Info>
+  Builder verification options include billing/profile name verification, DNS TXT domain verification, and linking social accounts (Twitter, GitHub, LinkedIn) for additional credibility.
+</Info>
+
+### Enterprise & Team Controls
+
+Workspace admins can control:
+- Who can create and share GPTs within the organization
+- Which external domains Actions are allowed to call
+- Whether GPTs can be published to the public Store or only the internal workspace Store
+
+---
+
+## GPT Actions
+
+GPT Actions (formerly known as Plugins) allow a Custom GPT to call external REST APIs using natural language. At their core, Actions leverage **Function Calling** to determine which API endpoint is relevant to a user's query and to generate the required JSON input.
+
+<Note>
+  In early 2024, OpenAI deprecated the original Plugins system in favor of Actions built into Custom GPTs. Existing plugin manifests can be reused as Action schemas. More recently, OpenAI has introduced **Apps** as a newer integration path for Business/Enterprise plans, though Actions-based GPTs continue to function.
+</Note>
+
+### How Actions Work
+
+1. The builder provides an **OpenAPI specification** (YAML or JSON) describing the external API's endpoints
+2. ChatGPT reads the spec's descriptions to decide when an endpoint is relevant to the user's question
+3. ChatGPT generates the necessary parameters and makes the HTTP request
+4. The response is returned to ChatGPT, which incorporates it into its reply
+
+### OpenAPI Schema
+
+Actions require an OpenAPI 3.x specification. ChatGPT relies heavily on the `description` fields to understand when and how to use each endpoint.
+
+<CodeGroup>
+```yaml Example Action Schema
+openapi: "3.1.0"
+info:
+  title: "Weather API"
+  description: "Retrieves current weather data for a given city. Use this when the user asks about weather conditions."
+  version: "1.0.0"
+servers:
+  - url: "https://api.example.com"
+paths:
+  /weather:
+    get:
+      operationId: "getWeather"
+      summary: "Get current weather for a city"
+      description: "Returns temperature, humidity, and conditions for the specified city name."
+      parameters:
+        - name: city
+          in: query
+          required: true
+          description: "The city name to look up weather for (e.g., 'San Francisco')"
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "Weather data returned successfully"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  temperature:
+                    type: number
+                  conditions:
+                    type: string
+```
+</CodeGroup>
+
+**Schema limits:**
+- Max **300 characters** per endpoint `description` / `summary` field
+- Max **700 characters** per parameter `description` field
+
+**Consequential actions flag:**
+
+```yaml
+x-openai-isConsequential: true   # Always prompt user for confirmation
+x-openai-isConsequential: false  # Show "Always allow" button
+# If omitted: GET defaults to false, all other methods default to true
+```
+
+### Authentication
+
+Actions support three authentication modes:
+
+<Tabs>
+  <Tab title="No Authentication">
+    Suitable for public APIs (e.g., public weather data). No credentials are required.
+  </Tab>
+  <Tab title="API Key">
+    The builder enters an API key in the GPT configuration UI. The key is sent as a Bearer token or custom header with every request. The key is stored securely by OpenAI and is not visible to end users.
+
+    ```
+    Authorization: Bearer sk-your-api-key
+    ```
+  </Tab>
+  <Tab title="OAuth 2.0">
+    For user-specific data (calendar, email, etc.). When the user first triggers the Action, they see a **"Sign in to [domain]"** button. ChatGPT performs the OAuth flow:
+
+    1. Redirects user to your `authorization_url`
+    2. Receives an access token (and optional refresh token)
+    3. Passes the token in the `Authorization` header on every subsequent request
+
+    **Requirements:**
+    - Must use the `state` parameter for security
+    - Authorization and API endpoints must share the same root domain
+    - `authorization_content_type` must be specified
+
+    You can mix OAuth-authenticated endpoints with unauthenticated endpoints in the same schema.
+  </Tab>
+</Tabs>
+
+<Warning>
+  If your GPT uses a custom Action that calls an external API, you must **verify the domain** and include a **Privacy Policy URL** before publishing to the GPT Store.
+</Warning>
+
+### Actions vs Apps
+
+OpenAI has introduced **Apps** as a newer integration mechanism for Business, Enterprise, and Edu workspaces. Key differences:
+
+| Feature | Actions | Apps |
+|---------|---------|------|
+| Custom OpenAPI schema | Yes | Uses MCP protocol |
+| Public GPT Store | Yes | No (workspace-only) |
+| Write operations | Limited | Full (with confirmation modals) |
+| Authentication | API Key / OAuth | OAuth with MCP |
+| Availability | All paid plans | Business / Enterprise / Edu |
+
+Actions and Apps are **mutually exclusive** in the GPT editor — a single GPT cannot use both simultaneously.
+
+---
+
+## Projects
+
+Projects are persistent workspaces within ChatGPT that group related conversations, files, and instructions together. They provide project-scoped context that persists across multiple chat sessions.
+
+### Core Features
+
+| Feature | Description |
+|---------|-------------|
+| **Custom Instructions** | Per-project behavioral instructions that apply to every chat within the project |
+| **File Uploads** | Persistent files (CSV, PDF, images, code, etc.) accessible to all chats in the project |
+| **Project Memory** | Built-in memory scoped to the project — ChatGPT remembers all chats and files within |
+| **Shared Projects** | Team/Enterprise users can share projects with colleagues for collaborative work |
+
+### File Upload Limits
+
+| Plan | Max Files per Project |
+|------|-----------------------|
+| Free | 5 |
+| Plus | 25 |
+| Pro | 40 |
+
+### Setting Up a Project
+
+<Steps>
+  <Step title="Create a Project">
+    From the ChatGPT sidebar, create a new Project. Customize its name, color, and icon.
+  </Step>
+  <Step title="Add Instructions">
+    Click **"Add instructions"** to set project-specific behavioral rules. For example: tone, coding conventions, preferred libraries, output format, or domain constraints. These instructions apply to every conversation within the project.
+  </Step>
+  <Step title="Upload Files">
+    Upload reference files that ChatGPT can access across all chats in the project. Supported formats include CSV, PDF, images, code files, and more.
+  </Step>
+  <Step title="Start Conversations">
+    Any conversation created within the project inherits the project's instructions and has access to the uploaded files. Project memory ensures ChatGPT maintains context across sessions.
+  </Step>
+</Steps>
+
+<Info>
+  Project-only memory creates a dedicated context environment. Sensitive data stays within the project without "spilling over" into other conversations or projects.
+</Info>
+
+### Availability
+
+Projects are available to **all ChatGPT users** (Free, Plus, Pro, Team, Enterprise, Edu) globally on web, desktop, and mobile. Project sharing was rolled out in October 2025.
+
+---
+
+## Custom Instructions & System Prompts
+
+ChatGPT provides multiple layers of personalization, each with different scope:
+
+### Instruction Hierarchy
+
+| Layer | Scope | How to Set | Character Limit |
+|-------|-------|-----------|----------------|
+| **User-level Custom Instructions** | All conversations (unless overridden) | Settings > Personalization > Custom Instructions | 1,500 chars per field |
+| **Project Instructions** | All chats within a specific Project | Project settings > Add instructions | — |
+| **Custom GPT Instructions** | All conversations with that GPT | GPT Builder > Configure > Instructions | — |
+| **In-chat instructions** | Single conversation only | Type instructions directly in the chat | — |
+
+### User-Level Custom Instructions
+
+The Custom Instructions settings provide two text fields:
+
+1. **"What would you like ChatGPT to know about you?"** — Background context (role, industry, preferences)
+2. **"How would you like ChatGPT to respond?"** — Output formatting, tone, style, constraints
+
+These instructions are injected into the context window at the start of every conversation. They sync across web, desktop, and mobile.
+
+<Note>
+  Custom Instructions are available on all plans (including Free) across Web, Desktop, iOS, and Android.
+</Note>
+
+### Personalization Layers (2025 Interface)
+
+The current ChatGPT interface organizes personalization into three layers:
+
+- **Personality** — High-level behavioral traits for the AI
+- **Custom Instructions** — The two text fields described above
+- **Context** — Memory and conversation history that inform responses
+
+### Best Practices
+
+- Use **Custom Instructions** for evergreen guidance: tone, output format, coding conventions
+- Use **Memory** (see below) for personal preferences and dynamic facts
+- Use **Project Instructions** for domain-specific rules that apply to a body of work
+- Use **GPT Instructions** for purpose-built assistants with a specific role
+
+---
+
+## Memory
+
+ChatGPT's memory system allows the model to retain information across conversations, providing continuity without the user needing to repeat context.
+
+### Two-Layer Memory System
+
+<Tabs>
+  <Tab title="Saved Memories">
+    Explicit facts that ChatGPT stores when you tell it something important or when it detects useful information for future conversations. Examples: "I prefer Python over JavaScript" or "My company uses PostgreSQL."
+
+    - ChatGPT may save memories automatically or when asked ("Remember that I prefer dark mode")
+    - You can view, edit, and delete individual saved memories in **Settings > Personalization > Memory**
+    - Works similarly to Custom Instructions, but is managed automatically by the model
+  </Tab>
+  <Tab title="Conversation History Recall">
+    ChatGPT can reference past conversations to inform current responses. For example, if you discussed Thai food preferences in a previous chat, it may recall that context when you ask for lunch recommendations.
+
+    - Available on Plus, Pro, and Enterprise plans (Free gets a lightweight version)
+    - Can be toggled off in settings
+  </Tab>
+</Tabs>
+
+### User Controls
+
+- **View/delete memories:** Settings > Personalization > Memory > Manage
+- **Clear all memories:** Available from the same settings page
+- **Disable memory entirely:** Toggle off in settings
+- **Temporary Chat:** Start a conversation that neither reads from nor writes to memory
+
+<Warning>
+  Memory is intended for high-level preferences and details. It should not be relied on to store exact templates, large blocks of verbatim text, or structured data.
+</Warning>
+
+---
+
+## Canvas
+
+Canvas is an integrated, editable workspace inside ChatGPT designed for writing and coding tasks that require iterative revisions, targeted edits, and version control.
+
+### Key Capabilities
+
+**For Code:**
+- Inline code editing with highlight-to-edit
+- **Review code** — AI-generated inline improvement suggestions
+- **Add logs** — Insert print/debug statements automatically
+- **Add comments** — Generate explanatory comments
+- **Fix bugs** — Detect and rewrite problematic code
+- **Port to a language** — Translate code between JavaScript, TypeScript, Python, Java, C++, and PHP
+- **Run code** — Execute snippets in a built-in console; React/HTML code renders in a sandbox
+
+**For Writing:**
+- Long-form document editing with inline suggestions
+- Adjust reading level, length, and tone
+- Version history with change highlighting
+
+### How Canvas Opens
+
+Canvas opens automatically when ChatGPT generates content longer than approximately 10 lines, or when you include **"use canvas"** in your prompt.
+
+### Export Options
+
+| Content Type | Export Formats |
+|-------------|---------------|
+| Documents | PDF, Markdown (.md), Word (.docx) |
+| Code | Language-specific files (.py, .js, .sql, etc.) |
+
+### Availability
+
+Canvas is available on **Web, Windows, and macOS**. Mobile support (iOS/Android) is planned. Canvas is not available with reasoning-series models (o-series).
+
+---
+
+## Code Interpreter / Advanced Data Analysis
+
+Code Interpreter (also called Advanced Data Analysis) is a built-in capability that lets ChatGPT write and execute Python code in a secure, sandboxed environment.
+
+### Capabilities
+
+- Upload structured data (CSV, Excel, JSON) and get automatic schema detection
+- Generate statistical analyses, regressions, and simulations
+- Create static and interactive visualizations using Matplotlib and pandas
+- Process and transform files (e.g., Excel to PowerPoint, PDF data extraction)
+- Generate machine learning code snippets
+- Interactive table views for exploring uploaded data
+
+### Technical Details
+
+| Parameter | Limit |
+|-----------|-------|
+| Max files per GPT (Knowledge) | 20 |
+| Max file size | 512 MB per file |
+| Max CSV/spreadsheet size | ~50 MB |
+| Execution environment | Sandboxed Python (no outbound network access) |
+| Libraries available | pandas, Matplotlib, NumPy, and many standard Python packages |
+
+<Note>
+  The code execution environment is fully isolated — it cannot make outbound network requests and is separated from the ChatGPT hosting platform for security.
+</Note>
+
+### Availability
+
+Advanced Data Analysis is available by default on all **paid plans** without manual activation. It is enabled as a capability toggle when creating Custom GPTs.
+
+---
+
+## Desktop App & MCP Support
+
+### Official Desktop App
+
+The official ChatGPT desktop app (internally codenamed "Atlas") is available for macOS and Windows.
+
+**Local Data Paths:**
+
+| OS | Data Path |
+|----|-----------|
+| macOS | `~/Library/Application Support/OpenAI/Atlas/` |
+| Windows | `%APPDATA%\OpenAI\Atlas\` |
+
+The app stores conversation history and preferences in local SQLite databases. Authentication tokens are stored in the OS secure credential store (Keychain on macOS, Windows Credential Manager on Windows) rather than in plain text files.
+
+### MCP (Model Context Protocol) Support
+
+ChatGPT supports MCP via **Developer Mode**, which was announced in September 2025. This enables ChatGPT to connect to remote MCP servers for extensible tool integrations.
+
+<Warning>
+  Unlike Claude Desktop, which connects to local stdio-based MCP servers via a JSON configuration file, ChatGPT requires MCP servers to be **remote HTTPS endpoints** with **OAuth authentication**. There is no local MCP configuration file equivalent.
+</Warning>
+
+#### Enabling Developer Mode
+
+<Steps>
+  <Step title="Enable in Settings">
+    **Individual accounts:** Go to Settings > Apps > Advanced settings > Developer mode.
+
+    **Workspace/Team accounts:** Workspace Settings > Permissions & Roles > Connected Data > Developer mode / Create custom MCP connectors.
+  </Step>
+  <Step title="Create a Connector">
+    Navigate to Settings > Connectors > Create. Provide a connector name, description, and the server URL (must end with `/sse/` for server-sent events streaming).
+  </Step>
+  <Step title="Configure Authentication">
+    MCP servers for ChatGPT should use **OAuth** with dynamic client registration. This is a requirement — API key auth is not supported for MCP connectors.
+  </Step>
+</Steps>
+
+#### MCP Server Requirements
+
+ChatGPT's MCP implementation differs from other platforms:
+
+| Aspect | ChatGPT | Claude Desktop |
+|--------|---------|----------------|
+| Transport | Remote HTTPS (SSE) | Local stdio |
+| Authentication | OAuth 2.0 required | None (local process) |
+| Configuration | Web UI (Settings > Connectors) | Local JSON file (`claude_desktop_config.json`) |
+| Write operations | Supported with confirmation modals | Supported |
+| Protocol | JSON-RPC 2.0 over SSE | JSON-RPC 2.0 over stdio |
+
+#### MCP Server Protocol
+
+Your MCP server must handle these JSON-RPC methods:
+
+- **`initialize`** — Return protocol version, capabilities, and server info
+- **`initialized`** — Acknowledgment notification
+- **`tools/list`** — Return available tools with schemas
+- **`search`** and **`fetch`** — For deep research and knowledge integration (read-only compatibility schema)
+
+Tools should include the `readOnlyHint` annotation for read-only operations. Tools without this annotation are treated as write actions and trigger user confirmation modals.
+
+#### Availability
+
+| Plan | MCP Access |
+|------|-----------|
+| Free | No |
+| Plus | Yes (beta) |
+| Pro | Yes (beta) |
+| Business | Yes (beta, admin must enable) |
+| Enterprise | Yes (beta, admin must enable) |
+| Edu | Yes (beta, admin must enable) |
+
+---
+
+## API Integration
+
+ChatGPT connects to external services through several mechanisms:
+
+### For End Users
+
+| Method | Description |
+|--------|-------------|
+| **GPT Actions** | OpenAPI-based REST API calls from within Custom GPTs |
+| **Apps (MCP)** | MCP-based integrations via Developer Mode |
+| **Web Browsing** | Built-in capability to search and read web pages |
+| **Code Interpreter** | Sandboxed Python execution (no network access) |
+| **Image Generation** | Built-in DALL-E integration |
+
+### For Developers (API Side)
+
+The ChatGPT product is distinct from the **OpenAI API**. Developers building applications that use the same underlying models should use:
+
+- **Responses API** (replaced the Assistants API, deprecated August 2025)
+- **Agents SDK** — Python SDK for building multi-step agent workflows
+- **Function Calling** — The same mechanism that powers GPT Actions, available in the API
+
+<Note>
+  The OpenAI API and ChatGPT are separate products with separate billing. API model deprecation timelines differ from ChatGPT model retirement dates.
+</Note>
+
+---
+
+## Installation Provider Notes
+
+<Info>
+  ChatGPT is a **hosted platform** — there is no local file-based configuration system comparable to Claude Code's `.claude/` directory, Cursor's `.cursor/` rules, or VS Code's `.github/copilot-instructions.md`. This significantly limits what an AIpkg installer can automate.
+</Info>
+
+### What Can Be Automated
+
+| Capability | Feasibility | Notes |
+|-----------|-------------|-------|
+| Custom GPT creation | **API possible** | Via the OpenAI API (Assistants/Responses API), not the ChatGPT UI directly |
+| GPT Action schemas | **Packageable** | OpenAPI YAML/JSON specs can be packaged and documented for manual import |
+| Project instructions | **Not automatable** | Must be set manually in the ChatGPT web UI |
+| Custom Instructions | **Not automatable** | Must be set manually in Settings |
+| MCP server deployment | **Partially automatable** | The server itself can be packaged; connector registration requires manual UI steps |
+| Knowledge files | **Packageable** | Files can be distributed but must be manually uploaded to GPTs or Projects |
+| Desktop app config | **Not automatable** | No documented config file format for the official app |
+
+### Recommended AIpkg Approach
+
+For ChatGPT-targeted packages, the most practical approach is to:
+
+1. **Package OpenAPI schemas** for GPT Actions in `lib/chatgpt/actions/`
+2. **Package knowledge files** (PDFs, reference docs) in `lib/chatgpt/knowledge/`
+3. **Package instruction templates** (markdown files with recommended system prompts) in `lib/chatgpt/instructions/`
+4. **Include a setup guide** that walks the user through manual import steps in the ChatGPT UI
+5. **For MCP integrations**, package the MCP server code with deployment instructions
+
+<Warning>
+  Because ChatGPT lacks a local file-based configuration system, AIpkg packages targeting the `chatgpt` platform moniker will primarily serve as **content bundles with setup documentation** rather than fully automated installations. The installer should clearly communicate which manual steps are required.
+</Warning>
+
+### Platform Moniker
+
+Per the [Platform Targeting](../06-platform-targeting) specification, ChatGPT would use:
+
+```
+chatgpt            → ai        (parent: root)
+chatgpt-desktop    → chatgpt   (desktop app variant)
+chatgpt-web        → chatgpt   (web interface variant)
+```
+
+### Desktop App Data Paths
+
+If an installer needs to reference local ChatGPT data (e.g., for MCP server discovery or knowledge file staging):
+
+| OS | Official App Data Path |
+|----|----------------------|
+| macOS | `~/Library/Application Support/OpenAI/Atlas/` |
+| Windows | `%APPDATA%\OpenAI\Atlas\` |
