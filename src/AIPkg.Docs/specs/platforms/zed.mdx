@@ -1,0 +1,614 @@
+---
+title: Zed
+description: Platform specification for Zed, the open-source Rust-based AI code editor by Zed Industries
+icon: code
+---
+
+## Overview
+
+[Zed](https://zed.dev) is an open-source, high-performance code editor written in Rust, developed by **Zed Industries**. It was created by Nathan Sobo, one of the original creators of Atom, and has received $32 million in funding from Sequoia Capital. Zed is available on macOS, Linux, and Windows.
+
+Zed distinguishes itself through native GPU-accelerated rendering at 120fps, built-in real-time collaboration, and first-class AI features integrated directly into the editor core rather than bolted on through extensions. Its AI capabilities center on the **Agent Panel** for agentic coding, the **Inline Assistant** for in-place code transforms, and **Edit Prediction** (Zeta) for intelligent autocomplete.
+
+<Info>
+  Zed's AI features are not a separate plugin. They ship as part of the editor itself, running in the same process with shared access to the editor's internal state, syntax trees, and language server data.
+</Info>
+
+### Key AI Features
+
+| Feature | Description |
+|---|---|
+| **Agent Panel** | Agentic AI coding assistant with tool use, file editing, and terminal access |
+| **Inline Assistant** | Prompt-driven inline code generation and transformation |
+| **Edit Prediction (Zeta)** | Open-source model that predicts your next edit based on context |
+| **Rules System** | Project-level and global AI instruction prompts |
+| **MCP Support** | Model Context Protocol integration for external tools and data |
+| **Multi-Provider LLM** | Support for Anthropic, OpenAI, Google, Ollama, DeepSeek, OpenRouter, and more |
+
+---
+
+## Configuration
+
+### File Locations
+
+Zed uses a layered configuration system with JSON files at global and project levels.
+
+<CodeGroup>
+
+```json Global Settings (~/.config/zed/settings.json)
+{
+  "theme": "One Dark",
+  "buffer_font_size": 14,
+  "agent": {
+    "default_model": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5"
+    }
+  }
+}
+```
+
+```json Project Settings (<project>/.zed/settings.json)
+{
+  "tab_size": 4,
+  "formatter": "prettier",
+  "context_servers": {
+    "my-mcp-server": {
+      "command": "npx",
+      "args": ["-y", "@my/mcp-server"],
+      "env": {}
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+<Note>
+  On Linux, if `XDG_CONFIG_HOME` is set, the global settings path becomes `$XDG_CONFIG_HOME/zed/settings.json` instead of `~/.config/zed/settings.json`.
+</Note>
+
+### Configuration Hierarchy
+
+Settings are resolved with the following precedence (highest to lowest):
+
+1. **Nested project `.zed/settings.json`** closest to the edited file
+2. **Project root `.zed/settings.json`**
+3. **Global user `~/.config/zed/settings.json`**
+
+Within project settings, nested `.zed/settings.json` files closer to the file being edited take higher precedence.
+
+### Key Configuration Files
+
+| File | Location | Purpose |
+|---|---|---|
+| `settings.json` | `~/.config/zed/settings.json` | Global user settings |
+| `keymap.json` | `~/.config/zed/keymap.json` | Custom keybindings |
+| `settings.json` | `<project>/.zed/settings.json` | Project-specific settings |
+| `.rules` | `<project>/.rules` | Project-level AI rules |
+| `.editorconfig` | `<project>/.editorconfig` | Per-file editor settings (EditorConfig standard) |
+
+### The `.zed/` Directory
+
+The `.zed/` directory at a project root holds project-specific configuration. It is created when you run the `zed: open project settings` command from the command palette. The primary file is `settings.json`, which merges on top of your global user settings.
+
+### Disabling AI Features
+
+To completely turn off all AI functionality:
+
+```json
+{
+  "disable_ai": true
+}
+```
+
+---
+
+## AI Assistant
+
+### Agent Panel
+
+The Agent Panel is Zed's primary AI interface -- an agentic coding assistant that can read, write, and execute code across your entire project. Open it via the `agent: new thread` command or the status bar icon.
+
+<Steps>
+  <Step title="Configure a Provider">
+    Set up at least one LLM provider: subscribe to Zed Pro for hosted models, use your own API keys (Anthropic, OpenAI, etc.), or connect an external agent (Gemini CLI, Claude Agent).
+  </Step>
+  <Step title="Open the Agent Panel">
+    Use the command palette (`agent: new thread`) or click the sparkle icon in the status bar. Select your preferred model from the dropdown.
+  </Step>
+  <Step title="Start a Conversation">
+    Type your prompt in the message editor and press Enter. Add context with `@`-mentions for files, directories, symbols, diagnostics, threads, or rules.
+  </Step>
+  <Step title="Review Changes">
+    After the agent edits files, use the Review Changes button (`Ctrl+Shift+R` / `Cmd+Shift+R`) to see a multi-buffer diff. Accept or reject individual hunks or all changes at once.
+  </Step>
+</Steps>
+
+#### Agent Profiles
+
+The Agent Panel ships with three built-in profiles controlling which tools the agent can use:
+
+| Profile | Tools | Use Case |
+|---|---|---|
+| **Write** | Full tool access (file editing, terminal, search) | Code generation and modification |
+| **Ask** | Read-only tools | Code questions and exploration |
+| **Minimal** | No tools | General conversation |
+
+Custom profiles can be created through the Agent Profile modal and are stored under the `agent.profiles` settings key.
+
+#### Context Mentions
+
+Add context by typing `@` in the message editor:
+
+- `@file` -- Reference a specific file
+- `@directory` -- Reference a directory
+- `@symbol` -- Reference a code symbol
+- `@thread` -- Reference a previous conversation thread
+- `@rules` -- Reference a rules file
+- `@diagnostics` -- Include language server diagnostics
+
+Images can be attached via `@`-mention or drag-and-drop for vision-capable models (GPT-4o, Claude 3+, Gemini 1.5+).
+
+#### Thread Management
+
+- **Navigate threads**: `Cmd+Shift+J` / `Ctrl+Shift+J` shows recent threads; `Cmd+Shift+H` / `Ctrl+Shift+H` shows full history
+- **Auto-generated titles**: Based on conversation content; manually editable
+- **Checkpoints**: A "Restore Checkpoint" button lets you roll back to pre-modification states
+- **Persistence**: Threads survive editor restarts; draft prompts are also persisted
+
+#### Following the Agent
+
+Click the crosshair icon at the bottom left of the panel to follow the agent as it navigates and edits files. Hold `Cmd` / `Ctrl` when submitting to auto-follow.
+
+### Inline Assistant
+
+The Inline Assistant transforms code in place. Select code (or place your cursor on a line), press `Ctrl+Enter`, type a prompt, and the model rewrites the selection.
+
+<Info>
+  The Inline Assistant works in editors, text threads, the rules library, channel notes, and even the terminal panel.
+</Info>
+
+#### Multi-Model Comparison
+
+Configure `inline_alternatives` to generate outputs from multiple models in parallel:
+
+```json
+{
+  "agent": {
+    "default_model": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5"
+    },
+    "inline_alternatives": [
+      {
+        "provider": "openai",
+        "model": "gpt-4o"
+      },
+      {
+        "provider": "google",
+        "model": "gemini-2.0-flash"
+      }
+    ]
+  }
+}
+```
+
+When alternatives are configured, the UI displays buttons to cycle between outputs from each model.
+
+#### Custom Keybindings for Inline Assist
+
+You can bind custom keybindings that pre-fill prompts:
+
+```json
+{
+  "context": "Editor && mode == full",
+  "bindings": {
+    "ctrl-shift-enter": [
+      "assistant::InlineAssist",
+      { "prompt": "Add error handling" }
+    ]
+  }
+}
+```
+
+### Edit Prediction (Zeta)
+
+Zeta is Zed's open-source prediction model that goes beyond simple autocomplete. It predicts developer intent based on recent changes, visited files, and cursor position -- no prompting required. This works automatically and is distinct from the prompt-driven Inline Assistant.
+
+### Text Threads
+
+Text Threads provide a raw text-based interface to LLMs. Unlike the Agent Panel, text threads expose the entire LLM request as editable plain text -- code snippets, conversation history, and file contents are all visible and editable. Text threads do not support autonomous code editing but offer full control over the prompt.
+
+---
+
+## Rules / Custom Prompts
+
+Rules are prompts that are automatically inserted into Agent Panel interactions. They replace the older "Prompt Library" system.
+
+### Rules Files
+
+Place a rules file at the root of your project for project-level instructions that auto-include in all Agent Panel interactions.
+
+<Warning>
+  If multiple recognized filenames exist, only the **first match** in priority order is used. Zed does not combine multiple rule files.
+</Warning>
+
+**Recognized filenames** (in priority order):
+
+1. `.rules`
+2. `.cursorrules`
+3. `.windsurfrules`
+4. `.clinerules`
+5. `.github/copilot-instructions.md`
+6. `AGENT.md`
+7. `AGENTS.md`
+8. `CLAUDE.md`
+9. `GEMINI.md`
+
+### Rules Library
+
+The Rules Library is a built-in editor for writing and managing reusable rules. Access it via:
+
+- Agent Panel menu (`...`) then "Rules..."
+- Command: `agent: open rules library`
+- Shortcut: `Cmd+Alt+L` / `Ctrl+Alt+L`
+
+Features include:
+
+- Full editor with syntax highlighting
+- Inline assistant support within the rules editor
+- Rename, duplicate, delete, and export capabilities
+- **Default rules**: Click the paper clip icon to mark a rule as default, automatically including it in every new Agent Panel interaction
+
+### Using Rules
+
+Rules can be referenced in three ways:
+
+1. **Auto-included**: `.rules` files in the project root and default rules from the library
+2. **@-mentioned**: Reference any rule from the library using `@` in the Agent Panel
+3. **Nested via `/prompt`**: Use the `/prompt` slash command inside rules to compose modular, reusable rule components
+
+<Info>
+  Slash commands inside rules (like `/now` or `/prompt`) only work when used in text threads, not in non-text-thread contexts.
+</Info>
+
+---
+
+## MCP Servers / Context Servers
+
+Zed supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) for connecting the Agent Panel to external tools and data sources. Zed implements MCP's Tools and Prompts features, plus the `notifications/tools/list_changed` notification for runtime tool updates.
+
+### Installing MCP Servers as Extensions
+
+The simplest method. Browse and install MCP server extensions from:
+
+- The [Zed Extensions marketplace](https://zed.dev/extensions)
+- The command palette: `zed: extensions`
+- The Agent Panel menu
+
+Popular MCP extensions include GitHub, Puppeteer, Brave Search, and Figma.
+
+After installing an extension-based MCP server, Zed displays a configuration modal for required credentials (e.g., GitHub Personal Access Token).
+
+### Configuring Custom MCP Servers
+
+Add servers directly to your `settings.json` for custom or private servers:
+
+<Tabs>
+  <Tab title="Local Server (stdio)">
+    ```json
+    {
+      "context_servers": {
+        "my-local-server": {
+          "command": "npx",
+          "args": ["-y", "@my-org/mcp-server"],
+          "env": {
+            "API_KEY": "your-key-here"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Remote Server (SSE)">
+    ```json
+    {
+      "context_servers": {
+        "my-remote-server": {
+          "url": "https://mcp.example.com/sse",
+          "headers": {
+            "Authorization": "Bearer your-token"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+Custom servers can also be added through the Agent Panel settings view (`agent: open settings`).
+
+### Verifying MCP Server Status
+
+In the Agent Panel settings view, each MCP server has a status indicator:
+
+- **Green dot**: Server is active and running
+- **Other colors**: Indicates configuration errors or connection issues (check the tooltip for details)
+
+### Tool Permissions
+
+Control how the agent handles tool invocations (including MCP tools):
+
+```json
+{
+  "agent": {
+    "tool_permissions": {
+      "default": "confirm",
+      "mcp:github:create_issue": "allow",
+      "mcp:filesystem:delete_file": "deny"
+    }
+  }
+}
+```
+
+| Permission | Behavior |
+|---|---|
+| `"confirm"` | Prompts for approval before running (default) |
+| `"allow"` | Auto-approves without prompting |
+| `"deny"` | Blocks the tool action |
+
+MCP tools use the key format `mcp:<server-name>:<tool_name>` for granular per-tool permissions.
+
+<Warning>
+  Even with `"allow"` as the default, per-tool overrides are still respected. Consider keeping `"confirm"` as default and selectively allowing trusted tools.
+</Warning>
+
+---
+
+## Slash Commands
+
+Slash commands inject dynamic content into text threads and rules. Type `/` at the beginning of a line to see available commands.
+
+### Built-in Slash Commands
+
+| Command | Description |
+|---|---|
+| `/file` | Inserts file or directory contents. Supports glob patterns. |
+| `/now` | Inserts the current date and time |
+| `/prompt` | Inserts a rule from the Rules Library |
+| `/diagnostics` | Injects language server errors and warnings |
+| `/default` | Inserts the default rules |
+
+<Note>
+  Slash commands are evaluated once -- when the text thread is created or when the command is inserted. They do not continuously update. For example, `/now` captures the time at insertion, and `/file` captures file contents at that moment.
+</Note>
+
+### Extension Slash Commands
+
+Extensions can provide additional slash commands. Each slash command must be registered in the extension's `extension.toml`. See [Slash Command Extensions](https://zed.dev/docs/extensions/slash-commands) for authoring details.
+
+---
+
+## Model Configuration
+
+### Supported LLM Providers
+
+Zed supports a wide range of LLM providers, either through Zed's hosted proxy or via direct API keys:
+
+| Provider | Config Key | Environment Variable |
+|---|---|---|
+| Zed Hosted (Pro) | `zed.dev` | N/A (uses Zed account) |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai` | `OPENAI_API_KEY` |
+| Google AI | `google` | `GOOGLE_AI_API_KEY` |
+| Ollama (local) | `ollama` | N/A |
+| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` |
+| Mistral | `mistral` | `MISTRAL_API_KEY` |
+| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` |
+| Vercel AI Gateway | `vercel-ai` | N/A |
+| AWS Bedrock | `bedrock` | AWS credentials |
+
+### Adding API Keys
+
+API keys can be set through:
+
+1. **Agent Panel settings UI**: `agent: open settings`, then paste the key into the provider's input field
+2. **Environment variables**: Set the appropriate `*_API_KEY` variable
+3. **OS keychain**: Keys entered through the UI are stored in your operating system's secure credential storage, not in `settings.json`
+
+<Info>
+  API keys are never stored as plain text in `settings.json`. They are saved in your OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager) or read from environment variables.
+</Info>
+
+### Model Selection
+
+Switch models via:
+
+- The model selector dropdown in the Agent Panel message editor
+- The keybinding `Cmd+Alt+/` / `Ctrl+Alt+/`
+- Favorite frequently used models by clicking the star icon to pin them at the top
+
+### Custom OpenAI-Compatible Providers
+
+Add any OpenAI-compatible inference provider through the Agent Panel settings ("Add Provider" button) or in `settings.json`. You configure the API URL, model slug, and token limits. The API key must be set via environment variable using the format `<PROVIDER_NAME>_API_KEY`.
+
+### Bedrock Extended Context
+
+For AWS Bedrock models that support extended context windows (up to 1M tokens):
+
+```json
+{
+  "agent": {
+    "profiles": {
+      "bedrock_long_context": {
+        "provider": "bedrock",
+        "allow_extended_context": true
+      }
+    }
+  }
+}
+```
+
+### Thinking / Reasoning Control
+
+For models that support reasoning (e.g., Claude with extended thinking), Zed provides a thinking mode toggle and effort level selector in the Agent Panel. These preferences persist across threads.
+
+---
+
+## Extensions
+
+Zed's extension system uses WebAssembly sandboxing. Extensions can provide languages, themes, MCP servers, slash commands, debugger protocols, and more.
+
+### Extension Structure
+
+```
+my-extension/
+  extension.toml          # Required: extension manifest
+  Cargo.toml              # Optional: for Rust/WASM extensions
+  src/
+    lib.rs                # Optional: procedural extension code
+  languages/
+    my-language/
+      config.toml
+      highlights.scm
+  themes/
+    my-theme.json
+```
+
+### extension.toml Manifest
+
+```toml
+id = "my-extension"
+name = "My Extension"
+version = "0.0.1"
+schema_version = 1
+authors = ["Your Name <you@example.com>"]
+description = "Description of the extension"
+repository = "https://github.com/your-name/my-zed-extension"
+```
+
+<Note>
+  Theme extension IDs should be suffixed with `-theme`. All extension repositories must include a license file as of October 2025.
+</Note>
+
+### Extension Types
+
+| Type | Requires Rust/WASM | Description |
+|---|---|---|
+| **Theme** | No | JSON theme files only |
+| **Language** | Optional | Tree-sitter grammars, highlights, language server config |
+| **MCP Server** | Yes | Registers an MCP server for the Agent Panel |
+| **Slash Command** | Yes | Custom slash commands for text threads |
+| **Debugger** | Yes | Debug adapter protocol integration |
+
+Procedural extensions are written in Rust, compiled to WebAssembly, and depend on the `zed_extension_api` crate. Pure theme or icon theme extensions need only JSON and TOML files.
+
+### Installing Extensions
+
+Extensions are available through:
+
+- The [Zed Extensions page](https://zed.dev/extensions)
+- The command palette: `zed: extensions`
+- The extensions panel in the editor
+
+---
+
+## External Agents (ACP)
+
+Zed supports external AI agents via the **Agent Client Protocol (ACP)**, which provides a structured integration point for third-party agents like Gemini CLI and Claude Agent.
+
+<Warning>
+  External agents may not support all Agent Panel features. Thread history restoration, checkpoints, token usage display, and other features may vary depending on the agent implementation.
+</Warning>
+
+External agents can be installed via the ACP registry, including in remote project scenarios.
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Zed platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS">
+    - **Global settings**: `~/.config/zed/settings.json`
+    - **Global keymap**: `~/.config/zed/keymap.json`
+    - **Project settings**: `<project>/.zed/settings.json`
+    - **Project rules**: `<project>/.rules`
+  </Tab>
+  <Tab title="Linux">
+    - **Global settings**: `$XDG_CONFIG_HOME/zed/settings.json` (fallback: `~/.config/zed/settings.json`)
+    - **Global keymap**: `$XDG_CONFIG_HOME/zed/keymap.json`
+    - **Project settings**: `<project>/.zed/settings.json`
+    - **Project rules**: `<project>/.rules`
+  </Tab>
+  <Tab title="Windows">
+    - **Global settings**: `~/.config/zed/settings.json`
+    - **Global keymap**: `~/.config/zed/keymap.json`
+    - **Project settings**: `<project>/.zed/settings.json`
+    - **Project rules**: `<project>/.rules`
+  </Tab>
+</Tabs>
+
+### Installing MCP Servers
+
+To programmatically register an MCP server, merge the server definition into the `context_servers` key of `settings.json`:
+
+```json
+{
+  "context_servers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_CONFIG": "value"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `context_servers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- Zed watches `settings.json` for changes and reloads automatically; no editor restart is required
+- MCP servers installed as extensions are managed by Zed's extension system and should not be manually written to `settings.json`
+
+### Installing Rules
+
+To install project-level rules, write a `.rules` file to the project root. If a `.rules` file already exists, the installer should append to it or prompt the user, since Zed only reads the first matching rules file.
+
+**Recognized filenames** (Zed checks in order and uses the first match):
+`.rules`, `.cursorrules`, `.windsurfrules`, `.clinerules`, `.github/copilot-instructions.md`, `AGENT.md`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`
+
+<Warning>
+  If the project already has a `.cursorrules` or `CLAUDE.md` file, creating a `.rules` file will shadow it since `.rules` has higher priority. The installer should detect existing rule files and either use the same file or warn the user.
+</Warning>
+
+### Installing Extensions
+
+Extensions are installed through Zed's built-in extension manager. There is no CLI command or file-system mechanism to install extensions programmatically. The installer should:
+
+1. Direct the user to install the extension via the command palette (`zed: extensions`)
+2. Or provide the extension ID for lookup on [zed.dev/extensions](https://zed.dev/extensions)
+
+### API Key Management
+
+API keys are stored in the OS keychain, not in `settings.json`. An installer cannot programmatically set API keys through file manipulation. Options include:
+
+- Setting environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) in the user's shell profile
+- Instructing the user to enter keys through the Agent Panel settings UI
+
+### Settings Format
+
+Zed's `settings.json` uses standard JSON (with support for `//` comments). The installer must:
+
+1. Parse the existing file (preserving comments if possible)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back
+
+The `context_servers` key is the primary integration point for MCP server packages. Agent-related settings live under the `agent` key.
