@@ -22,7 +22,7 @@
     if (!document.querySelector('.custom-mode')) return;
 
     var sections = document.querySelectorAll('.custom-mode section');
-    if (sections.length < 5) return;
+    if (sections.length < 6) return;
 
     // ═══════════════════════════════════════════
     // Section 1: Statement (Hero)
@@ -173,14 +173,16 @@
     }
 
     // ═══════════════════════════════════════════
-    // Section 4: Trust (Security Pipeline)
+    // Section 4: Trust (Security Pipeline) — two-column
     // ═══════════════════════════════════════════
     var trustSection = sections[3];
     if (trustSection) {
+      gsap.set('.trust-left', { opacity: 0, x: -40 });
+      gsap.set('.trust-right', { opacity: 0, x: 40 });
       gsap.set('.trust-eyebrow', { opacity: 0, y: 20 });
       gsap.set('.trust-headline', { opacity: 0, y: 30 });
       gsap.set('.trust-subline', { opacity: 0, y: 20 });
-      gsap.set('.trust-stage', { opacity: 0, x: -30 });
+      gsap.set('.trust-stage', { opacity: 0, x: 30 });
       gsap.set('.trust-connector', { scaleY: 0, transformOrigin: 'top' });
       gsap.set('.trust-badge', { opacity: 0, scale: 0.5 });
       gsap.set('.trust-callout', { opacity: 0, y: 20 });
@@ -196,29 +198,72 @@
         },
       });
 
-      trustTl.to('.trust-eyebrow', { opacity: 1, y: 0, duration: 0.06, ease: 'power2.out' })
-             .to('.trust-headline', { opacity: 1, y: 0, duration: 0.08, ease: 'power2.out' }, 0.04)
-             .to('.trust-subline', { opacity: 1, y: 0, duration: 0.06, ease: 'power2.out' }, 0.1);
+      // Left column slides in
+      trustTl.to('.trust-left', { opacity: 1, x: 0, duration: 0.12, ease: 'power2.out' }, 0.02);
+      trustTl.to('.trust-eyebrow', { opacity: 1, y: 0, duration: 0.06, ease: 'power2.out' }, 0.04);
+      trustTl.to('.trust-headline', { opacity: 1, y: 0, duration: 0.08, ease: 'power2.out' }, 0.08);
+      trustTl.to('.trust-subline', { opacity: 1, y: 0, duration: 0.06, ease: 'power2.out' }, 0.14);
 
-      // 6 pipeline stages
+      // Right column slides in
+      trustTl.to('.trust-right', { opacity: 1, x: 0, duration: 0.12, ease: 'power2.out' }, 0.10);
+
+      // 6 pipeline stages stagger in from right
       for (var si = 0; si < 6; si++) {
-        var t = 0.16 + si * 0.09;
+        var t = 0.18 + si * 0.08;
         trustTl.to('.trust-stage-' + si, { opacity: 1, x: 0, duration: 0.08, ease: 'power2.out' }, t);
-        trustTl.to('.trust-badge-' + si, { opacity: 1, scale: 1, duration: 0.06, ease: 'back.out(2)' }, t + 0.05);
+        trustTl.to('.trust-badge-' + si, { opacity: 1, scale: 1, duration: 0.06, ease: 'back.out(2)' }, t + 0.04);
         if (si < 5) {
-          trustTl.to('.trust-conn-' + si, { scaleY: 1, duration: 0.05, ease: 'power1.out' }, t + 0.06);
+          trustTl.to('.trust-conn-' + si, { scaleY: 1, duration: 0.05, ease: 'power1.out' }, t + 0.05);
         }
       }
 
-      trustTl.to('.trust-callout', { opacity: 1, y: 0, duration: 0.08, ease: 'power2.out' }, 0.76);
+      // Callout fades in on left side
+      trustTl.to('.trust-callout', { opacity: 1, y: 0, duration: 0.08, ease: 'power2.out' }, 0.72);
       trustTl.to({}, { duration: 0.1 });
       trustTl.to('.trust-content', { opacity: 0, duration: 0.1, ease: 'power1.in' }, 0.88);
     }
 
     // ═══════════════════════════════════════════
-    // Section 5: Fork (Publisher / Platform split)
+    // Section 5: Lifecycle (Security Outcomes)
     // ═══════════════════════════════════════════
-    var forkSection = sections[4];
+    var lifecycleSection = sections[4];
+    if (lifecycleSection) {
+      gsap.set('.lifecycle-eyebrow', { opacity: 0, y: 20 });
+      gsap.set('.lifecycle-headline', { opacity: 0, y: 30 });
+      gsap.set('.lifecycle-subline', { opacity: 0, y: 20 });
+      gsap.set('.lifecycle-card', { opacity: 0, y: 50 });
+
+      var lifeTl = gsap.timeline({
+        scrollTrigger: {
+          trigger: lifecycleSection,
+          start: 'top top',
+          end: '+=250%',
+          pin: true,
+          scrub: 1,
+          anticipatePin: 1,
+        },
+      });
+
+      lifeTl.to('.lifecycle-eyebrow', { opacity: 1, y: 0, duration: 0.08, ease: 'power2.out' }, 0.02);
+      lifeTl.to('.lifecycle-headline', { opacity: 1, y: 0, duration: 0.10, ease: 'power2.out' }, 0.08);
+      lifeTl.to('.lifecycle-subline', { opacity: 1, y: 0, duration: 0.08, ease: 'power2.out' }, 0.16);
+
+      // Cards stagger in
+      lifeTl.to('.lifecycle-card-0', { opacity: 1, y: 0, duration: 0.12, ease: 'power2.out' }, 0.28);
+      lifeTl.to('.lifecycle-card-1', { opacity: 1, y: 0, duration: 0.12, ease: 'power2.out' }, 0.40);
+      lifeTl.to('.lifecycle-card-2', { opacity: 1, y: 0, duration: 0.12, ease: 'power2.out' }, 0.52);
+
+      // Hold
+      lifeTl.to({}, { duration: 0.18 });
+
+      // Exit
+      lifeTl.to('.lifecycle-content', { opacity: 0, scale: 0.94, duration: 0.15, ease: 'power1.in' }, 0.82);
+    }
+
+    // ═══════════════════════════════════════════
+    // Section 6: Fork (Publisher / Platform split)
+    // ═══════════════════════════════════════════
+    var forkSection = sections[5];
     if (forkSection) {
       gsap.set('.fork-divider', { scaleY: 0, transformOrigin: 'center' });
       gsap.set('.fork-logo', { opacity: 0, scale: 0.5 });
@@ -249,25 +294,25 @@
     ScrollTrigger.refresh();
   }
 
-  load('/gsap.min.js')
-    .then(function () {
-      return load('/ScrollTrigger.min.js');
-    })
-    .then(function () {
-      // Wait for DOM to be fully ready
-      if (document.readyState === 'complete') {
-        initAnimations();
-      } else {
-        window.addEventListener('load', initAnimations);
-      }
-      // Also try after a delay in case Mintlify hydration is still running
-      setTimeout(function () {
-        if (ScrollTrigger.getAll().length === 0) {
-          initAnimations();
-        }
-      }, 1500);
-    })
-    .catch(function (e) {
-      console.error('GSAP load failed:', e);
-    });
+  //load('/gsap.min.js')
+  //  .then(function () {
+  //    return load('/ScrollTrigger.min.js');
+  //  })
+  //  .then(function () {
+  //    // Wait for DOM to be fully ready
+  //    if (document.readyState === 'complete') {
+  //      initAnimations();
+  //    } else {
+  //      window.addEventListener('load', initAnimations);
+  //    }
+  //    // Also try after a delay in case Mintlify hydration is still running
+  //    setTimeout(function () {
+  //      if (ScrollTrigger.getAll().length === 0) {
+  //        initAnimations();
+  //      }
+  //    }, 1500);
+  //  })
+  //  .catch(function (e) {
+  //    console.error('GSAP load failed:', e);
+  //  });
 })();
