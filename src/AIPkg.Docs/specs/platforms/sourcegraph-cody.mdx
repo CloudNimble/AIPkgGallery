@@ -1,0 +1,581 @@
+---
+title: Sourcegraph Cody
+description: Platform specification for Sourcegraph Cody, the AI coding assistant powered by Sourcegraph's code intelligence platform
+icon: magnifying-glass-code
+---
+
+## Overview
+
+[Sourcegraph Cody](https://sourcegraph.com/cody) is an AI coding assistant built by **Sourcegraph**, the code intelligence company. Cody differentiates itself through deep codebase context powered by Sourcegraph's code search and code graph technology, enabling it to understand relationships across large, complex codebases rather than just the current file.
+
+Cody is available as an extension for VS Code, JetBrains IDEs, Visual Studio, and the Sourcegraph web interface. It offers chat, autocomplete (and the newer auto-edit), prompts, and agentic context fetching across all major programming languages.
+
+<Info>
+  Cody is primarily targeted at enterprise teams working with large codebases. Its context engine leverages Sourcegraph's code search API to pull context from both local and remote repositories, making it especially valuable for multi-repo environments.
+</Info>
+
+### Key AI Features
+
+| Feature | Description |
+|---|---|
+| **Chat** | Conversational AI assistant with deep codebase awareness |
+| **Autocomplete** | Single-line and multi-line code suggestions as you type |
+| **Auto-Edit** | AI-suggested code changes based on cursor movement and typing patterns (Sourcegraph v6.0+) |
+| **Prompts** | Reusable prompt templates via the Prompt Library for automating common tasks |
+| **Agentic Context Fetching** | Autonomous context gathering from code search, files, terminal, web, MCP, and OpenCtx |
+| **Multi-Provider LLM** | Support for Anthropic Claude, OpenAI GPT, Google Gemini, and more |
+| **MCP Support** | Model Context Protocol integration for external tools and data sources |
+
+### Supported Platforms
+
+| Platform | Status | Extension ID / Access |
+|---|---|---|
+| **VS Code** | Generally available | `sourcegraph.cody-ai` |
+| **JetBrains** | Generally available | JetBrains Marketplace: "Sourcegraph Cody + Code Search" |
+| **Visual Studio** | Generally available | `sourcegraph.cody-vs` |
+| **Web** | Generally available | Sourcegraph web app (sourcegraph.com or self-hosted instance) |
+
+<Warning>
+  Starting July 23, 2025, Cody is no longer available for Free, Pro, and Enterprise Starter plans. Only Cody Enterprise continues to be actively supported and developed.
+</Warning>
+
+---
+
+## Configuration
+
+### File Locations
+
+Cody's configuration is spread across IDE settings, Sourcegraph instance site configuration, and optional workspace-level files.
+
+<Tabs>
+  <Tab title="VS Code">
+    | File | Location | Purpose |
+    |---|---|---|
+    | `settings.json` | VS Code user/workspace settings | All `cody.*` configuration keys |
+    | `cody.json` | `~/.vscode/cody.json` | User-level custom commands (legacy) |
+    | `cody.json` | `<project>/.vscode/cody.json` | Workspace-level custom commands (legacy) |
+  </Tab>
+  <Tab title="JetBrains">
+    | File | Location | Purpose |
+    |---|---|---|
+    | IDE Settings | Settings > Tools > Sourcegraph | Instance URL, access token, feature toggles |
+    | `cody_settings.json` | IDE config directory | MCP server configuration |
+  </Tab>
+  <Tab title="Enterprise (Site Admin)">
+    | Setting | Location | Purpose |
+    |---|---|---|
+    | `modelConfiguration` | Site configuration JSON | LLM model selection for chat, fast chat, and autocomplete |
+    | `cody.contextFilters` | Site configuration JSON | Repository include/exclude rules for context access |
+    | `cody.enabled` | Site configuration JSON | Enable or disable Cody instance-wide |
+  </Tab>
+</Tabs>
+
+### Key VS Code Settings
+
+Cody registers its configuration under the `cody.*` namespace in VS Code's `settings.json`. The definitive list of all keys is in the extension's `package.json` in the [sourcegraph/cody repository](https://github.com/sourcegraph/cody). Notable settings include:
+
+```json
+{
+  "cody.serverEndpoint": "https://sourcegraph.example.com",
+  "cody.autocomplete.enabled": true,
+  "cody.agenticContext": true,
+  "cody.mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server"],
+      "env": {}
+    }
+  },
+  "cody.debug.verbose": false
+}
+```
+
+<Note>
+  To discover all available `cody.*` settings, open VS Code Settings (Ctrl/Cmd+,) and search for "cody". Each setting includes a description, type, and default value.
+</Note>
+
+---
+
+## Prompts and Custom Commands
+
+### Prompt Library (Current System)
+
+The Prompt Library is Cody's current system for reusable prompt templates, replacing the legacy custom commands. Prompts are created, saved, and shared through the Sourcegraph Enterprise web interface and are accessible from IDE extensions.
+
+<Steps>
+  <Step title="Create a Prompt">
+    Navigate to the Prompt Library in your Sourcegraph instance. Select an owner, provide a name and description, and write your prompt instructions in the template box.
+  </Step>
+  <Step title="Add Dynamic Context">
+    Use `@`-mentions to include dynamic context such as the current file selection, specific files, symbols, directories, repositories, or web URLs. Context resolves automatically based on the user's workspace.
+  </Step>
+  <Step title="Configure Execution Mode">
+    Choose between "Chat only" (answered in the chat panel) or "Edit code" (applies changes directly to files).
+  </Step>
+  <Step title="Set Visibility">
+    Mark the prompt as Public (visible to all users on the instance) or Private. Optionally mark it as a draft.
+  </Step>
+</Steps>
+
+#### Built-In Prompts
+
+Cody ships with four default prompts:
+
+| Prompt | Purpose |
+|---|---|
+| `document-code` | Generate documentation for selected code |
+| `explain-code` | Explain what selected code does |
+| `find-code-smells` | Identify potential issues in selected code |
+| `generate-unit-tests` | Create unit tests for selected code |
+
+<Info>
+  Site admins can create tags to categorize prompts, helping users organize and discover prompts in large teams.
+</Info>
+
+### Custom Commands (Legacy, Deprecated)
+
+<Warning>
+  Custom Commands have been deprecated and replaced by the Prompt Library. VS Code automatically detects legacy custom commands and offers to migrate them. Once migrated, commands cannot be edited in the Prompt Library and must be recreated.
+</Warning>
+
+Legacy custom commands were defined in JSON files at two locations:
+
+<CodeGroup>
+
+```json User Commands (~/.vscode/cody.json)
+{
+  "commit-message": {
+    "description": "Generate a commit message",
+    "prompt": "Suggest a commit message for the staged changes",
+    "context": {
+      "command": "git diff --cached"
+    },
+    "mode": "ask"
+  }
+}
+```
+
+```json Workspace Commands (<project>/.vscode/cody.json)
+{
+  "explain-directory": {
+    "description": "Explain the current directory",
+    "prompt": "Explain what this directory does and how its files relate",
+    "context": {
+      "currentDir": true,
+      "selection": true
+    },
+    "mode": "ask"
+  }
+}
+```
+
+</CodeGroup>
+
+#### Legacy Command Modes
+
+| Mode | Behavior |
+|---|---|
+| `ask` | Response displayed in the chat panel |
+| `edit` | Response replaces the selected code |
+| `insert` | Response inserted at the top of the selection |
+
+#### Legacy Context Options
+
+| Context Key | Description |
+|---|---|
+| `selection` | Include the current editor selection |
+| `currentDir` | Include snippets from the first 10 files in the current directory |
+| `directoryPath` | Include snippets from a relative directory path (first 5 files) |
+| `filePath` | Include a specific file by relative path |
+| `command` | Run a terminal command and include its output |
+| `none` | Send only the prompt with no additional context |
+
+---
+
+## MCP Server Configuration
+
+Cody supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) for connecting to external tools and data sources. MCP integration works through Cody's agentic context fetching system.
+
+<Warning>
+  MCP in Cody currently supports only **Tools**. Resources and Prompts capabilities from the MCP specification are not yet supported. Only local MCP servers are supported (no remote/cloud-based servers).
+</Warning>
+
+### Enabling MCP
+
+MCP must be explicitly enabled:
+
+1. Add the `agentic-context-mcp-enabled` feature flag on your Sourcegraph instance
+2. Ensure agentic context fetching is enabled (`cody.agenticContext: true`)
+
+### Configuration Methods
+
+<Tabs>
+  <Tab title="VS Code Settings">
+    Add MCP servers to your `settings.json` under the `cody.mcpServers` key:
+
+    ```json
+    {
+      "cody.mcpServers": {
+        "github": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-github"],
+          "env": {
+            "GITHUB_TOKEN": "ghp_xxxxxxxxxxxx"
+          },
+          "disabledTools": []
+        },
+        "postgres": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-postgres"],
+          "env": {
+            "DATABASE_URL": "postgresql://localhost/mydb"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Extension UI">
+    Click your profile icon in the Cody extension sidebar and select **MCP Settings**. Configure server name, command, arguments, and environment variables through the UI.
+  </Tab>
+  <Tab title="OpenCtx Provider (Legacy)">
+    MCP servers can also be configured via the OpenCtx provider in VS Code settings:
+
+    ```json
+    {
+      "openctx.providers": {
+        "https://openctx.org/npm/@openctx/provider-modelcontextprotocol": {
+          "nodeCommand": "node",
+          "mcp.provider.uri": "file:///path/to/server/build/index.js",
+          "mcp.provider.args": ["arg1", "arg2"]
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Sourcegraph's Own MCP Server
+
+Sourcegraph also publishes an MCP server that exposes Sourcegraph's code search and navigation to other AI agents and tools:
+
+```bash
+# Install and run the Sourcegraph MCP server
+npx @sourcegraph/mcp-server --endpoint https://sourcegraph.example.com --token sgp_xxxx
+```
+
+The Sourcegraph MCP server supports OAuth 2.0 with Dynamic Client Registration (RFC 7591) as well as access token authentication.
+
+---
+
+## Context and Codebase Intelligence
+
+### Context Sources
+
+Cody gathers context through three primary mechanisms:
+
+| Method | Description |
+|---|---|
+| **Keyword Search** | Traditional text-based search with automatic query rewriting for improved relevance |
+| **Sourcegraph Search** | Queries sent to the Sourcegraph instance (managed or self-hosted) using the full Sourcegraph search stack |
+| **Code Graph** | Structural analysis of code relationships, examining how components interconnect |
+
+### Agentic Context Fetching
+
+When enabled, Cody autonomously gathers context before generating responses. The agentic system has access to six tools:
+
+1. **Code Search** -- searches across the codebase
+2. **Codebase File** -- retrieves complete file contents from repositories
+3. **Terminal** -- executes shell commands (requires user permission each time)
+4. **Web Browser** -- searches the internet for current information
+5. **MCP** -- external context via configured MCP servers
+6. **OpenCtx** -- integration with OpenCtx providers
+
+<Info>
+  The agentic context review step uses Gemini 2.5 Flash by default, falling back to Claude Haiku or GPT 4.1 Mini if unavailable. This model evaluates whether the gathered context is sufficient before generating the final response.
+</Info>
+
+### @-Mentions for Context
+
+Users can explicitly provide context in chat using `@`-mentions:
+
+| Mention Type | Supported Clients |
+|---|---|
+| `@file` | VS Code, JetBrains, Visual Studio, Web |
+| `@symbol` | VS Code, JetBrains, Visual Studio, Web |
+| `@repository` | VS Code, JetBrains, Visual Studio, Web |
+| `@web` (URL) | VS Code, JetBrains, Visual Studio, Web |
+| `@directory` (remote) | VS Code, Visual Studio, Web |
+| OpenCtx providers | VS Code, Visual Studio (Enterprise) |
+
+### Context Filters (Enterprise)
+
+Site administrators can control which repositories Cody is allowed to access for context using the `cody.contextFilters` setting in the Sourcegraph site configuration:
+
+```json
+{
+  "cody.contextFilters": {
+    "include": [
+      { "repoNamePattern": "^github\\.com/myorg/.*" }
+    ],
+    "exclude": [
+      { "repoNamePattern": ".*-secret$" }
+    ]
+  }
+}
+```
+
+Patterns use RE2 regex syntax. When exclude rules are active, some features like Prompts may be disabled in the chat interface.
+
+<Note>
+  Requires Sourcegraph 5.4.0+, VS Code extension 1.20.0+, or JetBrains plugin 6.0.0+, and the `cody-context-filters-enabled` feature flag.
+</Note>
+
+---
+
+## Model Configuration
+
+### Supported LLM Providers
+
+Cody supports models from multiple providers for chat, autocomplete, and fast chat:
+
+#### Chat and Prompts
+
+| Provider | Models |
+|---|---|
+| **Anthropic** | Claude Opus 4.6, Claude Opus 4.5, Claude Sonnet 4.6, Claude Sonnet 4.5, Claude Haiku 4.5 (all with vision; thinking variants available) |
+| **OpenAI** | GPT-5.2, GPT-5.1, GPT-5, GPT-5 Mini, GPT-5 Nano, GPT-4o, GPT-4.1, o3, o4-mini (most with vision) |
+| **Google** | Gemini 2.5 Flash, Gemini 2.5 Pro, Gemini 3 Pro, Gemini 3 Flash, Gemini 3.1 Pro |
+
+#### Autocomplete
+
+| Provider | Models |
+|---|---|
+| **Fireworks.ai** | DeepSeek V2 Lite Base (default), StarCoder |
+| **Anthropic** | Claude Haiku 4.5 |
+| **OpenAI** | GPT-4.1-nano |
+
+#### Default Model Assignments
+
+| Feature | Default Model |
+|---|---|
+| Chat | Claude Sonnet 4.5 |
+| Fast Chat | Claude Haiku 4.5 |
+| Autocomplete | DeepSeek V2 Lite Base |
+
+### Enterprise Model Configuration
+
+The `modelConfiguration` field in the Sourcegraph site configuration controls which models are available and their defaults:
+
+```json
+{
+  "cody.enabled": true,
+  "modelConfiguration": {
+    "sourcegraph": {},
+    "defaultModels": {
+      "chat": "anthropic::2024-10-22::claude-3-5-sonnet-latest",
+      "fastChat": "anthropic::2023-06-01::claude-3-haiku",
+      "codeCompletion": "fireworks::v1::deepseek-coder-v2-lite-base"
+    }
+  }
+}
+```
+
+### Supported Provider Types (Server-Side)
+
+Enterprise administrators can configure custom LLM providers using these provider types:
+
+| Provider Type | Description |
+|---|---|
+| `sourcegraph` | Cody Gateway (Sourcegraph-managed, multi-provider access) |
+| `openaicompatible` | Any OpenAI-compatible API endpoint |
+| `awsBedrock` | Amazon Bedrock |
+| `azureOpenAI` | Microsoft Azure OpenAI |
+| `anthropic` | Anthropic API directly |
+| `fireworks` | Fireworks AI |
+| `google` | Google Gemini and Vertex AI |
+| `openai` | OpenAI platform directly |
+| `huggingface-tgi` | Hugging Face Text Generation Interface |
+
+### Custom Model Overrides
+
+```json
+{
+  "modelConfiguration": {
+    "providerOverrides": [
+      {
+        "id": "custom-openai",
+        "type": "openaicompatible",
+        "apiEndpoint": "https://my-llm-gateway.example.com/v1",
+        "defaultModel": "my-custom-model"
+      }
+    ],
+    "modelOverrides": [
+      {
+        "modelRef": "custom-openai::v1::my-custom-model",
+        "displayName": "My Custom Model",
+        "capabilities": ["chat", "autocomplete"]
+      }
+    ]
+  }
+}
+```
+
+### Local Models (Ollama)
+
+Cody has experimental support for local models via Ollama:
+
+<Steps>
+  <Step title="Install and Run Ollama">
+    Install Ollama from [ollama.com](https://ollama.com) and pull your desired model.
+  </Step>
+  <Step title="Configure Ollama Host">
+    Set `OLLAMA_HOST=0.0.0.0` and `OLLAMA_ORIGINS=*` in your environment to allow the IDE extension to connect.
+  </Step>
+  <Step title="Select in Cody">
+    The Ollama models should appear in Cody's model selector within the chat panel.
+  </Step>
+</Steps>
+
+### CLI Model Selection
+
+When using Cody from the command line, specify the model with the `--model` flag:
+
+```bash
+cody chat --model 'claude-3.5-sonnet' -m 'Explain this function'
+```
+
+---
+
+## Autocomplete Configuration
+
+### Enabling and Disabling
+
+Autocomplete is enabled by default on all supported IDE extensions (VS Code, JetBrains, Visual Studio). Toggle it through the extension settings checkbox.
+
+### Default Model
+
+The default autocomplete model for Enterprise users is **DeepSeek V2 Lite Base** via Fireworks.ai, chosen for its low latency and high acceptance rate.
+
+### Enterprise Autocomplete Model Override
+
+Site administrators configure the autocomplete model through the `modelConfiguration.defaultModels.codeCompletion` field in the Sourcegraph site configuration:
+
+```json
+{
+  "modelConfiguration": {
+    "defaultModels": {
+      "codeCompletion": "fireworks::v1::deepseek-coder-v2-lite-base"
+    }
+  }
+}
+```
+
+<Note>
+  The autocomplete model is set by the site administrator and cannot be changed by individual users within the editor. If no default is specified or the model is not found, Cody silently falls back to a suitable alternative.
+</Note>
+
+### Auto-Edit (Next Generation)
+
+Auto-edit is a newer alternative to traditional autocomplete, available in Sourcegraph v6.0+ for Pro, Enterprise Starter, and Enterprise accounts. It analyzes cursor movements and typing patterns to suggest contextual code changes. Users can switch between autocomplete and auto-edit via the suggestion mode setting in the Cody extension.
+
+### Language Support
+
+Autocomplete works with all programming languages since it uses LLMs trained on broad data. It is particularly well-optimized for **Python, Go, JavaScript, and TypeScript**.
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Sourcegraph Cody platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="VS Code">
+    - **User settings**: VS Code `settings.json` (standard VS Code user settings path)
+    - **Workspace settings**: `<project>/.vscode/settings.json`
+    - **Legacy custom commands (user)**: `~/.vscode/cody.json`
+    - **Legacy custom commands (workspace)**: `<project>/.vscode/cody.json`
+  </Tab>
+  <Tab title="JetBrains">
+    - **IDE settings**: Managed through Settings > Tools > Sourcegraph
+    - **MCP servers**: `cody_settings.json` in the IDE configuration directory
+  </Tab>
+  <Tab title="Enterprise Site Config">
+    - **Site configuration**: Managed through the Sourcegraph admin UI at `/site-admin/configuration`
+    - **Key fields**: `modelConfiguration`, `cody.contextFilters`, `cody.enabled`
+  </Tab>
+</Tabs>
+
+### Installing MCP Servers
+
+To programmatically register an MCP server, merge the server definition into the `cody.mcpServers` key in VS Code's `settings.json`:
+
+```json
+{
+  "cody.mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "value"
+      },
+      "disabledTools": []
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `cody.mcpServers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- MCP requires the `agentic-context-mcp-enabled` feature flag on the Sourcegraph instance
+- Agentic context must be enabled (`cody.agenticContext: true`)
+- Only local (stdio) MCP servers are supported; remote servers are not available
+- Cody only supports MCP Tools, not Resources or Prompts
+
+<Warning>
+  Unlike some other AI coding tools, Cody does not use a dedicated project-level directory (like `.cody/`) for MCP or context configuration. All MCP server configuration lives in VS Code's `settings.json` under `cody.mcpServers`, or for JetBrains, in `cody_settings.json`.
+</Warning>
+
+### Installing Prompts
+
+Prompts are managed through the Sourcegraph Enterprise Prompt Library web interface. There is no file-system mechanism to install prompts programmatically. The installer should:
+
+1. Direct the user to the Prompt Library in their Sourcegraph instance
+2. Provide the prompt template text for manual creation
+3. Optionally use the Sourcegraph API to create prompts programmatically (if supported by the instance)
+
+### Authentication and Access
+
+Cody requires authentication with a Sourcegraph instance:
+
+- **VS Code**: Set `cody.serverEndpoint` in settings and authenticate through the extension's login flow
+- **JetBrains**: Configure the instance URL and access token in Settings > Tools > Sourcegraph
+- **Access tokens**: Generated from the Sourcegraph instance at Settings > Access Tokens
+
+An installer can set the `cody.serverEndpoint` programmatically in VS Code settings, but the access token must be entered by the user through the extension's authentication flow or by setting it in the IDE's secure credential store.
+
+### Settings Format
+
+Cody's configuration in VS Code uses the standard VS Code `settings.json` format. The installer must:
+
+1. Parse the existing `settings.json` file
+2. Deep-merge new `cody.*` keys into the existing structure
+3. Write the result back
+
+The primary integration points are:
+- `cody.mcpServers` for MCP server packages
+- `cody.serverEndpoint` for Sourcegraph instance connection
+- `cody.autocomplete.enabled` for autocomplete feature toggling
+- `cody.agenticContext` for enabling agentic context fetching
+
+### Extension Installation
+
+The Cody extension must be installed before any configuration takes effect:
+
+- **VS Code**: `code --install-extension sourcegraph.cody-ai`
+- **JetBrains**: Install "Sourcegraph Cody + Code Search" from the JetBrains Marketplace
+- **Visual Studio**: Install from the Visual Studio Marketplace (`sourcegraph.cody-vs`)
