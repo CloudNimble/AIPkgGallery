@@ -1,0 +1,467 @@
+---
+title: Claude Desktop
+description: Platform specification for Claude Desktop, Anthropic's native desktop application for interacting with Claude AI
+icon: message-bot
+---
+
+## Overview
+
+[Claude Desktop](https://claude.com/download) is a native desktop application developed by **Anthropic** for interacting with Claude, Anthropic's family of AI models. Available for **macOS** and **Windows**, Claude Desktop provides a rich conversational interface with support for file uploads, vision, artifacts, projects, and deep integration with local tools and services via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). It serves as both a consumer-facing AI assistant and a developer-extensible platform.
+
+Claude Desktop is tightly coupled with the claude.ai web experience -- conversations, projects, memory, and preferences sync across devices when signed in. It extends beyond the web interface by offering native OS integrations such as a global keyboard shortcut for quick access, desktop extensions for local tool access, and the Cowork agentic mode for knowledge work.
+
+<Info>
+  Claude Desktop uses Anthropic's own Claude models exclusively. It is not model-agnostic. The specific model used depends on the user's subscription plan (Free, Pro, Max, Team, or Enterprise).
+</Info>
+
+### Key Features
+
+| Feature | Description |
+|---|---|
+| **Conversational AI** | Full access to Claude's writing, analysis, coding, and reasoning capabilities in a native desktop interface |
+| **MCP Support** | Connects to local and remote MCP servers for tool use, file access, database queries, and API interactions |
+| **Desktop Extensions** | One-click installable MCP server packages (`.mcpb` format) with built-in runtimes and secure configuration |
+| **Projects** | Organized workspaces with custom instructions, file uploads, and shared context (up to 200K tokens) |
+| **Artifacts** | Interactive, shareable outputs including code, visualizations, documents, and full web applications |
+| **Vision** | Analyze images, screenshots, charts, diagrams, and scanned documents (PNG, JPEG, GIF, WebP) |
+| **File Analysis** | Drag-and-drop support for CSV, DOCX, PPTX, PDF, and other file types for summarization and extraction |
+| **Connectors** | Web-based integrations (Google Drive, Slack, etc.) that work across web, desktop, and mobile |
+| **Cowork** | Agentic desktop mode that runs locally in an isolated VM with access to local files and MCP integrations |
+| **Quick Entry** | Global keyboard shortcut to invoke Claude from any application |
+| **Cross-Device Sync** | Conversations, projects, memory, and preferences sync across all devices |
+
+---
+
+## Configuration
+
+### File Locations
+
+Claude Desktop uses a JSON configuration file primarily for MCP server definitions and a small number of application settings.
+
+<Tabs>
+  <Tab title="macOS">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `claude_desktop_config.json` | `~/Library/Application Support/Claude/claude_desktop_config.json` | MCP server configuration and app settings |
+    | MCP server logs | `~/Library/Logs/Claude/mcp-server-*.log` | Stderr logging from MCP servers |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `claude_desktop_config.json` | `%APPDATA%\Claude\claude_desktop_config.json` | MCP server configuration and app settings |
+  </Tab>
+  <Tab title="Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `claude_desktop_config.json` | `~/.config/Claude/claude_desktop_config.json` | MCP server configuration and app settings |
+
+    <Warning>
+      There is no official Linux build of Claude Desktop. This path applies to unofficial or WINE-based installations.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### claude_desktop_config.json Structure
+
+<CodeGroup>
+
+```json Basic Configuration
+{
+  "globalShortcut": "Alt+Space",
+  "mcpServers": {}
+}
+```
+
+```json MCP Servers (stdio)
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/username/Documents",
+        "/Users/username/Desktop"
+      ]
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
+      }
+    }
+  }
+}
+```
+
+```json MCP Servers (Remote)
+{
+  "mcpServers": {
+    "remote-server": {
+      "url": "https://mcp.example.com/sse",
+      "transport": "sse"
+    },
+    "http-server": {
+      "url": "https://mcp.example.com/mcp",
+      "transport": "http"
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Accessing the Configuration
+
+The configuration file can be accessed directly through the Claude Desktop UI:
+
+<Steps>
+  <Step title="Open Settings">
+    Click the settings icon in the Claude Desktop application.
+  </Step>
+  <Step title="Navigate to Developer Tab">
+    Select the **Developer** tab in the left sidebar.
+  </Step>
+  <Step title="Edit Config">
+    Click the **Edit Config** button. This opens `claude_desktop_config.json` in your default editor, creating it if it does not already exist.
+  </Step>
+  <Step title="Restart Claude Desktop">
+    After saving changes, completely quit and restart Claude Desktop to load the new configuration.
+  </Step>
+</Steps>
+
+<Note>
+  Claude Desktop does not hot-reload configuration changes. You must fully quit and restart the application after editing `claude_desktop_config.json`.
+</Note>
+
+### Projects and Custom Instructions
+
+Claude Desktop supports **Projects** as organized workspaces for grouping conversations, uploaded files, and custom instructions. Projects are managed through the UI rather than configuration files.
+
+| Feature | Description |
+|---|---|
+| **Custom Instructions** | Per-project system prompt that guides Claude's behavior, tone, and output format |
+| **Knowledge Files** | Upload documents, code, and reference materials (up to 200K token context window) |
+| **Shared Conversations** | Team members can view chat activity within shared projects (Team and Enterprise plans) |
+| **Styles** | Adjustable response tone and format (concise, explanatory, formal, etc.) with custom style creation |
+
+<Info>
+  Custom Instructions and Projects are available on paid plans (Pro, Max, Team, Enterprise). They are configured through the Claude Desktop UI, not through `claude_desktop_config.json`.
+</Info>
+
+---
+
+## MCP Servers
+
+Claude Desktop was one of the first MCP clients and remains the reference implementation for the protocol. MCP servers extend Claude's capabilities by providing access to local tools, files, databases, and external services.
+
+### Transport Types
+
+| Type | Description | Configuration |
+|---|---|---|
+| **stdio** | Local MCP servers spawned as subprocesses, communicating over stdin/stdout | `command`, `args`, and `env` fields |
+| **SSE** | Remote servers using Server-Sent Events (legacy, being deprecated) | `url` field with `transport: "sse"` |
+| **Streamable HTTP** | Remote servers using HTTP streaming (preferred for remote) | `url` field with `transport: "http"` |
+
+### Adding MCP Servers
+
+<Tabs>
+  <Tab title="Config File (Manual)">
+    Edit `claude_desktop_config.json` to add server entries under the `mcpServers` key:
+
+    ```json
+    {
+      "mcpServers": {
+        "sqlite": {
+          "command": "uvx",
+          "args": [
+            "mcp-server-sqlite",
+            "--db-path",
+            "/path/to/database.db"
+          ]
+        },
+        "my-api-server": {
+          "command": "node",
+          "args": ["/path/to/server.js"],
+          "env": {
+            "API_KEY": "your-api-key"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Desktop Extensions">
+    Double-click an `.mcpb` (or `.dxt`) file to install it automatically. Claude Desktop will prompt for any required configuration (e.g., API keys) through a secure GUI.
+
+    Alternatively, install via **Settings > Extensions > Advanced Settings > Install Extensions**.
+  </Tab>
+  <Tab title="Connectors">
+    From the chat area, click the **+** button, navigate to **Connectors > Manage Connectors**, and either select a server from the library or add a custom remote server URL.
+
+    Remote MCP connectors are available on Pro, Max, Team, and Enterprise plans.
+  </Tab>
+</Tabs>
+
+### MCP Server Entry Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `command` | string | Yes (stdio) | The command to execute (e.g., `npx`, `uvx`, `node`, `python`) |
+| `args` | string[] | No | Arguments passed to the command |
+| `env` | object | No | Environment variables passed to the server process |
+| `url` | string | Yes (remote) | URL for SSE or Streamable HTTP remote servers |
+| `transport` | string | No | Transport type: `"sse"` or `"http"` (for remote servers) |
+
+<Warning>
+  Claude Desktop runs MCP servers in an isolated environment with no access to your shell profile or locally installed applications. You must explicitly pass all required environment variables via the `env` field. Paths must be absolute, not relative.
+</Warning>
+
+### Verification
+
+After restarting Claude Desktop with MCP servers configured, a hammer (tools) icon appears in the bottom-right corner of the chat input box. Click the icon to see the list of active tools provided by your MCP servers.
+
+### Troubleshooting
+
+- **macOS logs**: `tail -n 20 -f ~/Library/Logs/Claude/mcp-server-*.log`
+- Ensure all file paths in configuration are absolute
+- On Windows, use double backslashes (`\\`) in paths within JSON
+- On Windows, `npx`-based servers may require wrapping with `cmd /c` (e.g., `"command": "cmd", "args": ["/c", "npx", "-y", "@scope/package"]`)
+
+---
+
+## Desktop Extensions
+
+Desktop Extensions are Anthropic's one-click packaging format for local MCP servers, designed to eliminate the need for manual dependency installation and config file editing.
+
+### Package Format
+
+Desktop Extensions use the `.mcpb` (MCP Bundle) file extension. The package is a ZIP archive containing:
+
+| File/Directory | Purpose |
+|---|---|
+| `manifest.json` | Extension metadata, runtime, permissions, and configuration schema |
+| `server/` | MCP server implementation files (e.g., `index.js` or `main.py`) |
+| `node_modules/` or `lib/` | Bundled dependencies |
+| `icon.png` | Optional extension icon |
+
+### manifest.json
+
+Every extension must include a `manifest.json` defining:
+
+```json
+{
+  "name": "my-extension",
+  "version": "1.0.0",
+  "description": "Description of the extension",
+  "runtime": "node",
+  "entrypoint": "server/index.js",
+  "permissions": [],
+  "configuration": {
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "API key for the service",
+        "sensitive": true
+      }
+    },
+    "required": ["apiKey"]
+  }
+}
+```
+
+Fields marked `"sensitive": true` are stored in the OS keychain (macOS Keychain, Windows Credential Manager) and collected via a secure GUI.
+
+### Supported Runtimes
+
+| Runtime | Description |
+|---|---|
+| `node` | Node.js (built into Claude Desktop, no user installation required) |
+| `python` | Python runtime |
+| `binary` | Precompiled native binary |
+
+### Creating Extensions
+
+```bash
+# Install the toolchain
+npm install -g @anthropic-ai/dxt
+
+# Initialize a new extension
+dxt init my-extension
+
+# Build and package
+dxt pack
+```
+
+<Info>
+  The toolchain package `@anthropic-ai/dxt` is being renamed to `@anthropic-ai/mcpb`. The `.dxt` file extension continues to work but `.mcpb` is recommended for new extensions. The specification is open-source at [github.com/anthropics/dxt](https://github.com/anthropics/dxt).
+</Info>
+
+---
+
+## Model Configuration
+
+Claude Desktop uses Anthropic's Claude models exclusively. The model is determined by the user's subscription plan and cannot be configured to use third-party models.
+
+### Available Plans
+
+| Plan | Models | Key Limits |
+|---|---|---|
+| **Free** | Claude Sonnet (limited) | Basic usage with rate limits |
+| **Pro** ($20/month) | Claude Sonnet, Claude Opus, Claude Haiku | Higher usage limits, Projects, extended thinking |
+| **Max** ($100-200/month) | All Claude models | Highest usage limits |
+| **Team** ($30/user/month) | All Claude models | Shared projects, admin controls, minimum 5 users |
+| **Enterprise** | All Claude models | SSO, custom deployment, admin policies |
+
+<Note>
+  Model selection within the app is done through the model picker in the chat interface. There is no configuration file setting for model selection.
+</Note>
+
+---
+
+## Installation
+
+<Tabs>
+  <Tab title="macOS">
+    **Download from Anthropic:**
+    1. Visit [claude.com/download](https://claude.com/download)
+    2. Download the PKG installer (Universal build supports both Intel and Apple Silicon)
+    3. Open the PKG file and follow the installation prompts
+    4. Launch Claude from the Applications folder
+
+    **Homebrew (unofficial):**
+    ```bash
+    brew install --cask claude
+    ```
+
+    **Requirements:** macOS 11 (Big Sur) or later. The Cowork tab requires Apple Silicon (M1 or later).
+  </Tab>
+  <Tab title="Windows">
+    **Download from Anthropic:**
+    1. Visit [claude.com/download](https://claude.com/download)
+    2. Download the MSIX or EXE installer
+    3. Run the installer
+    4. Launch Claude from the Start menu
+
+    **Notes:**
+    - If MSIX installation fails, enable sideloading in **Settings > For Developers**
+    - Git for Windows is required for the Code tab functionality
+    - Windows ARM64 devices are fully supported
+  </Tab>
+  <Tab title="Linux">
+    There is no official Linux build of Claude Desktop. Community options include:
+
+    - Running the Windows version under WINE
+    - Unofficial third-party builds
+    - Using [claude.ai](https://claude.ai) in a browser as an alternative
+  </Tab>
+</Tabs>
+
+### Enterprise Deployment
+
+Claude Desktop supports standard enterprise deployment workflows:
+
+- **MSIX** installers for Windows with Group Policy support
+- **PKG** installers for macOS with MDM (e.g., Jamf, Kandji) support
+- Controlled version updates for IT approval workflows
+- Automatic SSO authentication for managed devices
+- Pre-approved desktop extension policies
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Claude Desktop platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS">
+    - **MCP config**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+    - **MCP logs**: `~/Library/Logs/Claude/mcp-server-*.log`
+  </Tab>
+  <Tab title="Windows">
+    - **MCP config**: `%APPDATA%\Claude\claude_desktop_config.json`
+  </Tab>
+  <Tab title="Linux">
+    - **MCP config**: `~/.config/Claude/claude_desktop_config.json`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into the `mcpServers` key of `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@scope/mcp-server-package"
+      ],
+      "env": {
+        "SOME_API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `mcpServers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- Claude Desktop requires a full restart to pick up config file changes (it does not hot-reload)
+- For stdio servers, use `command`, `args`, and optionally `env`
+- For remote servers, use `url` and optionally `transport`
+- All paths must be absolute; Claude Desktop does not expand `~` or shell variables
+- On Windows, use double backslashes (`\\`) in JSON paths
+- On Windows, `npx`-based servers may require wrapping: `"command": "cmd", "args": ["/c", "npx", "-y", "@scope/package"]`
+- The `env` field is critical because Claude Desktop runs servers in an isolated environment with no access to the user's shell profile or PATH
+
+### Installing Desktop Extensions
+
+For a more streamlined installation experience, package the MCP server as a Desktop Extension (`.mcpb`):
+
+1. Create a `manifest.json` with metadata, runtime, entrypoint, and configuration schema
+2. Bundle the server code and dependencies into a ZIP archive with the `.mcpb` extension
+3. The user double-clicks the file or installs via **Settings > Extensions > Advanced Settings**
+4. Configuration values (including secrets) are collected via a secure GUI and stored in the OS keychain
+
+This approach eliminates the need for the user to have Node.js, Python, or other runtimes installed.
+
+### Config File Format
+
+Claude Desktop uses standard JSON for `claude_desktop_config.json`. The installer must:
+
+1. Read the existing JSON file (or create `{}` if it does not exist)
+2. Deep-merge the new `mcpServers` entry into the existing `mcpServers` object
+3. Write the result back, preserving all existing entries and other top-level keys (e.g., `globalShortcut`)
+
+The `mcpServers` key is the primary integration point for MCP server packages.
+
+### Custom Instructions
+
+Claude Desktop does not support file-based custom instructions (there is no equivalent of `.goosehints` or `CLAUDE.md`). Custom instructions are set per-project through the UI. An installer cannot programmatically set custom instructions.
+
+### API Key Management
+
+Claude Desktop does not use API keys for the Claude model itself (authentication is handled by the user's Anthropic account login). For MCP servers that require API keys:
+
+- Pass them via the `env` field in `claude_desktop_config.json` (visible in plaintext)
+- Or use Desktop Extensions with `"sensitive": true` fields in `manifest.json` to store secrets in the OS keychain
+- Or instruct the user to configure keys through the Connectors UI for remote servers
+
+<Warning>
+  API keys stored in the `env` field of `claude_desktop_config.json` are in plaintext. For sensitive credentials, prefer the Desktop Extension format which uses OS-level secure storage.
+</Warning>
+
+### Non-Interactive Limitations
+
+Claude Desktop is a GUI application and does not support non-interactive or headless execution. There is no CLI equivalent for running tasks programmatically within Claude Desktop itself. For automated workflows, consider using the Claude API directly or Claude Code (the CLI tool).
