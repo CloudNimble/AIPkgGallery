@@ -1,4 +1,4 @@
-// Live type scale specimen using Poppins (AIPkg primary typeface)
+// Live type scale specimen using Poppins (AI•Pkg primary typeface)
 export const TypographySpecimen = () => {
   const [loaded, setLoaded] = React.useState(false);
 
@@ -19,10 +19,10 @@ export const TypographySpecimen = () => {
 
   const scale = [
     { level: 'Display', size: '36px', lineHeight: '1.2', weight: '700', weightName: 'Bold', sample: 'Ship your AI packages.', usage: 'Hero sections, landing pages' },
-    { level: 'H1', size: '28px', lineHeight: '1.3', weight: '700', weightName: 'Bold', sample: 'AIPkg Brand Guidelines', usage: 'Page titles' },
+    { level: 'H1', size: '28px', lineHeight: '1.3', weight: '700', weightName: 'Bold', sample: 'AI•Pkg Brand Guidelines', usage: 'Page titles' },
     { level: 'H2', size: '22px', lineHeight: '1.35', weight: '600', weightName: 'SemiBold', sample: 'Color Palette', usage: 'Section headers' },
     { level: 'H3', size: '18px', lineHeight: '1.4', weight: '600', weightName: 'SemiBold', sample: 'Core Purple Palette', usage: 'Subsection headers' },
-    { level: 'Body', size: '16px', lineHeight: '1.6', weight: '400', weightName: 'Regular', sample: 'AIPkg manages your AI platform plugins across Claude Code, Cursor, Windsurf, and more with a single package format.', usage: 'Paragraphs, descriptions' },
+    { level: 'Body', size: '16px', lineHeight: '1.6', weight: '400', weightName: 'Regular', sample: 'AI•Pkg manages your AI platform plugins across Claude Code, Cursor, Windsurf, and more with a single package format.', usage: 'Paragraphs, descriptions' },
     { level: 'Small', size: '14px', lineHeight: '1.5', weight: '500', weightName: 'Medium', sample: 'Published March 2026 · Palette variant: Chromatic', usage: 'Captions, labels, metadata' },
   ];
 

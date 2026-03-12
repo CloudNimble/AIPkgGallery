@@ -5,32 +5,32 @@ description: "Native AOT publish configuration, RID matrix, distribution channel
 icon: "terminal"
 ---
 
-This document covers how to build and distribute the `aipkg` CLI binary and `AIpkg.Core` NuGet package. For the public API surface and command syntax, see the [SDK Interface spec](../specs/10-sdk-interface).
+This document covers how to build and distribute the `aipkg` CLI binary and `AI•Pkg.Core` NuGet package. For the public API surface and command syntax, see the [SDK Interface spec](../specs/10-sdk-interface).
 
 ---
 
-## `AIpkg.Core` NuGet Package
+## `AI•Pkg.Core` NuGet Package
 
 ### Project Configuration
 
-Add to `AIpkg.Core.csproj`:
+Add to `AI•Pkg.Core.csproj`:
 
 ```xml
 <PropertyGroup>
   <TargetFramework>net10.0</TargetFramework>
-  <PackageId>AIpkg.Core</PackageId>
+  <PackageId>AI•Pkg.Core</PackageId>
   <IsAotCompatible>true</IsAotCompatible>
   <GenerateDocumentationFile>true</GenerateDocumentationFile>
-  <DocumentationFile>AIpkg.Core.xml</DocumentationFile>
+  <DocumentationFile>AI•Pkg.Core.xml</DocumentationFile>
   <NoWarn>$(NoWarn);CS1591</NoWarn>
 </PropertyGroup>
 ```
 
 ### Publishing to NuGet.org
 
-1. Set `<PackageVersion>` in `AIpkg.Core.csproj`
+1. Set `<PackageVersion>` in `AI•Pkg.Core.csproj`
 2. `dotnet pack -c Release`
-3. `dotnet nuget push AIpkg.Core.{version}.nupkg --api-key {key} --source https://api.nuget.org/v3/index.json`
+3. `dotnet nuget push AI•Pkg.Core.{version}.nupkg --api-key {key} --source https://api.nuget.org/v3/index.json`
 
 CI/CD: GitHub Actions workflow on `v*` tag push.
 
@@ -44,7 +44,7 @@ The `aipkg` CLI ships as a single self-contained binary with no .NET runtime req
 
 ### Publish Configuration
 
-Add to `AIpkg.CLI.csproj`:
+Add to `AI•Pkg.CLI.csproj`:
 
 ```xml
 <PropertyGroup>
@@ -113,7 +113,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: '10.x' }
-      - run: dotnet publish src/AIpkg.CLI -r ${{ matrix.rid }} --self-contained -c Release -o dist/${{ matrix.rid }}
+      - run: dotnet publish src/AI•Pkg.CLI -r ${{ matrix.rid }} --self-contained -c Release -o dist/${{ matrix.rid }}
       - uses: actions/upload-artifact@v4
         with:
           name: aipkg-${{ matrix.rid }}

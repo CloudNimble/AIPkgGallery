@@ -1,11 +1,11 @@
 ---
-title: "Server Implementation"
-sidebarTitle: "05 · Server Implementation"
-description: "Authentication, storage, search index, background jobs, NuGet V3 → AIpkg endpoint mapping, and server-side implementation details."
+title: "Backend"
+sidebarTitle: "04 · Backend"
+description: "Authentication, storage, search index, background jobs, NuGet V3 → AI•Pkg endpoint mapping, and server-side implementation details."
 icon: "server"
 ---
 
-This document covers the implementation details for `AIpkg.Server` that are specific to how we build the registry — not the public API contract (see [Registry API spec](../specs/09-registry-api)).
+This document covers the implementation details for `AI•Pkg.Server` that are specific to how we build the registry — not the public API contract (see [Registry API spec](../specs/09-registry-api)).
 
 ---
 
@@ -82,19 +82,19 @@ Port the indexing pipeline from `NuGet.Services.AzureSearch`. Replace `BaseMetad
 | Registration blob builder | Catalog2Registration | Updated JSON-LD schema |
 | License scanning | Validation jobs | Evaluate; lower priority |
 
-All background jobs are consolidated into `AIpkg.Jobs/` (a single project). Each job is implemented as a hosted service or Azure Function, depending on runtime requirements.
+All background jobs are consolidated into `AI•Pkg.Jobs/` (a single project). Each job is implemented as a hosted service or Azure Function, depending on runtime requirements.
 
 ---
 
-## NuGet V3 → AIpkg Registry API Endpoint Mapping
+## NuGet V3 → AI•Pkg Registry API Endpoint Mapping
 
-This table documents the mapping from NuGetGallery's V3 endpoints to AIpkg's registry endpoints. Use it when porting endpoint logic from `NuGetGallery/Controllers/ApiController.cs` and related sources.
+This table documents the mapping from NuGetGallery's V3 endpoints to AI•Pkg's registry endpoints. Use it when porting endpoint logic from `NuGetGallery/Controllers/ApiController.cs` and related sources.
 
-| NuGet V3 Source Endpoint | AIpkg Registry Endpoint | Delta |
+| NuGet V3 Source Endpoint | AI•Pkg Registry Endpoint | Delta |
 |--------------------------|-------------------------|-------|
 | `GET /v3/index.json` | `GET /v3/index.json` | Updated `@type` values for new resource types |
 | `GET /v3/registration/{id}/index.json` | `GET /v3/registration/{id}/index.json` | New fields: `capabilities`, `targets`, `permissions`; remove `requireLicenseAcceptance`, `semVerLevel` |
-| `GET /v3/registration/{id}/{lower}.json` | `GET /v3/registration/{id}/{lower}.json` | Same shape; AIpkg fields substituted |
+| `GET /v3/registration/{id}/{lower}.json` | `GET /v3/registration/{id}/{lower}.json` | Same shape; AI•Pkg fields substituted |
 | `GET /v3/flatcontainer/{id}/index.json` | `GET /v3/flatcontainer/{id}/index.json` | No change |
 | `GET /v3/flatcontainer/{id}/{v}/{id}.{v}.nupkg` | `GET /v3/flatcontainer/{id}/{v}/{id}.{v}.aipkg` | Extension: `.nupkg` → `.aipkg`; MIME: `application/x-aipkg` |
 | _(none)_ | `GET /v3/flatcontainer/{id}/{v}/{id}.{v}.aispec` | **New**: manifest-only endpoint; no archive download needed |
@@ -109,16 +109,16 @@ This table documents the mapping from NuGetGallery's V3 endpoints to AIpkg's reg
 
 ## Source Files to Port
 
-Key NuGetGallery source files and their AIpkg destinations:
+Key NuGetGallery source files and their AI•Pkg destinations:
 
-| NuGetGallery source | AIpkg destination | Action |
+| NuGetGallery source | AI•Pkg destination | Action |
 |---------------------|-------------------|--------|
-| `src/NuGetGallery/Controllers/ApiController.cs` (V3 parts) | `AIpkg.Server/Api/V3/` | Port push/delete/autocomplete as Minimal APIs |
-| `src/NuGet.Jobs.Catalog2Registration/Schema/EntityBuilder.cs` | `AIpkg.Server/Jobs/RegistrationBuilder.cs` | Port; update JSON-LD schema |
-| `src/NuGetGallery/Services/PackageService.cs` | `AIpkg.Server/Services/PackageService.cs` | Port; strip symbol/V2 logic |
-| `src/NuGetGallery/Services/UserService.cs` | `AIpkg.Server/Services/UserService.cs` | Port PBKDF2 API key management |
-| `src/NuGetGallery/Authentication/` | `AIpkg.Server/Auth/` | Port GitHub OAuth + API key auth |
-| `src/NuGetGallery.Core/Services/CorePackageFileService.cs` | `AIpkg.Server/Storage/PackageStorageService.cs` | Port; rename `.nupkg` → `.aipkg` |
-| `src/NuGet.Services.AzureSearch/Models/BaseMetadataDocument.cs` | `AIpkg.Server.Search/AipkgSearchDocument.cs` | Port structure; adapt fields |
-| `src/Stats.*` | `src/AIpkg.Jobs/Stats/` | Port CDN stats parsing; adapt for `.aipkg` |
-| `src/GitHubVulnerabilities2Db/` | `src/AIpkg.Jobs/Vulnerabilities/` | Port; adapt package ID resolution |
+| `src/NuGetGallery/Controllers/ApiController.cs` (V3 parts) | `AI•Pkg.Server/Api/V3/` | Port push/delete/autocomplete as Minimal APIs |
+| `src/NuGet.Jobs.Catalog2Registration/Schema/EntityBuilder.cs` | `AI•Pkg.Server/Jobs/RegistrationBuilder.cs` | Port; update JSON-LD schema |
+| `src/NuGetGallery/Services/PackageService.cs` | `AI•Pkg.Server/Services/PackageService.cs` | Port; strip symbol/V2 logic |
+| `src/NuGetGallery/Services/UserService.cs` | `AI•Pkg.Server/Services/UserService.cs` | Port PBKDF2 API key management |
+| `src/NuGetGallery/Authentication/` | `AI•Pkg.Server/Auth/` | Port GitHub OAuth + API key auth |
+| `src/NuGetGallery.Core/Services/CorePackageFileService.cs` | `AI•Pkg.Server/Storage/PackageStorageService.cs` | Port; rename `.nupkg` → `.aipkg` |
+| `src/NuGet.Services.AzureSearch/Models/BaseMetadataDocument.cs` | `AI•Pkg.Server.Search/AipkgSearchDocument.cs` | Port structure; adapt fields |
+| `src/Stats.*` | `src/AI•Pkg.Jobs/Stats/` | Port CDN stats parsing; adapt for `.aipkg` |
+| `src/GitHubVulnerabilities2Db/` | `src/AI•Pkg.Jobs/Vulnerabilities/` | Port; adapt package ID resolution |

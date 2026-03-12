@@ -1,7 +1,7 @@
 ---
-title: Why AIpkg?
-sidebarTitle: Why AIpkg?
-description: "The problem AIpkg solves, the philosophy behind it, and what it explicitly does not try to be."
+title: Why AI•Pkg?
+sidebarTitle: Why AI•Pkg?
+description: "The problem AI•Pkg solves, the philosophy behind it, and what it explicitly does not try to be."
 icon: square-question
 ---
 
@@ -26,18 +26,18 @@ This is the problem. **Developers want to build plugins. They don't want to beco
 ## The Philosophy
 
 <Note>
-  AIpkg's job is to understand the work you've already done and make it work everywhere — without requiring you to understand anything about the target platform.
+  AI•Pkg's job is to understand the work you've already done and make it work everywhere — without requiring you to understand anything about the target platform.
 </Note>
 
-If you build a Claude Code plugin that includes a `.mcp.json`, and you want to publish it so Copilot CLI users can use it, you should not have to touch anything. The `aipkg pack` command reads your existing project, understands what you've built, and produces a platform-agnostic `.aipkg` package. When a Copilot CLI user finds the package on aipkg.org and clicks install, Copilot CLI calls the AIpkg infrastructure, retrieves the package, translates the canonical representation into its own native config format, and places everything in the right directory — automatically.
+If you build a Claude Code plugin that includes a `.mcp.json`, and you want to publish it so Copilot CLI users can use it, you should not have to touch anything. The `aipkg pack` command reads your existing project, understands what you've built, and produces a platform-agnostic `.aipkg` package. When a Copilot CLI user finds the package on aipkg.org and clicks install, Copilot CLI calls the AI•Pkg infrastructure, retrieves the package, translates the canonical representation into its own native config format, and places everything in the right directory — automatically.
 
-The developer who built the plugin wrote it once. The end user who installed it did nothing beyond clicking a button in their platform's UI. The AIpkg infrastructure did all the work in between.
+The developer who built the plugin wrote it once. The end user who installed it did nothing beyond clicking a button in their platform's UI. The AI•Pkg infrastructure did all the work in between.
 
 <Note>
-  AIpkg is infrastructure for plugin developers and AI platforms — not a tool end users interact with directly. End users discover and install packages through their AI platform's native UI, the same way Visual Studio users manage NuGet packages without ever typing `dotnet nuget` commands.
+  AI•Pkg is infrastructure for plugin developers and AI platforms — not a tool end users interact with directly. End users discover and install packages through their AI platform's native UI, the same way Visual Studio users manage NuGet packages without ever typing `dotnet nuget` commands.
 </Note>
 
-This is not a new idea. NuGet solved exactly this problem for .NET libraries in 2010: *"I want to use this library without understanding how to compile it, what its transitive dependencies are, or how to wire it into my build."* AIpkg solves it for AI plugins: *"I want to use this MCP server without understanding how my platform expects it to be configured."*
+This is not a new idea. NuGet solved exactly this problem for .NET libraries in 2010: *"I want to use this library without understanding how to compile it, what its transitive dependencies are, or how to wire it into my build."* AI•Pkg solves it for AI plugins: *"I want to use this MCP server without understanding how my platform expects it to be configured."*
 
 ---
 
@@ -49,9 +49,9 @@ This philosophy has direct consequences for how `.aipkg` packages are structured
 
 **Content files are still files.** Skills, commands, agents, and prompt files are the deliverable — they're `.md` files the platform reads directly. These live in the archive under `shared/` or `apm/{moniker}/` and are copied to the right place verbatim. The `apm/` structure exists for content that genuinely needs to be different on different platforms (different skill syntax, platform-specific command behavior), not as a workaround for config format differences.
 
-**The packager is an on-ramp, not a starting line.** You don't have to build a plugin in the AIpkg format from scratch. If you have an existing Claude Code plugin, `aipkg pack` reads your `.claude/` directory, your `.mcp.json`, your skills and commands, and constructs the package. The goal is zero friction for the developer who already has something working.
+**The packager is an on-ramp, not a starting line.** You don't have to build a plugin in the AI•Pkg format from scratch. If you have an existing Claude Code plugin, `aipkg pack` reads your `.claude/` directory, your `.mcp.json`, your skills and commands, and constructs the package. The goal is zero friction for the developer who already has something working.
 
-**Platforms are the installation surface, not users.** End users never run `aipkg` commands. AI platforms (Claude Code, Copilot CLI, Cursor, etc.) integrate with the AIpkg registry and handle installation transparently when a user clicks install in their platform's UI or settings. The `aipkg` CLI exists for plugin developers packing and publishing their work — the equivalent of `dotnet pack` and `dotnet nuget push`, not `dotnet run`.
+**Platforms are the installation surface, not users.** End users never run `aipkg` commands. AI platforms (Claude Code, Copilot CLI, Cursor, etc.) integrate with the AI•Pkg registry and handle installation transparently when a user clicks install in their platform's UI or settings. The `aipkg` CLI exists for plugin developers packing and publishing their work — the equivalent of `dotnet pack` and `dotnet nuget push`, not `dotnet run`.
 
 ---
 
@@ -59,7 +59,7 @@ This philosophy has direct consequences for how `.aipkg` packages are structured
 
 <CardGroup cols={4}>
   <Card title="Zero platform knowledge required" icon="circle-check">
-    Developers build for the platform they know. AIpkg handles the rest. No one should need to read Copilot CLI's config docs to publish a plugin they built in Claude Code.
+    Developers build for the platform they know. AI•Pkg handles the rest. No one should need to read Copilot CLI's config docs to publish a plugin they built in Claude Code.
   </Card>
   <Card title="One package, any platform" icon="circle-check">
     A single `.aipkg` file installs correctly on any supported platform. The same package from the registry works for a Claude Code user and a Cursor user without the developer doing anything extra and without the end user knowing anything about config formats.
@@ -78,13 +78,13 @@ This philosophy has direct consequences for how `.aipkg` packages are structured
 
 <CardGroup cols={4}>
   <Card title="Replacing platform extension systems" icon="circle-xmark">
-    AIpkg does not replace the VS Code Marketplace, JetBrains Plugin Repository, or any platform's native extension store. It targets the config-file layer that those systems don't cover.
+    AI•Pkg does not replace the VS Code Marketplace, JetBrains Plugin Repository, or any platform's native extension store. It targets the config-file layer that those systems don't cover.
   </Card>
   <Card title="Bundling AI models" icon="circle-xmark">
-    AIpkg packages contain plugin assets — skills, commands, server configurations. They do not bundle or distribute AI models or weights.
+    AI•Pkg packages contain plugin assets — skills, commands, server configurations. They do not bundle or distribute AI models or weights.
   </Card>
   <Card title="Being a runtime" icon="circle-xmark">
-    AIpkg installs packages. It does not host, run, or manage the lifecycle of MCP servers, LSP servers, or agents at runtime. That is the platform's job.
+    AI•Pkg installs packages. It does not host, run, or manage the lifecycle of MCP servers, LSP servers, or agents at runtime. That is the platform's job.
   </Card>
   <Card title="Forcing a rewrite" icon="circle-xmark">
     If your plugin already works on one platform, `aipkg pack` should be able to read it and produce a valid package. We meet developers where they are.
@@ -95,7 +95,7 @@ This philosophy has direct consequences for how `.aipkg` packages are structured
 
 ## The Ecosystem Today
 
-The platforms AIpkg targets today, and why fragmentation is real:
+The platforms AI•Pkg targets today, and why fragmentation is real:
 
 | Platform | MCP Config | Hooks Config | Skills Location |
 |---|---|---|---|
@@ -106,4 +106,4 @@ The platforms AIpkg targets today, and why fragmentation is real:
 | Zed | `settings.json` (`context_servers`) | _(none)_ | _(none)_ |
 | Continue | `.continue/config.json` | _(none)_ | _(none)_ |
 
-Same concept. Six different locations. Six different schemas. AIpkg makes this table irrelevant to the developer who just wants their plugin to work.
+Same concept. Six different locations. Six different schemas. AI•Pkg makes this table irrelevant to the developer who just wants their plugin to work.

@@ -1,10 +1,10 @@
 ---
-title: "AIpkg Specification Suite"
-description: "Normative specifications for the AIpkg package format, platform targeting system, registry protocol, and SDK interface — everything needed to build a compatible tool or registry implementation."
+title: "AI•Pkg Specification Suite"
+description: "Normative specifications for the AI•Pkg package format, platform targeting system, registry protocol, and SDK interface — everything needed to build a compatible tool or registry implementation."
 icon: "book-open"
 ---
 
-AIpkg packages AI skills, commands, MCP server configurations, system prompts, and other plugin assets that work across multiple AI platforms (Claude Code, GitHub Copilot, Cursor, Windsurf, OpenCode, and more).
+AI•Pkg packages AI skills, commands, MCP server configurations, system prompts, and other plugin assets that work across multiple AI platforms (Claude Code, GitHub Copilot, Cursor, Windsurf, OpenCode, and more).
 
 This specification suite is addressed to **third-party implementers**: tool authors, alternative registry operators, package authors, and anyone building compatible tooling. It contains no implementation-specific language.
 
@@ -58,7 +58,7 @@ This specification suite is addressed to **third-party implementers**: tool auth
     All registry endpoints — service index, registration, search, push, platform list.
   </Card>
   <Card title="10 · SDK Interface" icon="terminal" href="10-sdk-interface">
-    `AIpkg.Core` public API types, `aipkg` CLI command syntax, config file schemas.
+    `AI•Pkg.Core` public API types, `aipkg` CLI command syntax, config file schemas.
   </Card>
   <Card title="11 · Registry UI" icon="display" href="11-registry-ui">
     URL inventory, rendering requirements, performance targets, accessibility, SEO.
@@ -77,9 +77,9 @@ This specification suite is addressed to **third-party implementers**: tool auth
 
 ## Conceptual Model
 
-AIpkg maps directly onto the NuGet conceptual model:
+AI•Pkg maps directly onto the NuGet conceptual model:
 
-| NuGet | AIpkg | Notes |
+| NuGet | AI•Pkg | Notes |
 |-------|-------|-------|
 | `.nupkg` | `.aipkg` | ZIP archive, same mechanism |
 | `.nuspec` | `{id}.aispec` | JSON instead of XML; named after the package ID |
@@ -87,7 +87,7 @@ AIpkg maps directly onto the NuGet conceptual model:
 | `lib/{tfm}/` | `apm/{moniker}/` | Platform-specific assets |
 | `contentFiles/` | `shared/` | Platform-agnostic assets |
 | Package Type | Capabilities | `mcp-server`, `skill`, `command`, `agent`, `prompt`, `config` |
-| `NuGet.org` | `AIpkg.org` | Registry |
+| `NuGet.org` | `AI•Pkg.org` | Registry |
 
 ---
 
@@ -98,7 +98,7 @@ AIpkg maps directly onto the NuGet conceptual model:
 3. **Forward compatibility** — Unknown APM monikers are silently skipped, never errors. No moniker is ever deleted from the canonical table.
 4. **Immutable versions** — Published versions cannot be overwritten. Unlisting is the only mechanism to hide a version.
 5. **Normative API-first** — Every registry behavior is defined by its API contract, not by server implementation details.
-6. **AOT-capable SDK** — `AIpkg.Core` is AOT-compatible; no dynamic code. The `aipkg` CLI ships as a single native binary.
+6. **AOT-capable SDK** — `AI•Pkg.Core` is AOT-compatible; no dynamic code. The `aipkg` CLI ships as a single native binary.
 7. **Defense in depth** — Security is layered: static analysis, AV scanning, AI content audit, cryptographic signing, and runtime anomaly detection. No single layer is the sole gate.
 
 ---
@@ -114,6 +114,6 @@ A complete spec suite must allow:
 - [ ] Someone to handle platform evolution correctly (→ [spec 07](07-platform-versioning))
 - [ ] Someone to write a JSON Schema validator for `.aispec` (→ [spec 08](08-metadata-schema))
 - [ ] Someone to implement every registry endpoint with correct request/response shapes (→ [spec 09](09-registry-api))
-- [ ] Someone to implement `AIpkg.Core` public API (→ [spec 10](10-sdk-interface))
+- [ ] Someone to implement `AI•Pkg.Core` public API (→ [spec 10](10-sdk-interface))
 - [ ] Someone to build a compatible registry web UI (→ [spec 11](11-registry-ui))
 - [ ] Someone to implement the full security scanning pipeline (→ [spec 12](12-security))

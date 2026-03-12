@@ -1,14 +1,14 @@
 ---
 title: "SDK Interface"
 sidebarTitle: "10 · SDK Interface"
-description: "`AIpkg.Core` public API types, `aipkg` CLI command syntax, and configuration file schemas — the normative interface for anyone building compatible tooling."
+description: "`AI•Pkg.Core` public API types, `aipkg` CLI command syntax, and configuration file schemas — the normative interface for anyone building compatible tooling."
 icon: "terminal"
 ---
 
-The AIpkg SDK has two public interfaces: the `AIpkg.Core` .NET library and the `aipkg` CLI. This spec defines the normative API surface for both. Anyone building a compatible tool, client, or alternative implementation should use this document as the reference.
+The AI•Pkg SDK has two public interfaces: the `AI•Pkg.Core` .NET library and the `aipkg` CLI. This spec defines the normative API surface for both. Anyone building a compatible tool, client, or alternative implementation should use this document as the reference.
 
 <CardGroup cols={2}>
-  <Card title="AIpkg.Core" icon="cube">
+  <Card title="AI•Pkg.Core" icon="cube">
     Cross-platform .NET 10 class library. Consumed by servers, CLI tools, and test harnesses.
   </Card>
   <Card title="aipkg CLI" icon="terminal">
@@ -18,14 +18,14 @@ The AIpkg SDK has two public interfaces: the `AIpkg.Core` .NET library and the `
 
 ---
 
-## Part 1: `AIpkg.Core` Public API
+## Part 1: `AI•Pkg.Core` Public API
 
 ### Overview
 
 | Property | Value |
 |----------|-------|
 | Target framework | `net10.0` |
-| NuGet package ID | `AIpkg.Core` |
+| NuGet package ID | `AI•Pkg.Core` |
 | AOT compatible | Yes (no reflection emit, no dynamic code) |
 | Serialization | `System.Text.Json` with source-generated serializers |
 | Third-party NuGet deps | None |
@@ -33,7 +33,7 @@ The AIpkg SDK has two public interfaces: the `AIpkg.Core` .NET library and the `
 ### Public Types
 
 <Tabs>
-  <Tab title="AIpkg.Core (root)">
+  <Tab title="AI•Pkg.Core (root)">
     ```csharp
     // Represents a parsed .aispec manifest
     public sealed class AipkgManifest
@@ -104,7 +104,7 @@ The AIpkg SDK has two public interfaces: the `AIpkg.Core` .NET library and the `
     }
     ```
   </Tab>
-  <Tab title="AIpkg.Core.Packaging">
+  <Tab title="AI•Pkg.Core.Packaging">
     ```csharp
     // Reads .aipkg archives
     public sealed class AipkgReader : IDisposable
@@ -154,7 +154,7 @@ The AIpkg SDK has two public interfaces: the `AIpkg.Core` .NET library and the `
     }
     ```
   </Tab>
-  <Tab title="AIpkg.Core.Platform">
+  <Tab title="AI•Pkg.Core.Platform">
     ```csharp
     public sealed class PlatformCompatibilityService
     {
@@ -181,7 +181,7 @@ The AIpkg SDK has two public interfaces: the `AIpkg.Core` .NET library and the `
     );
     ```
   </Tab>
-  <Tab title="AIpkg.Core.Validation">
+  <Tab title="AI•Pkg.Core.Validation">
     ```csharp
     public sealed class AipkgValidator
     {
@@ -200,7 +200,7 @@ The AIpkg SDK has two public interfaces: the `AIpkg.Core` .NET library and the `
     public sealed record ValidationWarning(string Code, string Message, string? Field = null);
     ```
   </Tab>
-  <Tab title="AIpkg.Core.Versioning">
+  <Tab title="AI•Pkg.Core.Versioning">
     ```csharp
     // SemVer 2.0.0 — compatible with NuGet versioning
     public sealed class AipkgVersion : IComparable<AipkgVersion>

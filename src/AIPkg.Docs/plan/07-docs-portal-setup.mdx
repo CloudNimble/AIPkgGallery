@@ -1,14 +1,14 @@
 ---
 title: "Docs Portal Setup"
 sidebarTitle: "07 · Docs Portal Setup"
-description: "DotNetDocs.com setup for AIpkg.Core API reference, docs.aipkg.org developer portal structure, OpenAPI spec requirements, and documentation CI/CD pipeline."
+description: "DotNetDocs.com setup for AI•Pkg.Core API reference, docs.aipkg.org developer portal structure, OpenAPI spec requirements, and documentation CI/CD pipeline."
 icon: "book"
 ---
 
-AIpkg documentation is split into two surfaces:
+AI•Pkg documentation is split into two surfaces:
 
 <CardGroup cols={2}>
-  <Card title="AIpkg.Core API Reference" icon="cube" href="https://docs.aipkg.org/api/core/">
+  <Card title="AI•Pkg.Core API Reference" icon="cube" href="https://docs.aipkg.org/api/core/">
     Hosted via **DotNetDocs.com** at `docs.aipkg.org/api/core/`. Sourced from XML doc comments. Authoritative reference for library consumers and tool authors.
   </Card>
   <Card title="Developer Portal" icon="book-open" href="https://docs.aipkg.org">
@@ -18,7 +18,7 @@ AIpkg documentation is split into two surfaces:
 
 ---
 
-## DotNetDocs.com for `AIpkg.Core`
+## DotNetDocs.com for `AI•Pkg.Core`
 
 ### What is DotNetDocs.com
 
@@ -28,18 +28,18 @@ DotNetDocs.com is a hosted documentation service for .NET libraries. It ingests 
 
 <Steps>
   <Step title="Enable XML doc generation">
-    Add to `AIpkg.Core.csproj`:
+    Add to `AI•Pkg.Core.csproj`:
 
     ```xml
     <PropertyGroup>
       <GenerateDocumentationFile>true</GenerateDocumentationFile>
-      <DocumentationFile>AIpkg.Core.xml</DocumentationFile>
+      <DocumentationFile>AI•Pkg.Core.xml</DocumentationFile>
       <NoWarn>$(NoWarn);CS1591</NoWarn>
     </PropertyGroup>
     ```
   </Step>
   <Step title="Register on DotNetDocs.com">
-    Register `AIpkg.Core`, linking to the NuGet package ID `AIpkg.Core`. DotNetDocs automatically pulls the latest published package and regenerates the docs on each new version.
+    Register `AI•Pkg.Core`, linking to the NuGet package ID `AI•Pkg.Core`. DotNetDocs automatically pulls the latest published package and regenerates the docs on each new version.
   </Step>
   <Step title="Configure custom domain">
     Point `docs.aipkg.org/api/core/` → DotNetDocs hosted URL.
@@ -65,7 +65,7 @@ DotNetDocs.com is a hosted documentation service for .NET libraries. It ingests 
 ```csharp
 /// <summary>
 /// Resolves AI Platform Moniker (APM) fallback chains and compatibility
-/// for the AIpkg platform targeting system.
+/// for the AI•Pkg platform targeting system.
 /// </summary>
 /// <remarks>
 /// Use this service to determine which <c>apm/</c> directories in an
@@ -125,7 +125,7 @@ docs.aipkg.org/
 │   └── /...
 ├── /api/
 │   ├── /v3                     ← Registry API reference (OpenAPI-generated)
-│   └── /core/                  ← AIpkg.Core .NET API (DotNetDocs)
+│   └── /core/                  ← AI•Pkg.Core .NET API (DotNetDocs)
 ├── /guides/
 │   ├── /creating-a-skill-package
 │   ├── /publishing-an-mcp-server
@@ -209,7 +209,7 @@ Every Registry API endpoint (see [Registry API spec](../specs/09-registry-api)) 
 ## Documentation CI/CD
 
 <Tabs>
-  <Tab title="On AIpkg.Core Publish">
+  <Tab title="On AI•Pkg.Core Publish">
     <Steps>
       <Step title="Detect new NuGet publish">
         GitHub Actions workflow detects new NuGet publish.
@@ -246,7 +246,7 @@ Every Registry API endpoint (see [Registry API spec](../specs/09-registry-api)) 
     </Steps>
 
     <Note>
-      The specs in `src/AIPkg.Docs/specs/` are the authoritative source for format reference pages.
+      The specs in `src/AI•Pkg.Docs/specs/` are the authoritative source for format reference pages.
     </Note>
   </Tab>
 </Tabs>

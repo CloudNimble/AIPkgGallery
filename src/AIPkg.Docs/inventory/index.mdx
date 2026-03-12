@@ -1,17 +1,17 @@
 ---
 title: Overview
-description: "A high-level map of the ~80 NuGetGallery components — grouped into core systems, shared infrastructure, and supplemental operations — with migration disposition notes for AIpkg."
+description: "A high-level map of the ~80 NuGetGallery components — grouped into core systems, shared infrastructure, and supplemental operations — with migration disposition notes for AI•Pkg."
 icon: "sitemap"
 ---
 
 This document maps the ~80 components in the NuGetGallery codebase into logical system groups,
-explains how they work together, and annotates each group with a **migration disposition** for AIpkg.
+explains how they work together, and annotates each group with a **migration disposition** for AI•Pkg.
 
 > **Legend**
 > - **Keep** — core concept maps directly; redesign/port to modern stack
 > - **Simplify** — needed but significantly reduced in scope
-> - **Evaluate** — depends on AIpkg feature decisions
-> - **Drop** — NuGet-specific; no equivalent in AIpkg
+> - **Evaluate** — depends on AI•Pkg feature decisions
+> - **Drop** — NuGet-specific; no equivalent in AI•Pkg
 
 ---
 
@@ -39,7 +39,7 @@ graph TD
 **What it does:** Serves nuget.org — lets users browse packages, upload via `dotnet nuget push`,
 manage API keys and organizations, and provides the V2 OData endpoint consumed by older tooling.
 
-**AIpkg migration:** The entire layer is replaced by Blazor SSR + Interactive Server backed by
+**AI•Pkg migration:** The entire layer is replaced by Blazor SSR + Interactive Server backed by
 EasyAF (SQL DB Project → EF Core 10). V2 OData surface is dropped. V3-only public API.
 
 ---
@@ -79,7 +79,7 @@ the "hijack" index for exact package+version lookups. Three separate jobs keep t
 a bootstrap job (run once), a catalog-driven incremental job, and an auxiliary job that syncs
 download counts and owner metadata from SQL.
 
-**AIpkg migration:** Keep the dual-index pattern and the three-job approach. Swap Azure AI Search
+**AI•Pkg migration:** Keep the dual-index pattern and the three-job approach. Swap Azure AI Search
 API calls for the current SDK. Drop V2 query translation; V3 only.
 
 ---
@@ -116,7 +116,7 @@ append-only blob-based feed. Downstream jobs read this feed via cursors and mate
 registration blobs (one JSON file per package ID), flat-container files (used by `dotnet restore`),
 and icon images. Clients can poll the catalog to mirror all of nuget.org.
 
-**AIpkg migration:** The catalog concept (append-only event log) is valuable and maps to AIpkg's
+**AI•Pkg migration:** The catalog concept (append-only event log) is valuable and maps to AI•Pkg's
 V3 API spec. The JSON-LD/RDF machinery (dotNetRDF, json-ld.net) is the most likely candidate for
 simplification or replacement. `Ng` as a monolithic job dispatcher is replaced by proper workers.
 
@@ -142,7 +142,7 @@ graph TD
         PSV["Validation.PackageSigning.ValidateCertificate<br/>Checks cert chain + revocation"]
     end
 
-    subgraph "Symbol Validation — DROP (no .snupkg in AIpkg)"
+    subgraph "Symbol Validation — DROP (no .snupkg in AI•Pkg)"
         SC["Validation.Symbols.Core"]
         SV["Validation.Symbols"]
     end
@@ -170,9 +170,9 @@ the Orchestrator. The Orchestrator drives a configurable set of validators (sign
 validation, content scan, symbol validation) via Service Bus messages. When all validators pass,
 the package is marked available.
 
-**AIpkg migration:** AIpkg will need some form of content validation. The orchestrator pattern is
+**AI•Pkg migration:** AI•Pkg will need some form of content validation. The orchestrator pattern is
 sound. Package signing is less relevant for AI plugins; content scanning may still apply.
-Symbol validation has no AIpkg equivalent. The Service Bus–driven async model is worth keeping.
+Symbol validation has no AI•Pkg equivalent. The Service Bus–driven async model is worth keeping.
 
 ---
 
@@ -208,9 +208,9 @@ graph LR
 **What it does:** Four separate SQL databases are maintained with EF Code First migrations,
 all applied by a single migration runner tool deployed as part of each release.
 
-**AIpkg migration:** EasyAF replaces EF6 + migration runner with a SQL DB Project (`.sqlproj`)
+**AI•Pkg migration:** EasyAF replaces EF6 + migration runner with a SQL DB Project (`.sqlproj`)
 as the schema source of truth, generating EF Core 10 entities. The four-database pattern
-collapses — AIpkg starts with one primary database.
+collapses — AI•Pkg starts with one primary database.
 
 ---
 
@@ -260,7 +260,7 @@ which wires up dependency injection, Application Insights logging, and Key Vault
 consistently. Azure Service Bus handles async messaging between the Gallery and validators.
 Blob-backed cursors let every long-running job resume exactly where it left off after a restart.
 
-**AIpkg migration:** The contracts-first, no-dependency-root pattern is worth keeping. Azure SDK
+**AI•Pkg migration:** The contracts-first, no-dependency-root pattern is worth keeping. Azure SDK
 wrappers need updating to current packages. OWIN and Bootstrap are dropped entirely with the move
 to ASP.NET Core + Blazor.
 
@@ -297,8 +297,8 @@ graph LR
 sanitize PII, load into a SQL Data Warehouse, generate rollup reports, post-process blobs, and
 finally aggregate download counts back into the Gallery database where search indexers pick them up.
 
-**AIpkg migration:** This entire pipeline is likely replaced by Azure Monitor / Application
-Insights aggregation. Download counting is simpler at AIpkg's initial scale.
+**AI•Pkg migration:** This entire pipeline is likely replaced by Azure Monitor / Application
+Insights aggregation. Download counting is simpler at AI•Pkg's initial scale.
 
 ---
 
@@ -329,7 +329,7 @@ graph LR
 writes them to both the Gallery SQL (for UI display) and V3 blobs (for tooling consumption).
 A separate job indexes GitHub repositories to link packages to their source repos.
 
-**AIpkg migration:** Vulnerability advisories for AI plugins is a valid future feature.
+**AI•Pkg migration:** Vulnerability advisories for AI plugins is a valid future feature.
 The GitHub Advisory database may not have AI plugin coverage yet. Repo indexing is likely dropped.
 
 ---
@@ -362,9 +362,9 @@ operations that are run ad-hoc when schema changes need retroactive data updates
 jobs handle routine hygiene: expired credential cleanup, expiration warnings, and account deletion
 fulfillment. Integrity check jobs provide confidence that data is consistent across systems.
 
-**AIpkg migration:** A similar admin CLI pattern will be needed. Credential expiration warnings
+**AI•Pkg migration:** A similar admin CLI pattern will be needed. Credential expiration warnings
 are directly applicable (API keys). Account deletion is required for GDPR compliance. The specific
-`VerifyMicrosoftPackage` check has no AIpkg equivalent.
+`VerifyMicrosoftPackage` check has no AI•Pkg equivalent.
 
 ---
 
@@ -392,9 +392,9 @@ graph LR
 archival, full container backups, point-in-time recovery snapshots, and a historical backfill for
 packages that were uploaded before hash computation was added.
 
-**AIpkg migration:** Package backup and snapshotting remain applicable. `PackageHash` is a one-time
+**AI•Pkg migration:** Package backup and snapshotting remain applicable. `PackageHash` is a one-time
 historical backfill that won't be needed for a greenfield service. `SplitLargeFiles` is likely
-unnecessary at AIpkg's initial scale.
+unnecessary at AI•Pkg's initial scale.
 
 ---
 
@@ -419,8 +419,8 @@ graph LR
 the data into incident records written to Azure Table Storage, which are then rendered into
 the public status page.
 
-**AIpkg migration:** A status page is worthwhile. The aggregator pattern is sound. ICM
-integration is Microsoft-internal; AIpkg would use a different incident management tool.
+**AI•Pkg migration:** A status page is worthwhile. The aggregator pattern is sound. ICM
+integration is Microsoft-internal; AI•Pkg would use a different incident management tool.
 
 ---
 
@@ -436,7 +436,7 @@ graph LR
 **What it does:** Redirects legacy CDN URLs to current Azure CDN / blob storage URLs for
 backwards compatibility with old tooling.
 
-**AIpkg migration:** Not applicable. AIpkg starts fresh with no legacy CDN URL debt.
+**AI•Pkg migration:** Not applicable. AI•Pkg starts fresh with no legacy CDN URL debt.
 
 ---
 
@@ -456,7 +456,7 @@ graph LR
 **What it does:** A monitoring job crawls the catalog feed to verify that every leaf blob is
 readable and correctly formed, writing results to a dedicated validation database.
 
-**AIpkg migration:** Catalog health monitoring is valuable if AIpkg ships a V3 catalog.
+**AI•Pkg migration:** Catalog health monitoring is valuable if AI•Pkg ships a V3 catalog.
 The specific implementation can be significantly simplified.
 
 ---
@@ -465,7 +465,7 @@ The specific implementation can be significantly simplified.
 
 ```mermaid
 quadrantChart
-    title AIpkg Migration Disposition
+    title AI•Pkg Migration Disposition
     x-axis "Low Reuse Potential" --> "High Reuse Potential"
     y-axis "Low Complexity" --> "High Complexity"
 
@@ -492,7 +492,7 @@ quadrantChart
 | Validation Pipeline | 10 components | **Evaluate** | Content scan yes; signing/symbols scope TBD |
 | Database Infrastructure | 4 components | **Keep / Replace** | EF6 → EF Core 10 + SQL DB Project via EasyAF |
 | Shared Libraries | ~15 components | **Keep / Update** | Contracts-first pattern, Azure SDK updates |
-| Stats Pipeline | 7 components | **Drop** | Replace with Azure Monitor at AIpkg scale |
+| Stats Pipeline | 7 components | **Drop** | Replace with Azure Monitor at AI•Pkg scale |
 | GitHub / Security | 4 components | **Evaluate** | Feature decision — vulnerability data for AI plugins? |
 | Admin / Ops Tools | 6 components | **Simplify** | Need a CLI and scheduled hygiene jobs, fewer one-offs |
 | Blob Storage Jobs | 5 components | **Simplify** | Archival/backup yes; historical backfills no |
@@ -502,4 +502,4 @@ quadrantChart
 
 ---
 
-*Generated from inventory files in `/src/AIPkg.Docs/inventory/` and legacy docs in `/src/AIPkg.Docs/legacy/`.*
+*Generated from inventory files in `/src/AI•Pkg.Docs/inventory/` and legacy docs in `/src/AI•Pkg.Docs/legacy/`.*

@@ -1,4 +1,4 @@
-<Project Sdk="DotNetDocs.Sdk/1.4.1">
+<Project Sdk="DotNetDocs.Sdk/1.5.0">
 
     <PropertyGroup>
         <DocumentationType>Mintlify</DocumentationType>
@@ -66,9 +66,9 @@
                                 plan/01-tech-stack;
                                 plan/02-solution-structure;
                                 plan/03-data-layer;
-                                plan/04-frontend-implementation;
-                                plan/05-server-implementation;
-                                plan/06-sdk-implementation;
+                                plan/04-backend;
+                                plan/05-frontend;
+                                plan/06-sdk;
                                 plan/07-docs-portal-setup;
                                 plan/08-migration
                             </Pages>
@@ -180,5 +180,11 @@
             </Navigation>
         </MintlifyTemplate>
     </PropertyGroup>
+
+    <ItemGroup>
+      <None Include="plan\04-backend.mdx" />
+      <None Include="plan\05-frontend.mdx" />
+      <None Include="plan\06-sdk.mdx" />
+    </ItemGroup>
 
 </Project>

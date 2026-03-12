@@ -25,16 +25,16 @@ h3 > span.cursor-pointer > svg.icon.inline {
     }
 
 ::-webkit-scrollbar-track {
-    background: #0A1628;
+    background: #06060A;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, #3CD0E2, #419AC5);
+    background: linear-gradient(180deg, #C279F0, #7840AE);
     border-radius: 6px;
 }
 
     ::-webkit-scrollbar-thumb:hover {
-        background: linear-gradient(180deg, #419AC5, #3CD0E2);
+        background: linear-gradient(180deg, #7840AE, #C279F0);
     }
 
 /* Smooth scrolling */
@@ -95,8 +95,45 @@ code, kbd, pre, samp {
     max-width: 100% !important;
 }
 
+/* GSAP ScrollTrigger requires no overflow:hidden on ancestors of pinned elements */
+.custom-mode,
+.custom-mode .prose,
+.custom-mode article {
+    overflow: visible !important;
+}
+
+/* Ensure pinned sections fill the viewport */
+.pin-spacer {
+    padding: 0 !important;
+}
+
+/* Hide sidebar and remove left margin on custom-mode (cinematic) pages */
+.custom-mode ~ aside,
+.custom-mode ~ nav,
+:has(.custom-mode) > aside,
+:has(.custom-mode) > div > aside {
+    display: none !important;
+}
+
+/* Remove the sidebar offset margin */
+div:has(> .custom-mode),
+div:has(> div > .custom-mode) {
+    margin-left: 0 !important;
+}
+
+/* Target Mintlify's specific sidebar offset class */
+.lg\:ml-\[19rem\]:has(.custom-mode) {
+    margin-left: 0 !important;
+}
+
+/* Also try broader approach for the content wrapper */
+div[class*="ml-"]:has(.custom-mode),
+div[class*="ml-"]:has(div > .custom-mode) {
+    margin-left: 0 !important;
+}
+
 /* ══════════════════════════════════════════════════
-   AIpkg Home Page (legacy — kept for reference)
+   AI•Pkg Home Page (legacy — kept for reference)
 ══════════════════════════════════════════════════ */
 
 /* ─── Additional Keyframes ─── */

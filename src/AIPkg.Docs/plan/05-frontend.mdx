@@ -1,11 +1,11 @@
 ---
-title: "Frontend Implementation"
-sidebarTitle: "04 · Frontend Implementation"
-description: "Blazor component architecture, Tailwind/Lucide styling setup, color palette, and what must NOT exist in AIpkg.Server."
+title: "Frontend"
+sidebarTitle: "05 · Frontend"
+description: "Blazor component architecture, Tailwind/Lucide styling setup, color palette, and what must NOT exist in AI•Pkg.Server."
 icon: "display"
 ---
 
-The AIpkg web UI is built with Blazor SSR (server-side rendering) with selective interactive islands. There are no Razor (`.cshtml`) views, no jQuery, no Bootstrap scripts, and no OWIN startup code. The UI lives entirely within `AIpkg.Server/` alongside the Registry API.
+The AI•Pkg web UI is built with Blazor SSR (server-side rendering) with selective interactive islands. There are no Razor (`.cshtml`) views, no jQuery, no Bootstrap scripts, and no OWIN startup code. The UI lives entirely within `AI•Pkg.Server/` alongside the Registry API.
 
 The design philosophy: public-facing pages are statically server-rendered for SEO and performance. Authenticated and data-mutation pages use Interactive Server rendering.
 
@@ -15,7 +15,7 @@ For the full page inventory, URL map, SLAs, and accessibility requirements, see 
 
 ## Component Architecture
 
-All Blazor components live in `AIpkg.Server/Components/`:
+All Blazor components live in `AI•Pkg.Server/Components/`:
 
 ```
 Components/
@@ -98,7 +98,7 @@ Components/
 --color-on-surface: #cdd6f4;
 ```
 
-These CSS variables are set in `AIpkg.Server/wwwroot/css/app.css` and consumed via Tailwind plugin or direct CSS.
+These CSS variables are set in `AI•Pkg.Server/wwwroot/css/app.css` and consumed via Tailwind plugin or direct CSS.
 
 ---
 
@@ -125,7 +125,7 @@ These CSS variables are set in `AIpkg.Server/wwwroot/css/app.css` and consumed v
 ## What is NOT in the UI
 
 <Warning>
-  The following must not exist in `AIpkg.Server/`:
+  The following must not exist in `AI•Pkg.Server/`:
 </Warning>
 
 - No `.cshtml` Razor views

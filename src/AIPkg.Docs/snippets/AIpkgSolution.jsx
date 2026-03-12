@@ -86,7 +86,7 @@ export const AIpkgSolution = () => {
               letterSpacing: '-0.025em', margin: '0 0 18px 0', lineHeight: 1.12,
             }}>Package once. The APM system handles the rest.</h2>
             <p style={{ fontSize: '1rem', color: '#6B6B7A', maxWidth: '620px', lineHeight: 1.7, margin: 0 }}>
-              AIpkg introduces the{' '}
+              AI•Pkg introduces the{' '}
               <strong style={{ color: '#C279F0', fontWeight: 600 }}>AI Platform Moniker (APM)</strong>{' '}
               — a hierarchical identifier for every AI platform. Your package targets platform identifiers,
               not specific versions — SDK providers handle per-version schema differences transparently.

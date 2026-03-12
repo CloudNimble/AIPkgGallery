@@ -250,7 +250,7 @@ export const AIpkgVsSkillsSh = () => {
             <h3 style={{
               fontSize: '1.15rem', fontWeight: 700, color: '#C8C8D2',
               marginBottom: '20px', letterSpacing: '-0.01em',
-            }}>GitHub-Based Skills vs. AIpkg Registry</h3>
+            }}>GitHub-Based Skills vs. AI•Pkg Registry</h3>
 
             <div style={{
               background: '#111111',
@@ -270,7 +270,7 @@ export const AIpkgVsSkillsSh = () => {
                   GitHub Skill Files
                 </div>
                 <div style={{ padding: '12px 16px', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#C279F0', borderLeft: '1px solid rgba(255,255,255,0.06)' }}>
-                  AIpkg Registry
+                  AI•Pkg Registry
                 </div>
               </div>
 
@@ -323,7 +323,7 @@ export const AIpkgVsSkillsSh = () => {
                   GitHub repos are great. Packages are better.
                 </div>
                 <p style={{ margin: 0, fontSize: '0.85rem', color: '#555560', lineHeight: 1.65 }}>
-                  AIpkg doesn&#39;t compete with GitHub &#x2014; it complements it. Your source stays on GitHub.
+                  AI•Pkg doesn&#39;t compete with GitHub &#x2014; it complements it. Your source stays on GitHub.
                   Your distribution gets the integrity guarantees it deserves.
                 </p>
               </div>

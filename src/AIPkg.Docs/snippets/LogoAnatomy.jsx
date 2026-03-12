@@ -72,7 +72,7 @@ export const LogoAnatomy = () => {
       color: '#471B78',
       gradient: '#471B78',
       hex: '#471B78',
-      role: 'AIPkg letterforms set in Poppins SemiBold. Purple Deep — the darkest value, providing visual "ink" weight.',
+      role: 'AI•Pkg letterforms set in Poppins SemiBold. Purple Deep — the darkest value, providing visual "ink" weight.',
       zone: { left: '14%', top: '76%', width: '72%', height: '22%' },
     },
   ];

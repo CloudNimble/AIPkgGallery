@@ -1,11 +1,11 @@
 ---
 title: "Package Security"
 sidebarTitle: "12 · Package Security"
-description: "Normative specification for AIpkg's multi-layer package security model — static analysis, antivirus scanning, AI-powered prompt injection detection, signature verification, and incident response."
+description: "Normative specification for AI•Pkg's multi-layer package security model — static analysis, antivirus scanning, AI-powered prompt injection detection, signature verification, and incident response."
 icon: "shield-halved"
 ---
 
-This document defines the normative security model for the AIpkg registry. It addresses how packages are evaluated before and after publication, what invariants the registry maintains on behalf of consumers, and how incidents are handled.
+This document defines the normative security model for the AI•Pkg registry. It addresses how packages are evaluated before and after publication, what invariants the registry maintains on behalf of consumers, and how incidents are handled.
 
 <Info>
   **Current Status:** Signature verification (Spec 05) is the security foundation at MVP. Scanning pipeline components described here are post-MVP but normatively defined so that implementers can plan for them. Features marked **[Post-MVP]** are not required for an MVP-compliant registry.
@@ -15,7 +15,7 @@ This document defines the normative security model for the AIpkg registry. It ad
 
 ## Threat Model
 
-AIpkg packages are consumed by AI platform tools that execute with access to user workspaces, codebases, credentials, and AI model inference. The threat surface is broader than traditional software packages because package content directly influences AI model behavior — a malicious system prompt is as dangerous as a malicious binary.
+AI•Pkg packages are consumed by AI platform tools that execute with access to user workspaces, codebases, credentials, and AI model inference. The threat surface is broader than traditional software packages because package content directly influences AI model behavior — a malicious system prompt is as dangerous as a malicious binary.
 
 ### Attacker Goals
 

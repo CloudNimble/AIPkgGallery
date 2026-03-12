@@ -15,7 +15,22 @@
       "mcp__playwright__browser_take_screenshot",
       "mcp__playwright__browser_evaluate",
       "WebFetch(domain:www.mintlify.com)",
-      "WebFetch(domain:skills.sh)"
+      "WebFetch(domain:skills.sh)",
+      "Bash(mint dev:*)",
+      "Bash(curl:*)",
+      "mcp__playwright__browser_resize",
+      "mcp__playwright__browser_close",
+      "Bash(netstat:*)",
+      "Bash(powershell:*)",
+      "WebFetch(domain:www.apple.com)",
+      "Bash(tasklist 2>/dev/null | grep -i \"node\" | head -5 || echo \"no node processes or tasklist unavailable\")",
+      "Bash(tasklist | grep -i \"mint\\\\|node\" | head -20)",
+      "Bash(taskkill //F //PID 8264 //T 2>/dev/null; taskkill //F //PID 42784 //T 2>/dev/null; echo \"Killed node processes\")",
+      "Bash(taskkill //F //IM node.exe //T 2>/dev/null; echo \"Killed\")",
+      "Bash(taskkill //F //IM \"mint.exe\" 2>/dev/null; taskkill //F //IM \"node.exe\" //FI \"WINDOWTITLE eq mint*\" 2>/dev/null; pkill -f \"mint\" 2>/dev/null; echo \"Processes killed\")",
+      "Bash(wmic process:*)",
+      "Bash(taskkill //F //IM \"node.exe\" 2>/dev/null; echo \"killed\")",
+      "Bash(taskkill //F //IM \"node.exe\" 2>/dev/null; echo \"done\")"
     ]
   }
 }

@@ -5,7 +5,7 @@ description: "Full JSON Schema for the `.aispec` manifest file, field-by-field r
 icon: "file-code"
 ---
 
-The `.aispec` file is a UTF-8 JSON document stored at the root of an `.aipkg` archive. It describes the package's identity, metadata, capabilities, targeting, dependencies, and embedded assets. It corresponds to NuGet's `.nuspec` but uses JSON instead of XML and contains AIpkg-specific fields.
+The `.aispec` file is a UTF-8 JSON document stored at the root of an `.aipkg` archive. It describes the package's identity, metadata, capabilities, targeting, dependencies, and embedded assets. It corresponds to NuGet's `.nuspec` but uses JSON instead of XML and contains AI•Pkg-specific fields.
 
 <Note>
   File naming: `{id}.aispec` — the filename must match the `id` field inside the manifest.
@@ -455,7 +455,7 @@ Each entry in `hooks` declares one lifecycle hook the package installs. Requires
       "version": "1.4.0",
       "title": "Python Language Server",
       "description": "Bundles and configures Pyright for AI coding assistants that support LSP.",
-      "authors": ["AIpkg Contributors"],
+      "authors": ["AI•Pkg Contributors"],
       "capabilities": ["lsp-server"],
       "targets": ["claude-code", "cursor", "opencode"],
       "licenseExpression": "MIT",

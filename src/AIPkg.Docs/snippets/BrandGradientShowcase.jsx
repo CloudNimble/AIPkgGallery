@@ -1,4 +1,4 @@
-// Shows the named gradients used on the AIPkg isometric box
+// Shows the named gradients used on the AI•Pkg isometric box
 export const BrandGradientShowcase = () => {
   const [copied, setCopied] = React.useState(null);
 

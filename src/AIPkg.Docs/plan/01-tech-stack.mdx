@@ -1,11 +1,11 @@
 ---
 title: "Tech Stack"
 sidebarTitle: "01 · Tech Stack"
-description: "Technology choices for runtime, API framework, ORM, authentication, storage, search, and supporting infrastructure for AIpkg.org."
+description: "Technology choices for runtime, API framework, ORM, authentication, storage, search, and supporting infrastructure for AI•Pkg.org."
 icon: "layer-group"
 ---
 
-The AIpkg server is derived from NuGetGallery but radically simplified. The public surface exposes only a JSON API under `/v3/`. OData V2, OWIN, Autofac, and all Razor view infrastructure are removed.
+The AI•Pkg server is derived from NuGetGallery but radically simplified. The public surface exposes only a JSON API under `/v3/`. OData V2, OWIN, Autofac, and all Razor view infrastructure are removed.
 
 ---
 
@@ -36,7 +36,7 @@ The AIpkg server is derived from NuGetGallery but radically simplified. The publ
 
 ### Why Minimal APIs (not Controllers)
 
-NuGetGallery used MVC controllers with complex filter pipelines. Minimal APIs are explicit, AOT-friendly, and map directly to the endpoint-per-file structure used in the new `AIpkg.Server/Api/V3/` directory.
+NuGetGallery used MVC controllers with complex filter pipelines. Minimal APIs are explicit, AOT-friendly, and map directly to the endpoint-per-file structure used in the new `AI•Pkg.Server/Api/V3/` directory.
 
 ### Why EasyAF (not hand-written EF migrations)
 
@@ -59,7 +59,7 @@ NuGetGallery already has a mature Azure AI Search integration in `NuGet.Services
 ## What to Delete from NuGetGallery
 
 <Warning>
-  These items will not exist in the AIpkg repo. Delete them when setting up the fork.
+  These items will not exist in the AI•Pkg repo. Delete them when setting up the fork.
 </Warning>
 
 | Category | Items to Delete |

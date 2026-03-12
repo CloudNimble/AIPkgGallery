@@ -1,8 +1,8 @@
 {
   "colors": {
-    "dark": "#C279F0",
-    "light": "#7840AE",
-    "primary": "#7840AE"
+    "primary": "#419AC5",
+    "dark": "#3CD0E2",
+    "light": "#419AC5"
   },
   "name": "AIPkg",
   "navigation": {
@@ -13,7 +13,10 @@
         "pages": [
           "index",
           "why-aipkg",
-          "quickstart"
+          "quickstart",
+          "aipkg-brand-guidelines",
+          "for-platforms",
+          "for-publishers"
         ]
       },
       {
@@ -55,13 +58,6 @@
               "specs/10-sdk-interface",
               "specs/11-registry-ui"
             ]
-          },
-          {
-            "group": "Security",
-            "icon": "shield-halved",
-            "pages": [
-              "specs/12-security"
-            ]
           }
         ]
       },
@@ -73,9 +69,9 @@
           "plan/01-tech-stack",
           "plan/02-solution-structure",
           "plan/03-data-layer",
-          "plan/04-frontend-implementation",
-          "plan/05-server-implementation",
-          "plan/06-sdk-implementation",
+          "plan/04-backend",
+          "plan/05-frontend",
+          "plan/06-sdk",
           "plan/07-docs-portal-setup",
           "plan/08-migration"
         ]
@@ -184,6 +180,12 @@
               "inventory/NuGet.Services.Licenses"
             ]
           }
+        ]
+      },
+      {
+        "group": "Specs",
+        "pages": [
+          "specs/12-security"
         ]
       }
     ]

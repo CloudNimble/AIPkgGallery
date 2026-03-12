@@ -5,7 +5,7 @@ description: "AI Platform Monikers (APMs) — the hierarchical string identifier
 icon: "sitemap"
 ---
 
-AI Platform Monikers (APMs) are hierarchical string identifiers that describe AI platforms and tools that can consume AIpkg packages. They serve the same purpose as Target Framework Monikers (TFMs) in NuGet: they allow a single package to ship platform-specific content and allow the installer to select the most appropriate files for the current environment.
+AI Platform Monikers (APMs) are hierarchical string identifiers that describe AI platforms and tools that can consume AI•Pkg packages. They serve the same purpose as Target Framework Monikers (TFMs) in NuGet: they allow a single package to ship platform-specific content and allow the installer to select the most appropriate files for the current environment.
 
 ---
 
@@ -105,7 +105,7 @@ A package is compatible with a target APM if any of the following are true:
 3. The package's `targets` array is **empty or contains only `ai`** (universal package).
 
 <Note>
-  Compatibility checking is performed by `PlatformCompatibilityService` in `AIpkg.Core`. See [SDK Interface](10-sdk-interface) for the API surface.
+  Compatibility checking is performed by `PlatformCompatibilityService` in `AI•Pkg.Core`. See [SDK Interface](10-sdk-interface) for the API surface.
 </Note>
 
 ---
@@ -137,7 +137,7 @@ A package may declare a dependency on or include files for a moniker not in the 
 
 ## Moniker Registration
 
-New monikers are added to the canonical table by opening a PR to the AIpkg spec repository. Requirements for a new moniker:
+New monikers are added to the canonical table by opening a PR to the AI•Pkg spec repository. Requirements for a new moniker:
 
 1. Must have a public, documented plugin/extension system
 2. Must have a clearly defined install path

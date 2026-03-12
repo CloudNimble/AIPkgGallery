@@ -14,7 +14,7 @@ icon: shield-check
 The library exists to avoid duplication between the validator job (which validates `.snupkg` content) and the ingester job (which pushes validated symbols to Azure DevOps / VSTS Symbol Server). Both jobs share the same message shapes, serialization logic, and database access patterns, all of which live here.
 
 <Warning>
-This project deals exclusively with **symbol packages** (`.snupkg` files). Symbol package validation has **no applicability to AIPkg** — AIPkg packages do not contain PDB/symbol artifacts and do not interact with any symbol server. This library is documented here for completeness of the NuGetGallery codebase inventory only.
+This project deals exclusively with **symbol packages** (`.snupkg` files). Symbol package validation has **no applicability to AI•Pkg** — AI•Pkg packages do not contain PDB/symbol artifacts and do not interact with any symbol server. This library is documented here for completeness of the NuGetGallery codebase inventory only.
 </Warning>
 
 ---
