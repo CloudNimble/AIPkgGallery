@@ -294,25 +294,25 @@
     ScrollTrigger.refresh();
   }
 
-  //load('/gsap.min.js')
-  //  .then(function () {
-  //    return load('/ScrollTrigger.min.js');
-  //  })
-  //  .then(function () {
-  //    // Wait for DOM to be fully ready
-  //    if (document.readyState === 'complete') {
-  //      initAnimations();
-  //    } else {
-  //      window.addEventListener('load', initAnimations);
-  //    }
-  //    // Also try after a delay in case Mintlify hydration is still running
-  //    setTimeout(function () {
-  //      if (ScrollTrigger.getAll().length === 0) {
-  //        initAnimations();
-  //      }
-  //    }, 1500);
-  //  })
-  //  .catch(function (e) {
-  //    console.error('GSAP load failed:', e);
-  //  });
+load('https://cdn.jsdelivr.net/npm/gsap@3.14.1/dist/gsap.min.js')
+    .then(function () {
+      return load('https://cdn.jsdelivr.net/npm/gsap@3.14.1/dist/ScrollTrigger.min.js');
+    })
+    .then(function () {
+      // Wait for DOM to be fully ready
+      if (document.readyState === 'complete') {
+        initAnimations();
+      } else {
+        window.addEventListener('load', initAnimations);
+      }
+      // Also try after a delay in case Mintlify hydration is still running
+      setTimeout(function () {
+        if (ScrollTrigger.getAll().length === 0) {
+          initAnimations();
+        }
+      }, 1500);
+    })
+    .catch(function (e) {
+      console.error('GSAP load failed:', e);
+    });
 })();
