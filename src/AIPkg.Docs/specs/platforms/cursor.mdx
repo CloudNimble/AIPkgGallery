@@ -1,0 +1,619 @@
+---
+title: Cursor
+description: Platform specification for Cursor, the AI-first code editor by Anysphere built as a fork of VS Code
+icon: cursor-text
+---
+
+## Overview
+
+[Cursor](https://cursor.com/) is a proprietary AI-first code editor developed by **Anysphere**, a San Francisco-based company founded in 2022 by Sualeh Asif, Arvid Lunnemark, Aman Sanger, and Michael Truell (all MIT alumni). Built as a fork of **Visual Studio Code**, Cursor maintains full compatibility with VS Code extensions, themes, and keybindings while deeply integrating AI capabilities for code generation, editing, and understanding. It is available for **macOS**, **Windows**, and **Linux**.
+
+Cursor supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) for extending agent capabilities with external tools and data sources. MCP servers are configured via JSON files and are available to the agent during conversations.
+
+<Info>
+  Cursor is multi-model. It supports frontier models from Anthropic (Claude), OpenAI (GPT), Google (Gemini), xAI (Grok), and Cursor's own purpose-built **Composer** model. Users can switch models mid-session and enable auto-select to let Cursor choose the best model for each task.
+</Info>
+
+### Key Features
+
+| Feature | Description |
+|---|---|
+| **Agent Mode** | Autonomously explores codebase, edits files across the project, runs terminal commands, and iterates on results |
+| **Tab (Autocomplete)** | Predicts multi-line edits and cursor position based on codebase patterns; 28% higher acceptance rate than traditional autocomplete |
+| **Inline Editing (Cmd+K)** | Select code and describe changes in natural language for targeted edits |
+| **Codebase Indexing** | Semantic embeddings of the entire project for intelligent context retrieval |
+| **MCP Support** | Connect external tools and services via Model Context Protocol servers |
+| **@ Mentions** | Reference files, folders, docs, web, git history, and more with `@` symbols |
+| **Custom Rules** | Project-level `.cursor/rules/` MDC files and legacy `.cursorrules` for AI behavior customization |
+| **Background Agents** | Autonomous agents that clone repos, work on branches in cloud VMs, and push PRs |
+| **Checkpoints** | Automatic snapshots before every AI change for easy rollback |
+| **Custom Modes** | User-defined modes with specific models, tools, and system prompts |
+
+---
+
+## Configuration
+
+### File Locations
+
+Cursor uses a combination of JSON configuration files and Markdown-based rule files. Configuration is split between global (user-level) and project-level locations.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Global MCP config | `~/.cursor/mcp.json` | MCP servers available across all projects |
+    | Project MCP config | `<project>/.cursor/mcp.json` | MCP servers scoped to a specific project |
+    | Project rules | `<project>/.cursor/rules/*.mdc` | MDC rule files for AI behavior (per-project) |
+    | Legacy rules | `<project>/.cursorrules` | Legacy single-file project rules (deprecated) |
+    | Global rules | Cursor Settings > General > Rules for AI | Global rules applied to all projects |
+    | Cursor settings | Cursor Settings UI (or `settings.json`) | Editor and AI feature configuration |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Global MCP config | `%USERPROFILE%\.cursor\mcp.json` | MCP servers available across all projects |
+    | Project MCP config | `<project>\.cursor\mcp.json` | MCP servers scoped to a specific project |
+    | Project rules | `<project>\.cursor\rules\*.mdc` | MDC rule files for AI behavior (per-project) |
+    | Legacy rules | `<project>\.cursorrules` | Legacy single-file project rules (deprecated) |
+    | Global rules | Cursor Settings > General > Rules for AI | Global rules applied to all projects |
+  </Tab>
+</Tabs>
+
+### Configuration Hierarchy
+
+Settings and rules are resolved in the following order (highest to lowest):
+
+1. **Team Rules** (shared via repository)
+2. **Project Rules** (`.cursor/rules/`)
+3. **User Rules** (Cursor Settings > General > Rules for AI)
+
+All applicable rules are merged. Earlier sources take precedence when guidance conflicts.
+
+<Note>
+  The legacy `.cursorrules` file in the project root still works but is deprecated. Cursor recommends migrating to the `.cursor/rules/` system for better flexibility and granular control.
+</Note>
+
+---
+
+## Custom Instructions / Rules
+
+Cursor supports three levels of rules for customizing AI behavior: Global Rules, Project Rules (`.cursor/rules/*.mdc`), and the legacy `.cursorrules` file.
+
+### Global Rules
+
+Global rules are configured in **Cursor Settings > General > Rules for AI**. They apply to every project and are useful for universal preferences like output language, response length, or coding style.
+
+### Project Rules (`.cursor/rules/*.mdc`)
+
+Project rules provide granular, file-pattern-aware control over AI behavior. Each rule is stored as an MDC (Markdown Configuration) file with YAML frontmatter.
+
+<CodeGroup>
+
+```markdown Always Rule (.cursor/rules/general.mdc)
+---
+description: "General project guidelines"
+globs:
+alwaysApply: true
+---
+
+This is a TypeScript monorepo using pnpm workspaces.
+Prefer functional patterns over classes.
+All public APIs must have JSDoc comments.
+Use strict TypeScript with no `any` types.
+```
+
+```markdown Auto-Attached Rule (.cursor/rules/react.mdc)
+---
+description: "React component standards"
+globs: "src/components/**/*.tsx"
+alwaysApply: false
+---
+
+Use functional components with hooks.
+Prefer named exports over default exports.
+All components must have prop type definitions.
+Use CSS Modules for styling.
+```
+
+```markdown Agent-Requested Rule (.cursor/rules/database.mdc)
+---
+description: "Database migration and schema standards"
+globs:
+alwaysApply: false
+---
+
+Use Prisma for database access.
+All migrations must be reversible.
+Always add indexes for foreign keys.
+```
+
+```markdown Manual Rule (.cursor/rules/deployment.mdc)
+---
+description:
+globs:
+alwaysApply: false
+---
+
+Deploy to staging first. Run smoke tests before production.
+Use blue-green deployment strategy.
+```
+
+</CodeGroup>
+
+### Rule Types
+
+The rule type is determined by the combination of frontmatter fields:
+
+| Rule Type | `alwaysApply` | `globs` | `description` | Behavior |
+|---|---|---|---|---|
+| **Always** | `true` | -- | -- | Always included in context for every request |
+| **Auto-Attached** | `false` | defined | -- | Included when referenced files match the glob pattern |
+| **Agent-Requested** | `false` | -- | defined | Agent retrieves the rule when it determines relevance |
+| **Manual** | `false` | -- | -- | Only included when explicitly referenced via `@Cursor Rules` |
+
+<Info>
+  You can create a new rule using the command palette: **Cmd+Shift+P > New Cursor Rule**. Project rules are version-controlled since they are just files in your repository.
+</Info>
+
+### Legacy `.cursorrules` File
+
+The `.cursorrules` file is placed in the project root and contains plain-text instructions appended to the AI's context. It has no frontmatter or file-pattern matching.
+
+```text .cursorrules
+This is a Python FastAPI project.
+Use type hints for all function parameters and return types.
+Follow PEP 8 naming conventions.
+Prefer async functions for I/O-bound operations.
+Write tests using pytest with fixtures.
+```
+
+<Warning>
+  The `.cursorrules` format is deprecated. Cursor will eventually remove support for it. Migrate to `.cursor/rules/*.mdc` files for better flexibility, file-pattern matching, and reduced token usage.
+</Warning>
+
+---
+
+## Modes
+
+Cursor provides three built-in modes and supports user-defined custom modes. You can switch between modes using the mode picker in the input box.
+
+### Built-in Modes
+
+| Mode | Description | Capabilities |
+|---|---|---|
+| **Agent** (default) | Full autonomous mode with access to all tools | Edits files, runs terminal commands, searches codebase, browses web, installs packages |
+| **Ask** | Read-only exploration and Q&A mode | Answers questions, explains code, no file edits |
+| **Edit** | Focused single-turn editing mode | Makes precise edits using only the context you explicitly provide |
+
+<Info>
+  In earlier versions, Cursor had separate "Chat" and "Composer" interfaces. These have been unified into the single Agent interface with mode switching.
+</Info>
+
+### Custom Modes
+
+Custom modes allow you to define specialized AI assistants with specific models, tools, and system prompts. Enable them from **Settings > Features > Chat > Custom modes**.
+
+Each custom mode can configure:
+
+- **Name and keybinding** (e.g., "Frontend Expert" on Cmd+E)
+- **Fixed model** (e.g., always use Claude for planning)
+- **Tool selection** (enable/disable specific tools like Edit, Terminal, Codebase, MCP)
+- **Custom instructions** (system prompt for the mode)
+- **Auto-run settings** (whether terminal commands run without confirmation)
+
+### Plan Mode
+
+Select "Plan" instead of "Agent" in the chat window to enter Plan Mode. Cursor crawls the project, reads docs and rules, asks clarifying questions, and generates an editable Markdown plan with file paths, code references, and a to-do list before making any changes.
+
+---
+
+## MCP Servers
+
+Cursor supports the Model Context Protocol for extending agent capabilities with external tools and data sources. MCP servers are configured via JSON files.
+
+### Configuration Format
+
+<CodeGroup>
+
+```json Project-Level (.cursor/mcp.json)
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "env": {}
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
+      }
+    }
+  }
+}
+```
+
+```json Global (~/.cursor/mcp.json)
+{
+  "mcpServers": {
+    "my-global-server": {
+      "command": "node",
+      "args": ["/path/to/server.js"],
+      "env": {
+        "API_KEY": "your-key"
+      }
+    }
+  }
+}
+```
+
+```json SSE / Remote Server
+{
+  "mcpServers": {
+    "remote-server": {
+      "url": "https://mcp.example.com/sse"
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Transport Types
+
+| Type | Configuration | Use Case |
+|---|---|---|
+| **stdio** | `command` + `args` + `env` | Local MCP servers communicating over standard I/O |
+| **SSE** | `url` | Remote servers using Server-Sent Events |
+| **Streamable HTTP** | `url` | Remote servers using HTTP streaming |
+
+### Adding MCP Servers
+
+<Tabs>
+  <Tab title="Settings UI">
+    Navigate to **Cursor Settings > Tools & MCP > New MCP Server** and fill in the server details. Some servers support one-click installation via deep-link buttons.
+  </Tab>
+  <Tab title="Project Config (Manual)">
+    Create or edit `.cursor/mcp.json` in your project root:
+
+    ```json
+    {
+      "mcpServers": {
+        "my-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "value"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Global Config (Manual)">
+    Create or edit `~/.cursor/mcp.json` to make servers available across all projects.
+  </Tab>
+</Tabs>
+
+<Warning>
+  API keys in `mcp.json` are stored in cleartext. Use the `${env:VAR_NAME}` reference syntax for stdio servers to avoid hardcoding secrets. Never commit `mcp.json` files containing credentials to version control.
+</Warning>
+
+### MCP Capabilities
+
+Cursor supports the full MCP protocol feature set:
+
+| Capability | Status | Description |
+|---|---|---|
+| **Tools** | Supported | Functions the agent can call |
+| **Resources** | Supported (v1.6+) | Contextual data like schemas and file contents |
+| **Prompts** | Supported | Reusable prompt templates |
+| **Sampling** | Supported | Servers can request AI completions |
+| **Elicitation** | Supported (v1.5+) | Servers can ask for structured user input mid-execution |
+
+<Note>
+  Cursor auto-starts stdio MCP servers when Agent mode activates. There is a practical limit of approximately 40 active tools across all servers -- beyond that, the agent's tool selection accuracy degrades.
+</Note>
+
+---
+
+## Agent Tools
+
+When operating in Agent mode, Cursor has access to a set of built-in tools for interacting with your codebase and environment.
+
+### Built-in Tools
+
+| Tool | Description |
+|---|---|
+| **Edit & Reapply** | Suggest and apply code edits to files |
+| **Read File** | Read the contents of files in the workspace |
+| **List Directory** | List contents of a directory to understand project structure |
+| **Codebase Search** | Semantic search across the indexed codebase |
+| **Grep** | Fast pattern/keyword search across files |
+| **Search Files** | Fuzzy file name search |
+| **Terminal** | Execute shell commands and monitor output |
+| **Delete File** | Remove files from the workspace |
+| **Web Search** | Search the internet for information |
+| **Browser** | Launch an embedded browser to test web applications and capture screenshots |
+| **Fetch Rules** | Retrieve relevant project rules based on context |
+| **MCP Tools** | Tools provided by configured MCP servers |
+
+### Codebase Indexing
+
+Cursor indexes your entire project using semantic embeddings, enabling intelligent context retrieval without manual file specification. The index:
+
+- Updates incrementally as you modify files
+- Encrypts code chunks and obfuscates filenames for privacy
+- Can be checked via the status bar for progress
+- Supports excluding directories (e.g., `node_modules`, `vendor`) in settings
+
+### Auto-Run (YOLO Mode)
+
+Auto-run allows the agent to execute terminal commands without manual confirmation. Configure it from **Cursor Settings** with natural language allow/deny lists:
+
+```text
+Allow: test commands (vitest, npm test, jest), build commands (tsc, npm run build),
+file operations (mkdir, touch, cp). Deny: rm -rf, sudo, curl | bash.
+```
+
+<Warning>
+  Auto-run should be used with caution. Cursor creates checkpoints before changes, allowing rollback, but always restrict dangerous commands via deny lists. Disable auto-run entirely for sensitive projects.
+</Warning>
+
+---
+
+## @ Mentions (Context References)
+
+Use `@` symbols in Chat, Agent, and Cmd+K to provide precise context to the AI.
+
+| Symbol | Description | Availability |
+|---|---|---|
+| `@Files` | Reference specific files by name | Chat, Agent, Cmd+K |
+| `@Folders` | Reference entire directories and their contents | Chat, Agent |
+| `@Code` | Reference specific functions, classes, or code symbols | Chat, Agent, Cmd+K |
+| `@Codebase` | Trigger semantic search across the entire project | Chat, Agent |
+| `@Web` | Perform a live web search for up-to-date information | Chat, Agent |
+| `@Docs` | Reference external library/framework documentation | Chat, Agent |
+| `@Git` | Reference git commits, diffs, PRs, and branches | Chat |
+| `@Link` | Visit and parse a URL | Chat, Agent |
+| `@Past Chats` | Reference previous conversation context | Chat |
+| `@Cursor Rules` | Explicitly reference project rules | Chat, Agent |
+| `@Linter Errors` | Include current linter/compiler errors | Chat, Agent |
+| `@Recent Changes` | Reference recent code modifications | Chat, Agent |
+| `@Notepad` | Reference persistent notepad content | Chat, Agent |
+| `@Chat` | Add current chat context | Cmd+K only |
+| `@Definitions` | Add nearby code definitions | Cmd+K only |
+
+<Info>
+  `@Codebase` is the most powerful context reference. It triggers a multi-step process: collecting relevant files, reranking by relevance, and reasoning about how to use the context. Use it when you need project-wide understanding.
+</Info>
+
+---
+
+## Model Configuration
+
+### Available Models
+
+Cursor provides access to models from multiple providers. Models are enabled and selected from **Cursor Settings > Models**.
+
+| Provider | Models |
+|---|---|
+| **Anthropic** | Claude Sonnet 4.5, Claude Opus 4, and other Claude variants |
+| **OpenAI** | GPT-4o, GPT-4.5, o1, o3, and other GPT variants |
+| **Google** | Gemini 2.5 Pro, Gemini 2.0 Flash, and other Gemini variants |
+| **xAI** | Grok models |
+| **Cursor** | Composer (purpose-built coding model), cursor-small |
+
+<Note>
+  Model availability changes frequently as new models are released. Check **Cursor Settings > Models** for the current list. Enable **Auto-select** to let Cursor pick the best model for each task automatically.
+</Note>
+
+### Model Selection Features
+
+| Feature | Description |
+|---|---|
+| **Auto-select** | Cursor picks the best model for the task and switches automatically if degraded performance is detected |
+| **Thinking Mode** | Limits selection to reasoning models that think step-by-step for complex tasks |
+| **Per-Mode Models** | Custom modes can lock to a specific model |
+| **Mid-Session Switching** | Switch models at any point during a conversation |
+
+### Custom API Keys
+
+You can bring your own API keys for direct provider access. Configure them in **Cursor Settings > Models**:
+
+| Provider | Base URL | Key Format |
+|---|---|---|
+| **Anthropic** | (default) | `sk-ant-api03-...` |
+| **OpenAI** | (default) | `sk-...` |
+| **Google Gemini** | `https://generativelanguage.googleapis.com/v1beta/openai/` | Google API key |
+| **Azure OpenAI** | Your Azure endpoint | Azure API key |
+| **DeepSeek** | `https://api.deepseek.com/v1` | DeepSeek API key |
+
+### Context Windows
+
+| Interface | Default Token Limit |
+|---|---|
+| **Chat / Composer** | ~40,000 tokens |
+| **Agent** | 60,000 - 120,000 tokens |
+| **Cmd+K (Inline Edit)** | ~10,000 tokens |
+
+For longer conversations, Cursor automatically summarizes earlier messages using lighter models (cursor-small, gpt-4o-mini) to preserve token space.
+
+### Privacy Mode
+
+Enable Privacy Mode from Cursor Settings to ensure that neither Cursor nor model providers store your code or use it for training. All data is deleted after each request is processed.
+
+---
+
+## Installation
+
+<Tabs>
+  <Tab title="macOS">
+    Download the `.dmg` installer from [cursor.com/download](https://cursor.com/download). Both Apple Silicon and Intel builds are available.
+
+    ```bash
+    # Open the DMG and drag Cursor to Applications
+    open ~/Downloads/Cursor-*.dmg
+    ```
+
+    Requirements: macOS Monterey (12) or later, 8 GB RAM minimum (16 GB recommended).
+  </Tab>
+  <Tab title="Windows">
+    Download the `.exe` installer from [cursor.com/download](https://cursor.com/download). Run the installer and follow the setup wizard. The installer automatically configures PATH and Windows Defender exclusions.
+
+    A portable `.zip` version is also available.
+
+    Requirements: Windows 10 or later, 4 GB RAM minimum (16 GB recommended).
+  </Tab>
+  <Tab title="Linux">
+    Download the `.AppImage` from [cursor.com/download](https://cursor.com/download). Available for both x86_64 and aarch64 architectures.
+
+    ```bash
+    # Make executable and run
+    chmod +x Cursor-*.AppImage
+    ./Cursor-*.AppImage
+    ```
+
+    Requirements: Ubuntu 20.04+ or equivalent, 4 GB RAM minimum (16 GB recommended).
+  </Tab>
+</Tabs>
+
+### Post-Installation Setup
+
+<Steps>
+  <Step title="Import VS Code Settings (Optional)">
+    On first launch, Cursor offers to import extensions, themes, and keybindings from an existing VS Code installation. You can also start from scratch.
+  </Step>
+  <Step title="Sign In or Configure API Keys">
+    Sign in with your Cursor account to use included model credits, or configure custom API keys in **Settings > Models** for direct provider access.
+  </Step>
+  <Step title="Enable Codebase Indexing">
+    Open a project folder. Cursor will automatically begin indexing your codebase. Monitor progress in the status bar. Exclude large directories like `node_modules` in settings to speed up indexing.
+  </Step>
+  <Step title="Configure Rules (Optional)">
+    Create `.cursor/rules/*.mdc` files for project-specific AI behavior, or set global rules in **Cursor Settings > General > Rules for AI**.
+  </Step>
+</Steps>
+
+### Key Shortcuts
+
+| Action | macOS | Windows / Linux |
+|---|---|---|
+| Open Chat / Agent | `Cmd+L` | `Ctrl+L` |
+| Inline Edit | `Cmd+K` | `Ctrl+K` |
+| New Tab | `Cmd+T` | `Ctrl+T` |
+| Command Palette | `Cmd+Shift+P` | `Ctrl+Shift+P` |
+| Accept Autocomplete | `Tab` | `Tab` |
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Cursor platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **Global MCP config**: `~/.cursor/mcp.json`
+    - **Project MCP config**: `<project>/.cursor/mcp.json`
+    - **Project rules**: `<project>/.cursor/rules/*.mdc`
+    - **Legacy rules**: `<project>/.cursorrules`
+  </Tab>
+  <Tab title="Windows">
+    - **Global MCP config**: `%USERPROFILE%\.cursor\mcp.json`
+    - **Project MCP config**: `<project>\.cursor\mcp.json`
+    - **Project rules**: `<project>\.cursor\rules\*.mdc`
+    - **Legacy rules**: `<project>\.cursorrules`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into the `mcpServers` object in `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `mcpServers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- The root key **must** be `mcpServers` (not `servers` or `mcp`); Cursor silently ignores the file if this key is missing
+- For project-scoped servers, write to `<project>/.cursor/mcp.json`
+- For global servers, write to `~/.cursor/mcp.json`
+- Use `command` + `args` + `env` for stdio servers; use `url` for SSE/HTTP servers
+- Always include `-y` in npx args to avoid interactive prompts that hang the server process
+- Cursor auto-starts stdio servers when Agent mode activates; no manual restart is required after config changes
+
+### Installing Project Rules
+
+To install project-level instructions, create MDC files in the `.cursor/rules/` directory:
+
+```markdown
+---
+description: "Package-specific guidelines"
+globs:
+alwaysApply: true
+---
+
+Instructions for using this package...
+```
+
+**Key considerations:**
+
+- Create the `.cursor/rules/` directory if it does not exist
+- Each rule should be a separate `.mdc` file with a descriptive name
+- Use `alwaysApply: true` for rules that should always be in context
+- Use `globs` for rules that apply only to specific file patterns
+- If a `.cursorrules` file already exists, consider appending to it for backward compatibility, but prefer creating `.cursor/rules/` files for new installations
+- Rules files are version-controlled and should be committed to the repository
+
+### Config File Format
+
+Cursor uses JSON for MCP configuration (`mcp.json`). The installer must:
+
+1. Read the existing JSON file (if it exists)
+2. Deep-merge new server definitions into the `mcpServers` object
+3. Write the result back, preserving existing entries
+4. Ensure the `.cursor/` directory exists before writing
+
+<Note>
+  Unlike some other platforms, Cursor does not use a single unified config file. MCP servers go in `mcp.json`, rules go in `.cursor/rules/`, and editor settings are managed through the Cursor Settings UI. An installer primarily interacts with `mcp.json` and `.cursor/rules/`.
+</Note>
+
+### Environment Variable References
+
+For stdio MCP servers, Cursor supports referencing environment variables in the config to avoid hardcoding secrets:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server"],
+      "env": {
+        "API_KEY": "${env:MY_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+### Practical Limits
+
+- Approximately 40 active tools across all MCP servers is the practical upper bound before agent tool-selection accuracy degrades
+- Cursor creates checkpoints before every AI change, enabling rollback regardless of MCP server behavior
+- MCP server stdout is captured for tool responses; stderr is available in Cursor's developer tools for debugging
