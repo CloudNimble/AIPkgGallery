@@ -1,0 +1,578 @@
+---
+title: Codex CLI
+description: Platform specification for Codex CLI, OpenAI's open-source terminal coding agent built in Rust
+icon: terminal
+---
+
+## Overview
+
+[Codex CLI](https://github.com/openai/codex) is an open-source coding agent developed by **OpenAI** that runs directly in your terminal. Released in April 2025 under the Apache 2.0 license and built in Rust, Codex CLI brings the power of OpenAI's frontier models into local development workflows. It can read, modify, and execute code on your machine, plan multi-step changes across multiple files, run commands, and verify results -- all within a full-screen terminal UI.
+
+Codex CLI supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) for connecting to external tool servers, and can itself run as an MCP server for use inside other agents.
+
+<Info>
+  Codex CLI is model-flexible. It defaults to `gpt-5.4` but supports any provider compatible with the OpenAI Responses API, including Azure OpenAI, Ollama, LM Studio, and Mistral. OpenAI also provides open-source models (`gpt-oss:20b` and `gpt-oss:120b`) that can run locally via Ollama.
+</Info>
+
+### Key Features
+
+| Feature | Description |
+|---|---|
+| **Agentic Execution** | Plans multi-step changes across files, runs shell commands, and verifies results autonomously |
+| **Approval Modes** | Three levels of autonomy: `suggest`, `auto-edit`, and `full-auto` |
+| **Sandboxing** | Platform-native process isolation restricts filesystem and network access for model-generated commands |
+| **AGENTS.md** | Hierarchical project instruction files with global and directory-level scoping |
+| **MCP Integration** | Connect external tool servers via STDIO or streaming HTTP; also runs as an MCP server |
+| **Multi-Agent** | Experimental support for parallel agents working in isolated Git worktrees |
+| **Web Search** | Built-in web search tool with cached and live modes |
+| **Image Input** | Attach PNG/JPEG images to prompts via CLI flags or interactive pasting |
+| **Code Review** | `/review` command for analyzing diffs, commits, and working tree changes |
+| **Non-Interactive Mode** | `codex exec` subcommand for scripting and CI/CD automation |
+| **Session Management** | Local transcript storage with resume, fork, and conversation compaction |
+
+---
+
+## Configuration
+
+### File Locations
+
+Codex CLI uses TOML configuration files with a layered resolution system. The `CODEX_HOME` environment variable overrides the default home directory.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User config | `~/.codex/config.toml` | Primary user-level configuration |
+    | Project config | `<project>/.codex/config.toml` | Project-level overrides (trusted projects only) |
+    | System config | `/etc/codex/config.toml` | System-wide defaults (Unix only) |
+    | AGENTS.md | `~/.codex/AGENTS.md` | Global custom instructions |
+    | Sessions | `~/.codex/sessions/` | Local conversation transcripts |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User config | `%USERPROFILE%\.codex\config.toml` | Primary user-level configuration |
+    | Project config | `<project>\.codex\config.toml` | Project-level overrides (trusted projects only) |
+    | AGENTS.md | `%USERPROFILE%\.codex\AGENTS.md` | Global custom instructions |
+  </Tab>
+</Tabs>
+
+### Configuration Precedence
+
+Settings are resolved in the following order (highest to lowest):
+
+1. **CLI flags** (`--model`, `--sandbox`, `-c key=value`)
+2. **Profile overrides** (`--profile <name>` selects a named profile from config.toml)
+3. **Project config files** (`.codex/config.toml` layers from project root to current directory; closest wins)
+4. **User config** (`~/.codex/config.toml`)
+5. **System config** (`/etc/codex/config.toml`)
+6. **Built-in defaults**
+
+<Note>
+  Project-level configuration files are only loaded for **trusted projects**. Use `codex` in the project directory and confirm trust when prompted, or configure trusted paths in your user config.
+</Note>
+
+### config.toml Structure
+
+<CodeGroup>
+
+```toml Basic Configuration
+# Model selection
+model = "gpt-5.4"
+model_reasoning_effort = "medium"   # "low" | "medium" | "high"
+
+# Approval and sandbox
+approval_policy = "on-request"      # "untrusted" | "on-request" | "never"
+sandbox_mode = "workspace-write"    # "read-only" | "workspace-write" | "danger-full-access"
+
+# Communication style
+personality = "pragmatic"           # "friendly" | "pragmatic" | "none"
+
+# Web search
+web_search = "cached"               # "cached" | "live" | "disabled"
+
+# AGENTS.md tuning
+project_doc_max_bytes = 65536
+project_doc_fallback_filenames = ["TEAM_GUIDE.md", ".agents.md"]
+project_root_markers = [".git", ".hg", ".sl"]
+```
+
+```toml Profiles
+# Named profiles for switching configurations
+[profiles.fast]
+model = "gpt-5-codex-mini"
+model_reasoning_effort = "low"
+
+[profiles.thorough]
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+
+[profiles.local]
+model = "gpt-oss:20b"
+model_provider = "oss"
+```
+
+```toml MCP Servers
+[mcp_servers.my-server]
+transport = "stdio"
+command = "npx"
+args = ["-y", "@scope/mcp-server-package"]
+timeout = 60
+
+[mcp_servers.remote-server]
+transport = "http"
+url = "https://mcp.example.com/stream"
+timeout = 30
+```
+
+```toml Model Providers
+# Custom provider (e.g., Ollama)
+[model_providers.ollama]
+base_url = "http://localhost:11434/v1"
+
+# Azure OpenAI
+[model_providers.azure]
+base_url = "https://my-resource.openai.azure.com"
+
+# Default OSS provider for --oss flag
+oss_provider = "ollama"
+```
+
+```toml Shell Environment Policy
+[shell_environment_policy]
+include_only = ["PATH", "HOME", "USER", "LANG", "TERM"]
+```
+
+```toml Features and UI
+[features]
+multi_agent = true
+shell_snapshot = false
+
+[tui]
+animations = true
+
+[history]
+persistence = "full"
+
+# File opener for clickable citations
+file_opener = "vscode"   # "vscode" | "cursor" | "windsurf"
+```
+
+</CodeGroup>
+
+---
+
+## Custom Instructions
+
+### AGENTS.md
+
+Codex reads `AGENTS.md` files before doing any work. By layering global guidance with project-specific overrides, you can start each task with consistent expectations across repositories.
+
+### Discovery Order
+
+Codex builds an instruction chain when it starts (once per run):
+
+<Steps>
+  <Step title="Global Scope">
+    In your Codex home directory (`~/.codex/` or `$CODEX_HOME`), Codex looks for `AGENTS.override.md` first. If not found, it reads `AGENTS.md`. Only the first non-empty file at this level is used.
+  </Step>
+  <Step title="Project Scope">
+    Starting at the project root (typically the Git root), Codex walks down to your current working directory. In each directory along the path, it checks:
+    1. `AGENTS.override.md`
+    2. `AGENTS.md`
+    3. Any fallback names listed in `project_doc_fallback_filenames`
+  </Step>
+</Steps>
+
+### AGENTS.md Example
+
+```markdown AGENTS.md
+# Project Conventions
+
+This is a TypeScript monorepo managed with pnpm.
+
+## Build & Test
+- Build: `pnpm build`
+- Test: `pnpm test`
+- Lint: `pnpm lint`
+
+## Code Style
+- Use strict TypeScript, no `any` types
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+
+## File Structure
+- `packages/core/` - Core library
+- `packages/cli/` - CLI interface
+- `apps/web/` - Next.js application
+```
+
+### Scaffolding
+
+Run the `/init` slash command inside Codex to generate an `AGENTS.md` scaffold in the current directory. Review and edit the generated file, then commit it to your repository.
+
+### Configuration Knobs
+
+| Key | Default | Description |
+|---|---|---|
+| `project_doc_max_bytes` | `65536` | Maximum bytes to read from each AGENTS.md file |
+| `project_doc_fallback_filenames` | `[]` | Additional filenames to try when AGENTS.md is missing at a directory level |
+| `project_root_markers` | `[".git"]` | Directories that signal a project root; set to `[]` to use cwd as root |
+
+<Warning>
+  If your AGENTS.md content is truncated, increase `project_doc_max_bytes` or split large files across nested directories so that critical guidance is preserved at each level.
+</Warning>
+
+---
+
+## Approval Modes
+
+Approval modes control how much autonomy Codex has when modifying files and executing commands. Set them via CLI flags, the `/mode` slash command mid-session, or in `config.toml`.
+
+### Mode Comparison
+
+| Mode | File Edits | Shell Commands | Best For |
+|---|---|---|---|
+| **Suggest** (default) | Requires approval | Requires approval | Production code, unfamiliar repositories |
+| **Auto-Edit** | Applied automatically | Requires approval | Active development with trusted edits |
+| **Full-Auto** | Applied automatically | Executed automatically | Isolated environments, disposable containers |
+
+### Setting Approval Modes
+
+<CodeGroup>
+
+```bash CLI Flags
+# Most restrictive -- every action needs approval
+codex --suggest "refactor the auth module"
+
+# Balanced -- auto-apply edits, approve commands
+codex --auto-edit "add unit tests for the parser"
+
+# Least restrictive -- full autonomy
+codex --full-auto "set up the CI pipeline"
+```
+
+```toml config.toml
+# Approval policy controls command execution
+# "untrusted" = always ask (suggest mode)
+# "on-request" = auto-edit with command approval
+# "never" = full-auto
+approval_policy = "on-request"
+```
+
+```text Mid-Session Slash Commands
+/mode suggest
+/mode auto-edit
+/mode full-auto
+```
+
+</CodeGroup>
+
+### Sandbox Modes
+
+Sandboxing defines the technical boundaries for model-generated commands, using platform-native enforcement on each OS.
+
+| Sandbox Mode | Filesystem | Network | Use Case |
+|---|---|---|---|
+| `read-only` | Read only | Blocked | Safe exploration and analysis |
+| `workspace-write` | Read + write within workspace and `/tmp` | Blocked | Default for local development |
+| `danger-full-access` | Unrestricted | Unrestricted | Only in fully isolated environments |
+
+<Warning>
+  The `--dangerously-bypass-approvals-and-sandbox` flag (alias `--yolo`) disables both approvals and sandboxing entirely. Only use this inside dedicated sandbox VMs or disposable containers.
+</Warning>
+
+### How Sandbox and Approvals Work Together
+
+Sandboxing and approvals are independent controls. The sandbox defines technical boundaries (what Codex *can* do), while the approval policy decides when Codex must pause and ask (what Codex *may* do without confirmation). The `--full-auto` flag is a convenience preset that sets `sandbox_mode = "workspace-write"` and `approval_policy = "on-request"`.
+
+---
+
+## Tools & Capabilities
+
+### Built-in Tools
+
+Codex CLI includes several built-in tools that the model can invoke during a session:
+
+| Tool | Description |
+|---|---|
+| **File Read** | Read file contents from the workspace |
+| **File Write/Edit** | Create, modify, or delete files within sandbox boundaries |
+| **Shell Execution** | Run shell commands subject to sandbox and approval policies |
+| **Web Search** | Search the web using OpenAI-maintained indexes (cached by default, live with `--search`) |
+| **Code Review** | Analyze diffs against base branches, uncommitted changes, or specific commits |
+
+### MCP Integration
+
+Codex connects to external tools through Model Context Protocol servers. Servers are launched automatically when a session starts.
+
+```toml ~/.codex/config.toml
+[mcp_servers.github]
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+
+[mcp_servers.remote-tools]
+transport = "http"
+url = "https://mcp.example.com/stream"
+timeout = 30
+```
+
+**Managing MCP servers via CLI:**
+
+```bash
+# Add a stdio server
+codex mcp add my-server -- npx -y @scope/mcp-server
+
+# Add a remote HTTP server
+codex mcp add remote-server --url https://mcp.example.com/stream
+
+# List configured servers
+codex mcp list
+
+# Remove a server
+codex mcp remove my-server
+
+# OAuth login for authenticated servers
+codex mcp login my-server
+```
+
+Codex can also run as an MCP server itself, allowing other agents to use Codex as a tool.
+
+### Multimodal Support
+
+Codex accepts image inputs (PNG, JPEG) through two methods:
+
+```bash
+# Attach images via CLI flag
+codex -i screenshot.png "What's wrong with this UI?"
+
+# Multiple images
+codex --image img1.png,img2.jpg "Compare these designs"
+```
+
+Images can also be pasted directly into the interactive composer during a session.
+
+### Slash Commands
+
+| Command | Description |
+|---|---|
+| `/model` | Choose the active model and reasoning effort |
+| `/mode` | Switch approval mode (suggest, auto-edit, full-auto) |
+| `/permissions` | Set what Codex can do without asking |
+| `/plan` | Switch to plan mode |
+| `/review` | Review working tree, branch diffs, or specific commits |
+| `/diff` | Show Git diff including untracked files |
+| `/mention` | Attach a file to the conversation |
+| `/compact` | Summarize conversation to free tokens |
+| `/clear` | Clear terminal and start fresh |
+| `/new` | Start a new conversation in the same session |
+| `/resume` | Continue from a previous session |
+| `/fork` | Clone conversation into a new thread |
+| `/agent` | Switch the active agent thread |
+| `/init` | Generate AGENTS.md scaffold |
+| `/status` | Display session config and token usage |
+| `/mcp` | List configured MCP tools |
+| `/ps` | Show background terminals and recent output |
+| `/copy` | Copy the latest completed output |
+| `/quit` | Exit the CLI |
+
+### CLI Commands Reference
+
+| Command | Description |
+|---|---|
+| `codex [PROMPT]` | Launch interactive TUI, optionally with an initial prompt |
+| `codex exec [PROMPT]` | Run non-interactively without user prompts |
+| `codex exec resume` | Resume a non-interactive session |
+| `codex resume` | Continue an interactive session |
+| `codex fork` | Fork a previous session into a new thread |
+| `codex cloud [QUERY]` | Interact with cloud tasks |
+| `codex cloud list` | List recent cloud tasks |
+| `codex apply [TASK_ID]` | Apply diff from a cloud task to local repo |
+| `codex mcp add\|list\|remove` | Manage MCP servers |
+| `codex login` | Authenticate the CLI |
+| `codex logout` | Remove stored credentials |
+| `codex sandbox [COMMAND]` | Run a command under Codex sandbox policies |
+| `codex completion [SHELL]` | Generate shell completions (bash, zsh, fish, powershell, elvish) |
+| `codex features list\|enable\|disable` | Manage feature flags |
+| `codex app` | Launch Codex Desktop (macOS only) |
+
+### Key CLI Flags
+
+| Flag | Description |
+|---|---|
+| `--model, -m` | Override the configured model |
+| `--image, -i` | Attach image file(s) to the initial prompt |
+| `--sandbox, -s` | Select sandbox policy (`read-only`, `workspace-write`, `danger-full-access`) |
+| `--full-auto` | Shortcut for low-friction local automation |
+| `--oss` | Use local open-source model via Ollama |
+| `--profile, -p` | Load a named configuration profile |
+| `--config, -c` | Override config values (`key=value`, parsed as JSON when possible) |
+| `--cd, -C` | Set working directory |
+| `--add-dir` | Grant additional directories write access |
+| `--search` | Enable live web search instead of cached |
+| `--no-alt-screen` | Disable alternate screen mode |
+
+---
+
+## Model Configuration
+
+### Recommended Models
+
+| Model | Description |
+|---|---|
+| `gpt-5.4` | Default. Frontier model with strong coding, reasoning, and tool use |
+| `gpt-5.3-codex` | Industry-leading coding model for complex software engineering |
+| `gpt-5.3-codex-spark` | Near-instant real-time coding iteration (Pro users) |
+| `gpt-5.2-codex` | Powers Codex cloud and CLI; strong agentic coding |
+| `gpt-5-codex-mini` | Smaller, cost-effective alternative |
+
+### Local / Open-Source Models
+
+OpenAI provides two open-source models that run locally via Ollama:
+
+```bash
+# Use the --oss flag (requires Ollama running locally)
+codex --oss "refactor the database layer"
+
+# Or specify a model directly
+codex -m gpt-oss:120b "optimize the query parser"
+```
+
+Available open-source models: `gpt-oss:20b` (default for `--oss`) and `gpt-oss:120b`.
+
+### Custom Providers
+
+Point Codex at any provider compatible with the OpenAI Responses API:
+
+```toml
+[model_providers.my-provider]
+base_url = "https://api.my-provider.com/v1"
+
+# Then use it
+# codex -c model_provider="my-provider" -m "my-model" "do something"
+```
+
+Supported provider types include Azure OpenAI, Ollama, LM Studio, and Mistral.
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Codex CLI platform.
+
+### Platform Installation
+
+<Tabs>
+  <Tab title="npm">
+    ```bash
+    npm install -g @openai/codex
+    ```
+  </Tab>
+  <Tab title="macOS (Homebrew)">
+    ```bash
+    brew install --cask codex
+    ```
+  </Tab>
+</Tabs>
+
+Codex CLI is supported on macOS, Linux, and Windows.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **User config**: `~/.codex/config.toml`
+    - **Project config**: `<project>/.codex/config.toml`
+    - **Global instructions**: `~/.codex/AGENTS.md`
+    - **Project instructions**: `<project>/AGENTS.md`
+  </Tab>
+  <Tab title="Windows">
+    - **User config**: `%USERPROFILE%\.codex\config.toml`
+    - **Project config**: `<project>\.codex\config.toml`
+    - **Global instructions**: `%USERPROFILE%\.codex\AGENTS.md`
+    - **Project instructions**: `<project>\AGENTS.md`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, add a TOML table entry under `[mcp_servers]` in `config.toml`:
+
+```toml
+[mcp_servers.package-server-name]
+transport = "stdio"
+command = "npx"
+args = ["-y", "@scope/mcp-server-package"]
+timeout = 60
+```
+
+Alternatively, use the CLI:
+
+```bash
+codex mcp add package-server-name -- npx -y @scope/mcp-server-package
+```
+
+**Key considerations:**
+
+- Config format is **TOML**, not YAML or JSON
+- Each MCP server is a separate `[mcp_servers.<name>]` table; merge carefully to avoid overwriting existing entries
+- For remote servers, use `url` instead of `command`/`args` and set `transport = "http"`
+- Codex reads config at session start; changes require starting a new session
+- The `codex mcp add` CLI command is the safest way to register servers without manual TOML editing
+
+### Installing Project Instructions
+
+To install project-level instructions, write an `AGENTS.md` file to the project root. If an `AGENTS.md` already exists, the installer should append to it (or use `AGENTS.override.md` to take precedence without modifying the existing file).
+
+<Note>
+  Codex uses only the **first non-empty** instruction file at each directory level (checking `AGENTS.override.md` first, then `AGENTS.md`, then fallback filenames). To guarantee your instructions take effect, use `AGENTS.override.md` which always wins.
+</Note>
+
+### Config File Format
+
+Codex CLI uses **TOML** format for configuration. The installer must:
+
+1. Parse the existing `config.toml` file (if present)
+2. Deep-merge new configuration (particularly `[mcp_servers]` tables) into the existing structure
+3. Write the result back, preserving existing entries and comments where possible
+
+### Authentication
+
+Codex CLI authenticates via `codex login`, which supports:
+- Browser-based OAuth flow (default)
+- Device code flow (`--device-auth`)
+- API key via stdin (`--with-api-key`)
+
+For automated setups, pipe an API key: `echo "sk-..." | codex login --with-api-key`
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows, use `codex exec`:
+
+```bash
+# Run a one-shot task
+codex exec "run the test suite and report failures"
+
+# Read prompt from stdin
+echo "fix all lint errors" | codex exec -
+
+# Output the final message to a file
+codex exec -o result.txt "summarize the codebase"
+
+# Emit JSON events for programmatic consumption
+codex exec --json "analyze dependencies"
+
+# Skip Git repository check
+codex exec --skip-git-repo-check "process these files"
+```
+
+### Approval Mode Defaults
+
+An installer should be aware of Codex's approval modes for documentation and user guidance:
+
+| CLI Flag | `approval_policy` | `sandbox_mode` | Behavior |
+|---|---|---|---|
+| `--suggest` | `untrusted` | `read-only` | Every action requires approval |
+| `--auto-edit` | `on-request` | `workspace-write` | Edits auto-applied, commands need approval |
+| `--full-auto` | `on-request` | `workspace-write` | Commands also auto-executed within sandbox |
