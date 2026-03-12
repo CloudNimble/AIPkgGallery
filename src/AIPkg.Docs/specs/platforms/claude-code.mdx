@@ -1,0 +1,843 @@
+---
+title: Claude Code
+description: Platform specification for Claude Code, the agentic CLI coding tool by Anthropic
+icon: terminal
+---
+
+## Overview
+
+[Claude Code](https://code.claude.com/) is an agentic coding tool developed by **Anthropic** that lives in your terminal, understands your codebase, and helps you code faster through natural language commands. It can read and edit files, execute shell commands, search the web, manage git workflows, and orchestrate multi-step development tasks autonomously. Claude Code is available as a **CLI**, **VS Code extension**, **JetBrains plugin**, **Desktop app**, and in the **browser** at [claude.ai/code](https://claude.ai/code).
+
+Claude Code is built on the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) for extensibility, allowing it to connect to hundreds of external tools and data sources. It follows a Unix-composable design -- you can pipe data into it, run multiple instances in parallel, and integrate it into CI/CD pipelines.
+
+<Info>
+  Claude Code uses Anthropic's Claude models exclusively (Haiku, Sonnet, and Opus). It requires either a [Claude subscription](https://claude.com/pricing) (Pro, Max) or an [Anthropic API key](https://console.anthropic.com/). Enterprise deployments can use Amazon Bedrock, Google Vertex AI, or Microsoft Azure Foundry as providers.
+</Info>
+
+### Key Features
+
+| Feature | Description |
+|---|---|
+| **Agentic Execution** | Autonomously plans multi-step tasks, edits files across a project, runs commands, and verifies results |
+| **Built-in Tools** | Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, and more -- all accessible without plugins |
+| **MCP Integration** | Connects to external tools (GitHub, Jira, Sentry, databases) via MCP servers |
+| **CLAUDE.md** | Markdown-based project memory files that persist instructions, coding standards, and architecture decisions |
+| **Skills & Custom Commands** | Shareable, extensible skill definitions (`SKILL.md`) that package repeatable workflows |
+| **Hooks** | Shell commands, HTTP endpoints, or prompts that execute at lifecycle events (before/after tool use, session start/end) |
+| **Multi-Agent Orchestration** | Spawn multiple sub-agents for parallel work; a lead agent coordinates, assigns subtasks, and merges results |
+| **Git-Native Workflows** | Stages changes, writes commit messages, creates branches, opens PRs, and runs code review |
+| **IDE Extensions** | Native extensions for VS Code (and Cursor/Windsurf) and JetBrains IDEs with inline diffs and plan review |
+
+---
+
+## Configuration
+
+### File Locations
+
+Claude Code uses a hierarchical configuration system with JSON settings files and Markdown instruction files.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User settings | `~/.claude/settings.json` | Personal global settings for all projects |
+    | User instructions | `~/.claude/CLAUDE.md` | Global instructions applied to all projects |
+    | User skills | `~/.claude/skills/<name>/SKILL.md` | Personal skills available across all projects |
+    | User commands | `~/.claude/commands/<name>.md` | Personal slash commands (legacy, now skills) |
+    | MCP config | `~/.claude.json` | User-scoped and local-scoped MCP server definitions |
+    | Project settings | `<project>/.claude/settings.json` | Shared project settings (committed to repo) |
+    | Local settings | `<project>/.claude/settings.local.json` | Personal project settings (gitignored) |
+    | Project instructions | `<project>/CLAUDE.md` | Project-level instructions (committed to repo) |
+    | Directory instructions | `<project>/src/CLAUDE.md` | Directory-level overrides (for monorepos) |
+    | Project skills | `<project>/.claude/skills/<name>/SKILL.md` | Project-specific skills |
+    | Project MCP | `<project>/.mcp.json` | Project-scoped MCP server definitions (committed) |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User settings | `%USERPROFILE%\.claude\settings.json` | Personal global settings for all projects |
+    | User instructions | `%USERPROFILE%\.claude\CLAUDE.md` | Global instructions applied to all projects |
+    | MCP config | `%USERPROFILE%\.claude.json` | User-scoped and local-scoped MCP server definitions |
+    | Project settings | `<project>\.claude\settings.json` | Shared project settings |
+    | Local settings | `<project>\.claude\settings.local.json` | Personal project settings (gitignored) |
+    | Project instructions | `<project>\CLAUDE.md` | Project-level instructions |
+  </Tab>
+  <Tab title="Managed (Enterprise)">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Managed settings (macOS) | `/Library/Application Support/ClaudeCode/managed-settings.json` | IT-deployed organization-wide settings |
+    | Managed settings (Linux) | `/etc/claude-code/managed-settings.json` | IT-deployed organization-wide settings |
+    | Managed settings (Windows) | `C:\Program Files\ClaudeCode\managed-settings.json` | IT-deployed organization-wide settings |
+    | Managed MCP (macOS) | `/Library/Application Support/ClaudeCode/managed-mcp.json` | IT-deployed MCP server definitions |
+    | Managed MCP (Linux) | `/etc/claude-code/managed-mcp.json` | IT-deployed MCP server definitions |
+    | Managed MCP (Windows) | `C:\Program Files\ClaudeCode\managed-mcp.json` | IT-deployed MCP server definitions |
+  </Tab>
+</Tabs>
+
+### settings.json Structure
+
+<CodeGroup>
+
+```json Basic Configuration
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "model": "claude-sonnet-4-6",
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(git *)",
+      "Read(.)",
+      "Edit(src/**)"
+    ],
+    "ask": [
+      "Bash(sudo *)"
+    ],
+    "deny": [
+      "Bash(curl *)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ],
+    "defaultMode": "acceptEdits"
+  },
+  "env": {
+    "NODE_ENV": "development"
+  }
+}
+```
+
+```json Hooks Configuration
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/protect-files.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/auto-format.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Remember: use Bun, not npm.'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+```json Enterprise / Managed Configuration
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "model": "claude-sonnet-4-6",
+  "availableModels": ["sonnet", "haiku"],
+  "forceLoginMethod": "console",
+  "permissions": {
+    "deny": ["Bash(curl *)", "WebFetch"],
+    "defaultMode": "acceptEdits",
+    "disableBypassPermissionsMode": "disable"
+  },
+  "allowManagedPermissionRulesOnly": true,
+  "allowManagedHooksOnly": true,
+  "allowManagedMcpServersOnly": true,
+  "enableAllProjectMcpServers": false,
+  "sandbox": {
+    "enabled": true,
+    "network": {
+      "allowedDomains": ["github.com", "*.npmjs.org"]
+    },
+    "filesystem": {
+      "denyRead": ["~/.aws/credentials"]
+    }
+  },
+  "companyAnnouncements": [
+    "Use approved MCP servers only. See wiki for details."
+  ]
+}
+```
+
+</CodeGroup>
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):
+
+1. **Managed settings** (cannot be overridden by any other level)
+2. **Command-line arguments** (e.g., `--model`, `--allowedTools`)
+3. **Local project settings** (`.claude/settings.local.json`)
+4. **Shared project settings** (`.claude/settings.json`)
+5. **User settings** (`~/.claude/settings.json`)
+
+<Note>
+  Array settings (like `permissions.allow`) merge across scopes rather than replace. However, if a tool is denied at any level, no other level can override that denial.
+</Note>
+
+### The CLAUDE.md File
+
+`CLAUDE.md` is a Markdown file that Claude Code reads at the start of every session. It serves as persistent memory for coding standards, architecture decisions, common commands, and project-specific instructions.
+
+```markdown CLAUDE.md
+# Project: My App
+
+## Build & Test
+- Build: `pnpm build`
+- Test: `pnpm test`
+- Lint: `pnpm lint`
+
+## Code Style
+- Use TypeScript with strict mode
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+- Use named exports, not default exports
+
+## Architecture
+- packages/core: Shared business logic
+- packages/web: Next.js frontend
+- packages/api: Express backend
+
+## Warnings
+- Never modify the migration files directly
+- Always run tests before committing
+```
+
+**Placement locations:**
+
+| Scope | Location | Behavior |
+|---|---|---|
+| Global | `~/.claude/CLAUDE.md` | Applied to all projects for all sessions |
+| Project | `<project-root>/CLAUDE.md` | Loaded at session start, committed to repo |
+| Directory | `<subdirectory>/CLAUDE.md` | Loaded when working in that directory (monorepo support) |
+
+Claude Code merges `CLAUDE.md` files hierarchically -- deeper files take priority when instructions conflict. You can bootstrap a project-level file using the `/init` command, which analyzes your codebase to detect build systems, test frameworks, and code patterns.
+
+<Warning>
+  Keep `CLAUDE.md` focused on actionable instructions that solve real problems you have encountered. Each addition should address a concrete issue, not theoretical concerns. For extensive conventions, consider using skills or MCP-based knowledge retrieval instead.
+</Warning>
+
+---
+
+## Permissions and Approval Modes
+
+Claude Code provides fine-grained permission controls that determine what the agent can do autonomously versus what requires user confirmation.
+
+### Permission Rules
+
+Permission rules follow the format `ToolName` or `ToolName(specifier)` and are evaluated in order: **deny** first, then **ask**, then **allow** (first match wins).
+
+| Rule Pattern | Effect |
+|---|---|
+| `Bash` | All bash commands |
+| `Bash(npm run *)` | Commands starting with `npm run` |
+| `Bash(git commit:*)` | Git commit with any message |
+| `Read(./.env)` | Reading the `.env` file |
+| `Edit(src/**)` | Editing files under `src/` |
+| `Write` | All file writes |
+| `WebFetch(domain:example.com)` | Fetch requests to example.com |
+| `Agent(subagent-name)` | Specific sub-agent calls |
+| `Skill(deploy *)` | A specific skill invocation |
+
+<Warning>
+  Wildcards do not match shell operators (`&&`, `||`, `|`, `;`, `>`, `$()`). If a command contains these operators, an explicit approval is always required regardless of wildcard rules.
+</Warning>
+
+### Permission Modes
+
+Permission modes control the overall approval behavior and can be set in `settings.json` or cycled during a session with `Shift+Tab`:
+
+| Mode | Behavior |
+|---|---|
+| `acceptEdits` | File edits are auto-approved; other tools prompt for confirmation |
+| `askEdits` | All tool calls prompt for confirmation |
+| `bypassPermissions` | Everything is auto-approved (requires `--dangerously-skip-permissions` flag) |
+| `plan` | Read-only mode; Claude can analyze code and create plans but cannot make changes |
+| `dontAsk` | Anything not explicitly allowed is denied without prompting (useful for locked-down agents) |
+
+---
+
+## Tools and Capabilities
+
+### Built-in Tools
+
+Claude Code ships with a comprehensive set of built-in tools:
+
+| Tool | Description | Requires Permission |
+|---|---|---|
+| **Read** | Read files from the filesystem | No |
+| **Edit** | Perform exact string replacements in files | Yes |
+| **Write** | Create or overwrite files | Yes |
+| **Bash** | Execute shell commands | Yes |
+| **Grep** | Content search powered by ripgrep (regex support) | No |
+| **Glob** | Fast file pattern matching | No |
+| **LS** | List directory contents | No |
+| **WebFetch** | Fetch and process web content | Yes |
+| **WebSearch** | Search the web | Yes |
+| **Agent** | Launch specialized sub-agents for complex tasks | No |
+| **NotebookEdit** | Edit Jupyter notebook cells | Yes |
+| **NotebookRead** | Read Jupyter notebook contents | No |
+| **TodoWrite** | Manage structured task lists | No |
+| **Skill** | Invoke custom skills | Yes |
+
+<Info>
+  Claude Code prefers its dedicated tools over shell equivalents: use Grep instead of `grep`/`rg`, Glob instead of `find`, Read instead of `cat`/`head`/`tail`, Edit instead of `sed`/`awk`, and Write instead of `echo >`.
+</Info>
+
+### MCP Servers
+
+Claude Code connects to external tools and data sources through the Model Context Protocol. MCP servers can be configured at three scope levels:
+
+| Scope | Storage | Who can access |
+|---|---|---|
+| **Local** (default) | `~/.claude.json` under project path | You, in this project only |
+| **Project** | `<project>/.mcp.json` | All collaborators (committed to repo) |
+| **User** | `~/.claude.json` | You, across all projects |
+
+<Tabs>
+  <Tab title="CLI (claude mcp add)">
+    ```bash
+    # Add a remote HTTP server
+    claude mcp add --transport http notion https://mcp.notion.com/mcp
+
+    # Add a local stdio server with env vars
+    claude mcp add --transport stdio --env API_KEY=your-key airtable \
+      -- npx -y airtable-mcp-server
+
+    # Add with authentication header
+    claude mcp add --transport http secure-api https://api.example.com/mcp \
+      --header "Authorization: Bearer your-token"
+
+    # Add to user scope (available in all projects)
+    claude mcp add --transport http github --scope user \
+      https://api.githubcopilot.com/mcp/
+
+    # Add to project scope (shared via .mcp.json)
+    claude mcp add --transport http paypal --scope project \
+      https://mcp.paypal.com/mcp
+
+    # List, get details, remove
+    claude mcp list
+    claude mcp get github
+    claude mcp remove github
+    ```
+  </Tab>
+  <Tab title="JSON (claude mcp add-json)">
+    ```bash
+    # Add from JSON configuration
+    claude mcp add-json weather-api '{"type":"http","url":"https://api.weather.com/mcp"}'
+
+    # Stdio server with JSON
+    claude mcp add-json local-db '{"type":"stdio","command":"npx","args":["-y","@bytebase/dbhub","--dsn","postgresql://user:pass@host:5432/db"]}'
+    ```
+  </Tab>
+  <Tab title=".mcp.json (Project)">
+    ```json
+    {
+      "mcpServers": {
+        "github": {
+          "type": "http",
+          "url": "https://api.githubcopilot.com/mcp/"
+        },
+        "database": {
+          "command": "npx",
+          "args": ["-y", "@bytebase/dbhub", "--dsn", "${DB_CONNECTION_STRING}"],
+          "env": {
+            "DB_CONNECTION_STRING": "${DB_URL:-postgresql://localhost:5432/mydb}"
+          }
+        }
+      }
+    }
+    ```
+
+    Environment variables use `${VAR}` syntax with optional defaults via `${VAR:-default}`.
+  </Tab>
+</Tabs>
+
+### Transport Types
+
+| Type | Description | Use Case |
+|---|---|---|
+| **http** | Streamable HTTP (recommended) | Cloud-based MCP servers |
+| **sse** | Server-Sent Events (deprecated) | Legacy remote servers |
+| **stdio** | Local process over standard I/O | Tools needing direct system access |
+
+---
+
+## Hooks System
+
+Hooks are user-defined shell commands, HTTP endpoints, or LLM prompts that execute automatically at specific points in Claude Code's lifecycle.
+
+### Hook Events
+
+| Event | When it fires | Matcher filters on |
+|---|---|---|
+| `SessionStart` | Session begins or resumes | How started: `startup`, `resume`, `clear`, `compact` |
+| `UserPromptSubmit` | User submits a prompt | No matcher support |
+| `PreToolUse` | Before a tool call executes (can block it) | Tool name: `Bash`, `Edit\|Write`, `mcp__.*` |
+| `PermissionRequest` | Permission dialog appears | Tool name |
+| `PostToolUse` | After a tool call succeeds | Tool name |
+| `PostToolUseFailure` | After a tool call fails | Tool name |
+| `SubagentStart` | Sub-agent is spawned | Agent type |
+| `SubagentStop` | Sub-agent finishes | Agent type |
+| `Stop` | Claude finishes responding | No matcher support |
+| `PreCompact` | Before context compaction | `manual`, `auto` |
+| `InstructionsLoaded` | CLAUDE.md or rules file loaded | No matcher support |
+| `ConfigChange` | Config file changes during session | Config source |
+| `SessionEnd` | Session terminates | Reason: `clear`, `logout`, etc. |
+| `Notification` | Claude needs attention | Notification type |
+| `TaskCompleted` | Task marked as completed | No matcher support |
+| `WorktreeCreate` | Git worktree created | No matcher support |
+| `WorktreeRemove` | Git worktree removed | No matcher support |
+
+### Hook Configuration
+
+Hooks are defined in `settings.json` files at any scope (user, project, or local):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/block-rm.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/auto-lint.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Hook Exit Codes and Output
+
+| Exit Code | Effect |
+|---|---|
+| `0` | Action proceeds normally |
+| `2` | Action is **blocked** (stderr message sent to Claude as feedback) |
+| Any other | Action proceeds; stderr is logged but not shown to Claude |
+
+Hooks can return structured JSON to stdout for fine-grained control:
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Destructive command blocked by hook"
+  }
+}
+```
+
+<Info>
+  Environment variables available in hooks include `CLAUDE_PROJECT_DIR` (project root), `CLAUDE_CODE_REMOTE` (true for web sessions), and `CLAUDE_ENV_FILE` (for persisting variables in SessionStart hooks). Hook timeout defaults to 10 minutes, configurable per hook with the `timeout` field (in seconds).
+</Info>
+
+---
+
+## Model Configuration
+
+### Supported Models
+
+Claude Code uses Anthropic's Claude model family. You can select a model via settings, CLI flag, or environment variable.
+
+| Model Class | Default Model ID | Use Case |
+|---|---|---|
+| **Sonnet** | `claude-sonnet-4-6` | Default for most tasks (balanced speed and capability) |
+| **Opus** | `claude-opus-4-6` | Complex reasoning and difficult tasks |
+| **Haiku** | `claude-haiku-4-5` | Fast, lightweight tasks |
+
+### Setting the Model
+
+<CodeGroup>
+
+```json settings.json
+{
+  "model": "claude-sonnet-4-6",
+  "availableModels": ["sonnet", "haiku", "opus"]
+}
+```
+
+```bash CLI Flag
+claude --model opus
+claude --model claude-sonnet-4-6
+```
+
+```bash Environment Variable
+ANTHROPIC_MODEL=claude-opus-4-6 claude
+```
+
+</CodeGroup>
+
+### Cloud Provider Overrides
+
+For enterprise deployments using Bedrock, Vertex AI, or Azure Foundry:
+
+```json
+{
+  "modelOverrides": {
+    "claude-sonnet-4-6": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-6",
+    "claude-opus-4-6": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-6"
+  }
+}
+```
+
+| Provider | Environment Variable | Authentication |
+|---|---|---|
+| **Amazon Bedrock** | `CLAUDE_CODE_USE_BEDROCK=1` | AWS credentials (SSO, IAM, profile) |
+| **Google Vertex AI** | `CLAUDE_CODE_USE_VERTEX=1` | Google Cloud credentials |
+| **Azure Foundry** | `CLAUDE_CODE_USE_FOUNDRY=1` | `ANTHROPIC_FOUNDRY_API_KEY` or `ANTHROPIC_FOUNDRY_BASE_URL` |
+
+---
+
+## CLI Commands
+
+### Core Commands
+
+| Command | Description |
+|---|---|
+| `claude` | Start an interactive session |
+| `claude "query"` | Start with an initial prompt |
+| `claude -p "query"` | Print-mode: query then exit (for scripting) |
+| `cat file \| claude -p "query"` | Process piped content |
+| `claude -c` | Continue most recent conversation |
+| `claude -r "session" "query"` | Resume a session by ID or name |
+| `claude update` | Update to the latest version |
+| `claude auth login` | Sign in to your Anthropic account |
+| `claude auth logout` | Log out |
+| `claude auth status` | Show authentication status as JSON |
+| `claude agents` | List all configured sub-agents |
+| `claude mcp` | Configure MCP servers |
+| `claude remote-control` | Start a remote control session |
+
+### Key CLI Flags
+
+| Flag | Description |
+|---|---|
+| `--model` | Set model for the session (`sonnet`, `opus`, `haiku`, or full model ID) |
+| `--allowedTools` | Tools that execute without prompting |
+| `--disallowedTools` | Tools removed from context entirely |
+| `--permission-mode` | Start in a permission mode (`plan`, `acceptEdits`, `bypassPermissions`) |
+| `--system-prompt` | Replace the entire system prompt |
+| `--append-system-prompt` | Append to the default system prompt |
+| `--add-dir` | Add additional working directories |
+| `--mcp-config` | Load MCP servers from a JSON file |
+| `--max-turns` | Limit agentic turns (print mode only) |
+| `--max-budget-usd` | Maximum dollar spend before stopping |
+| `--output-format` | Output format: `text`, `json`, `stream-json` |
+| `--json-schema` | Get validated JSON output matching a schema |
+| `--worktree`, `-w` | Start in an isolated git worktree |
+| `--dangerously-skip-permissions` | Skip all permission prompts |
+| `--agents` | Define custom sub-agents via JSON |
+
+### Interactive Session Commands (Slash Commands)
+
+Within an active session, these built-in commands are available:
+
+| Command | Description |
+|---|---|
+| `/help` | Display help information |
+| `/init` | Generate a starter `CLAUDE.md` for your project |
+| `/compact [focus]` | Compact conversation history (optionally with a focus area) |
+| `/clear` | Clear conversation history entirely |
+| `/model` | Switch the active model |
+| `/permissions` | View and manage permission rules |
+| `/mcp` | View MCP server status, authenticate with OAuth servers |
+| `/hooks` | View and manage configured hooks |
+| `/context` | Show what is loaded into context |
+| `/status` | Show active settings and their origins |
+| `/cost` | Show token usage and cost for the session |
+| `/usage` | Show plan usage |
+| `/teleport` | Resume a web session in local terminal |
+| `/desktop` | Hand off session to the Desktop app |
+| `/fast` | Toggle fast mode (uses Haiku for simpler tasks) |
+| `/bug` | Report a bug |
+
+### Bundled Skill Commands
+
+| Command | Description |
+|---|---|
+| `/simplify` | Review recent changes for code reuse, quality, and efficiency; then fix issues |
+| `/batch <instruction>` | Orchestrate large-scale changes across a codebase in parallel using git worktrees |
+| `/debug [description]` | Troubleshoot the current session by reading debug logs |
+| `/loop [interval] <prompt>` | Run a prompt repeatedly on an interval |
+| `/claude-api` | Load Claude API reference material for your project's language |
+
+---
+
+## Skills and Custom Commands
+
+Skills extend Claude Code's capabilities with reusable instruction sets. Each skill is a directory containing a `SKILL.md` file.
+
+### Skill Locations
+
+| Scope | Path |
+|---|---|
+| Personal | `~/.claude/skills/<skill-name>/SKILL.md` |
+| Project | `.claude/skills/<skill-name>/SKILL.md` |
+| Plugin | `<plugin>/skills/<skill-name>/SKILL.md` |
+| Enterprise | Via managed settings |
+
+### Skill Structure
+
+```yaml SKILL.md
+---
+name: review-pr
+description: Review a pull request for code quality and security issues
+disable-model-invocation: true
+context: fork
+agent: Explore
+allowed-tools: Read, Grep, Glob, Bash(gh *)
+---
+
+Review pull request $ARGUMENTS:
+
+1. Fetch the PR diff with `gh pr diff $ARGUMENTS`
+2. Analyze changed files for code quality issues
+3. Check for security vulnerabilities
+4. Verify test coverage
+5. Provide a summary with actionable feedback
+```
+
+<Note>
+  Custom commands in `.claude/commands/` still work but have been merged into the skills system. Skills add optional features like supporting file directories, frontmatter for invocation control, and automatic context loading.
+</Note>
+
+---
+
+## Installation
+
+<Tabs>
+  <Tab title="Native Install (Recommended)">
+    **macOS / Linux / WSL:**
+    ```bash
+    curl -fsSL https://claude.ai/install.sh | bash
+    ```
+
+    **Windows PowerShell:**
+    ```powershell
+    irm https://claude.ai/install.ps1 | iex
+    ```
+
+    **Windows CMD:**
+    ```batch
+    curl -fsSL https://claude.ai/install.cmd -o install.cmd && install.cmd && del install.cmd
+    ```
+
+    <Info>
+      Native installations automatically update in the background. Windows requires [Git for Windows](https://git-scm.com/downloads/win) installed first.
+    </Info>
+  </Tab>
+  <Tab title="Homebrew (macOS)">
+    ```bash
+    brew install --cask claude-code
+    ```
+
+    <Warning>
+      Homebrew installations do not auto-update. Run `brew upgrade claude-code` periodically.
+    </Warning>
+  </Tab>
+  <Tab title="WinGet (Windows)">
+    ```powershell
+    winget install Anthropic.ClaudeCode
+    ```
+
+    <Warning>
+      WinGet installations do not auto-update. Run `winget upgrade Anthropic.ClaudeCode` periodically.
+    </Warning>
+  </Tab>
+  <Tab title="npm">
+    ```bash
+    npm install -g @anthropic-ai/claude-code
+    ```
+  </Tab>
+</Tabs>
+
+Then start Claude Code in any project:
+
+```bash
+cd your-project
+claude
+```
+
+You will be prompted to log in on first use.
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Claude Code platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **User settings**: `~/.claude/settings.json`
+    - **User instructions**: `~/.claude/CLAUDE.md`
+    - **User MCP config**: `~/.claude.json`
+    - **User skills**: `~/.claude/skills/<name>/SKILL.md`
+    - **Project settings**: `<project>/.claude/settings.json`
+    - **Local settings**: `<project>/.claude/settings.local.json`
+    - **Project instructions**: `<project>/CLAUDE.md`
+    - **Project MCP**: `<project>/.mcp.json`
+    - **Project skills**: `<project>/.claude/skills/<name>/SKILL.md`
+  </Tab>
+  <Tab title="Windows">
+    - **User settings**: `%USERPROFILE%\.claude\settings.json`
+    - **User instructions**: `%USERPROFILE%\.claude\CLAUDE.md`
+    - **User MCP config**: `%USERPROFILE%\.claude.json`
+    - **Project settings**: `<project>\.claude\settings.json`
+    - **Project instructions**: `<project>\CLAUDE.md`
+    - **Project MCP**: `<project>\.mcp.json`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, an installer has three options:
+
+<Tabs>
+  <Tab title="CLI Command">
+    The safest approach is to use the `claude mcp add` or `claude mcp add-json` commands:
+
+    ```bash
+    # Add a stdio server
+    claude mcp add --transport stdio --scope user \
+      --env API_KEY=value \
+      package-server -- npx -y @scope/mcp-server-package
+
+    # Add from JSON
+    claude mcp add-json package-server \
+      '{"type":"stdio","command":"npx","args":["-y","@scope/mcp-server-package"],"env":{"API_KEY":"value"}}' \
+      --scope user
+    ```
+  </Tab>
+  <Tab title="Project .mcp.json">
+    Write or merge into `<project>/.mcp.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "${API_KEY}"
+          }
+        }
+      }
+    }
+    ```
+
+    Environment variables use `${VAR}` syntax with optional defaults: `${VAR:-default}`.
+  </Tab>
+  <Tab title="User ~/.claude.json">
+    Merge the server definition into `~/.claude.json` under the `mcpServers` key:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "type": "stdio",
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "value"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+**Key considerations:**
+
+- Use `claude mcp add` when possible -- it handles JSON escaping and scope correctly
+- For `.mcp.json` files, merge carefully; do not overwrite existing server entries
+- Claude Code prompts for user approval before using project-scoped servers from `.mcp.json` (use `enableAllProjectMcpServers: true` in settings to auto-approve)
+- MCP server scope precedence: local > project > user
+
+### Installing Project Instructions
+
+To install project-level instructions, write or append to `<project>/CLAUDE.md`. If the file already exists, the installer should append to it.
+
+Claude Code merges `CLAUDE.md` files hierarchically from all levels (global, project root, subdirectories), so appending to an existing file is safe.
+
+### Installing Permission Rules
+
+To pre-configure tool permissions, merge rules into `settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx @scope/mcp-server-package *)",
+      "mcp__package-server"
+    ]
+  }
+}
+```
+
+The permission rule `mcp__<server-name>` allows all tools from a specific MCP server without per-call approval.
+
+### Config File Format
+
+Claude Code uses standard JSON for `settings.json` files and a custom JSON format for `~/.claude.json` (MCP config). The installer must:
+
+1. Parse the existing JSON file (if it exists)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back, preserving existing entries
+
+The `permissions` arrays are the primary integration point for tool approval, while `~/.claude.json` and `.mcp.json` are the integration points for MCP servers.
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows, use print mode:
+
+```bash
+# Run a one-shot task
+claude -p "Run the test suite and report results"
+
+# With a budget limit
+claude -p --max-budget-usd 5.00 "Review all changed files for security issues"
+
+# With structured JSON output
+claude -p --output-format json "List all TODO comments in the codebase"
+
+# With a JSON schema for validated output
+claude -p --json-schema '{"type":"object","properties":{"issues":{"type":"array"}}}' \
+  "Find all lint errors"
+
+# Skip permissions (use with caution)
+claude -p --dangerously-skip-permissions "Fix all TypeScript errors"
+```
