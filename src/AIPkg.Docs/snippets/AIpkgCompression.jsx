@@ -66,7 +66,7 @@ export const AIpkgCompression = () => {
             }}>
               <div style={{
                 display: 'inline-block', fontFamily: "'JetBrains Mono', monospace",
-                fontSize: '0.62rem', fontWeight: 500, letterSpacing: '0.08em',
+                fontSize: '0.9rem', fontWeight: 500, letterSpacing: '0.08em',
                 color: eco.solverColor, background: `${eco.solverColor}12`,
                 border: `1px solid ${eco.solverColor}30`, borderRadius: 6,
                 padding: '3px 10px', marginBottom: 18, alignSelf: 'flex-start',
@@ -85,7 +85,7 @@ export const AIpkgCompression = () => {
                 color: 'rgba(238,237,245,0.8)', letterSpacing: '-0.02em', lineHeight: 1, marginBottom: 4,
               }}>{eco.stat}</div>
               <div style={{
-                fontFamily: "'JetBrains Mono', monospace", fontSize: '0.62rem', fontWeight: 500,
+                fontFamily: "'JetBrains Mono', monospace", fontSize: '0.8rem', fontWeight: 500,
                 textTransform: 'uppercase', letterSpacing: '0.12em', color: 'rgba(238,237,245,0.2)',
               }}>{eco.statLabel}</div>
             </div>

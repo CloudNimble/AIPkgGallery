@@ -140,19 +140,19 @@ export const AIpkgFragmentation = () => {
           <div className="frag-box-label" style={{ textAlign: 'center', marginTop: 28 }}>
             <div style={{
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 'clamp(0.9rem, 2vw, 1.15rem)',
+              fontSize: 'clamp(1rem, 2.2vw, 1.3rem)',
               fontWeight: 500, color: '#C279F0',
               letterSpacing: '0.02em', marginBottom: 16,
             }}>your-plugin.1.2.0.aipkg</div>
             <div style={{
               fontFamily: "'Poppins', sans-serif",
-              fontSize: 'clamp(1rem, 2.2vw, 1.4rem)',
+              fontSize: 'clamp(1.2rem, 3vw, 1.8rem)',
               fontWeight: 800, letterSpacing: '-0.03em',
-              color: '#EEEDF5', lineHeight: 1.2, marginBottom: 8,
+              color: '#EEEDF5', lineHeight: 1.2, marginBottom: 10,
             }}>One package. All platforms.</div>
             <div style={{
               fontFamily: "'Poppins', sans-serif",
-              fontSize: 'clamp(0.8rem, 1.5vw, 0.95rem)',
+              fontSize: 'clamp(0.9rem, 1.8vw, 1.1rem)',
               fontWeight: 400, color: 'rgba(238,237,245,0.35)',
               lineHeight: 1.5,
             }}>28 config files become one universal archive.</div>

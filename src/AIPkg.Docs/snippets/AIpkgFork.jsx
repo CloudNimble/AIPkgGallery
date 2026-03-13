@@ -130,7 +130,7 @@ export const AIpkgFork = () => {
         }}>
           <div style={{
             fontFamily: "'Poppins', sans-serif",
-            fontSize: '0.82rem', fontWeight: 500,
+            fontSize: '1.64rem', fontWeight: 500,
             color: 'rgba(238,237,245,0.2)', letterSpacing: '0.01em',
           }}>
             AI{'\u2022'}Pkg is open source. The registry is for everyone.
