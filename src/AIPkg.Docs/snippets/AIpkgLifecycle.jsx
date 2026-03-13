@@ -46,7 +46,7 @@ export const AIpkgLifecycle = () => {
         {/* Eyebrow */}
         <div className="lifecycle-eyebrow" style={{
           fontFamily: "'JetBrains Mono', monospace",
-          fontSize: '0.68rem', fontWeight: 500, textTransform: 'uppercase',
+          fontSize: '0.8rem', fontWeight: 500, textTransform: 'uppercase',
           letterSpacing: '0.18em', color: 'rgba(238,237,245,0.25)', marginBottom: 20,
         }}>Full lifecycle security</div>
 

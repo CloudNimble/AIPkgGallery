@@ -46,7 +46,7 @@ export const AIpkgFork = () => {
 
         {/* Logo at center */}
         <div className="fork-logo" style={{
-          position: 'absolute', top: '50%', left: '50%',
+          position: 'absolute', top: 'calc(50% - 50px)', left: '50%',
           transform: 'translate(-50%, -50%)', zIndex: 10,
         }}>
           <div style={{
@@ -69,7 +69,7 @@ export const AIpkgFork = () => {
           <div className="fork-left" style={{ textAlign: 'right', padding: '48px 40px' }}>
             <div style={{
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '0.65rem', fontWeight: 500, textTransform: 'uppercase',
+              fontSize: '0.8rem', fontWeight: 500, textTransform: 'uppercase',
               letterSpacing: '0.18em', color: '#7840AE', marginBottom: 20,
             }}>For Publishers</div>
             <h3 style={{
@@ -98,7 +98,7 @@ export const AIpkgFork = () => {
           <div className="fork-right" style={{ textAlign: 'left', padding: '48px 40px' }}>
             <div style={{
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '0.65rem', fontWeight: 500, textTransform: 'uppercase',
+              fontSize: '0.8rem', fontWeight: 500, textTransform: 'uppercase',
               letterSpacing: '0.18em', color: '#0E8077', marginBottom: 20,
             }}>For Platforms</div>
             <h3 style={{

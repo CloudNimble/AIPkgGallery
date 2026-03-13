@@ -38,7 +38,7 @@ export const AIpkgTrust = () => {
             }} />
             <span style={{
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '0.68rem', fontWeight: 500, textTransform: 'uppercase',
+              fontSize: '0.8rem', fontWeight: 500, textTransform: 'uppercase',
               letterSpacing: '0.16em', color: '#B32C38',
             }}>Supply Chain Security</span>
           </div>

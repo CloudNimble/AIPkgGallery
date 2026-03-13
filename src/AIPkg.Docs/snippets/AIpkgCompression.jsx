@@ -43,7 +43,7 @@ export const AIpkgCompression = () => {
 
         <div className="comp-eyebrow" style={{
           fontFamily: "'JetBrains Mono', monospace",
-          fontSize: '0.7rem', fontWeight: 500, textTransform: 'uppercase',
+          fontSize: '0.8rem', fontWeight: 500, textTransform: 'uppercase',
           letterSpacing: '0.18em', color: 'rgba(238,237,245,0.25)', marginBottom: 20,
         }}>A proven recipe</div>
 
