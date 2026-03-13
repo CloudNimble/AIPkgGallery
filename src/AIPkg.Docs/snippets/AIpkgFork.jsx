@@ -50,12 +50,12 @@ export const AIpkgFork = () => {
           transform: 'translate(-50%, -50%)', zIndex: 10,
         }}>
           <div style={{
-            width: 52, height: 52, borderRadius: '50%',
+            width: 104, height: 104, borderRadius: '50%',
             background: '#06060A', border: '1px solid rgba(238,237,245,0.1)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
-            <img src="/images/aipkg.boxonly.svg" alt=""
-              style={{ width: 28, height: 28 }} />
+            <img src="/images/aipkg.icon.svg" alt=""
+              style={{ width: 80, height: 80 }} />
           </div>
         </div>
 

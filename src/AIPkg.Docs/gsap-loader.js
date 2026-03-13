@@ -22,7 +22,7 @@
     if (!document.querySelector('.custom-mode')) return;
 
     var sections = document.querySelectorAll('.custom-mode section');
-    if (sections.length < 6) return;
+    if (sections.length < 7) return;
 
     // ═══════════════════════════════════════════
     // Section 1: Statement (Hero)
@@ -261,9 +261,39 @@
     }
 
     // ═══════════════════════════════════════════
-    // Section 6: Fork (Publisher / Platform split)
+    // Section 6: Fire Flower (Empowerment beat)
     // ═══════════════════════════════════════════
-    var forkSection = sections[5];
+    var ffSection = sections[5];
+    if (ffSection) {
+      gsap.set('.ff-line', { opacity: 0, y: 30 });
+
+      var ffTl = gsap.timeline({
+        scrollTrigger: {
+          trigger: ffSection,
+          start: 'top top',
+          end: '+=150%',
+          pin: true,
+          scrub: 1,
+          anticipatePin: 1,
+        },
+      });
+
+      // Three lines stagger in
+      ffTl.to('.ff-line-1', { opacity: 1, y: 0, duration: 0.12, ease: 'power2.out' }, 0.05);
+      ffTl.to('.ff-line-2', { opacity: 1, y: 0, duration: 0.12, ease: 'power2.out' }, 0.20);
+      ffTl.to('.ff-line-3', { opacity: 1, y: 0, duration: 0.12, ease: 'power2.out' }, 0.35);
+
+      // Hold
+      ffTl.to({}, { duration: 0.30 });
+
+      // Exit
+      ffTl.to('.ff-content', { opacity: 0, scale: 0.92, duration: 0.15, ease: 'power1.in' }, 0.80);
+    }
+
+    // ═══════════════════════════════════════════
+    // Section 7: Fork (Publisher / Platform split)
+    // ═══════════════════════════════════════════
+    var forkSection = sections[6];
     if (forkSection) {
       gsap.set('.fork-divider', { scaleY: 0, transformOrigin: 'center' });
       gsap.set('.fork-logo', { opacity: 0, scale: 0.5 });
