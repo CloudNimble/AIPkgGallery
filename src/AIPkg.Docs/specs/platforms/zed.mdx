@@ -16,36 +16,12 @@ icon: code
 
 Zed uses a layered configuration system with JSON files at global and project levels.
 
-<CodeGroup>
-
-```json Global Settings (~/.config/zed/settings.json)
-{
-  "theme": "One Dark",
-  "buffer_font_size": 14,
-  "agent": {
-    "default_model": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-5"
-    }
-  }
-}
-```
-
-```json Project Settings (<project>/.zed/settings.json)
-{
-  "tab_size": 4,
-  "formatter": "prettier",
-  "context_servers": {
-    "my-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@my/mcp-server"],
-      "env": {}
-    }
-  }
-}
-```
-
-</CodeGroup>
+| File | Location | Purpose |
+|---|---|---|
+| `settings.json` | `~/.config/zed/settings.json` | Global user settings (includes `context_servers`, `agent` keys) |
+| `keymap.json` | `~/.config/zed/keymap.json` | Custom keybindings |
+| `settings.json` | `<project>/.zed/settings.json` | Project-specific settings (includes `context_servers`) |
+| `.rules` | `<project>/.rules` | Project-level AI rules |
 
 <Note>
   On Linux, if `XDG_CONFIG_HOME` is set, the global settings path becomes `$XDG_CONFIG_HOME/zed/settings.json` instead of `~/.config/zed/settings.json`.
@@ -58,18 +34,6 @@ Settings are resolved with the following precedence (highest to lowest):
 1. **Nested project `.zed/settings.json`** closest to the edited file
 2. **Project root `.zed/settings.json`**
 3. **Global user `~/.config/zed/settings.json`**
-
-Within project settings, nested `.zed/settings.json` files closer to the file being edited take higher precedence.
-
-### Key Configuration Files
-
-| File | Location | Purpose |
-|---|---|---|
-| `settings.json` | `~/.config/zed/settings.json` | Global user settings |
-| `keymap.json` | `~/.config/zed/keymap.json` | Custom keybindings |
-| `settings.json` | `<project>/.zed/settings.json` | Project-specific settings |
-| `.rules` | `<project>/.rules` | Project-level AI rules |
-| `.editorconfig` | `<project>/.editorconfig` | Per-file editor settings (EditorConfig standard) |
 
 ### The `.zed/` Directory
 
