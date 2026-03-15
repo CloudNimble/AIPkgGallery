@@ -1,0 +1,414 @@
+---
+title: 'Junie'
+description: 'Platform specification for Junie, JetBrains'' AI coding agent'
+icon: 'robot'
+---
+
+## Overview
+
+[Junie](https://www.jetbrains.com/junie/) is an AI coding agent by **JetBrains** that operates autonomously inside JetBrains IDEs and as a standalone CLI, reading task descriptions, building multi-step plans, executing code changes, and verifying results using the IDE's inspection and test tooling.[^1] Extensibility is via **MCP servers**, **Agent Skills** (`SKILL.md` workflow definitions), **Custom Slash Commands**, **Guidelines** (`AGENTS.md` / `.junie/guidelines.md`), and an **Action Allowlist** for permission control.
+
+---
+
+## Configuration
+
+### File Locations
+
+Junie uses a layered configuration system spanning project-scoped and user-scoped files.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Guidelines (preferred) | `<project>/.junie/AGENTS.md` or `<project>/AGENTS.md` | Project-level agent instructions [^2] |
+    | Guidelines (legacy) | `<project>/.junie/guidelines.md` | Legacy single-file guidelines [^2] |
+    | Guidelines directory (legacy) | `<project>/.junie/guidelines/` | Legacy directory-based guidelines [^2] |
+    | MCP config (project) | `<project>/.junie/mcp/mcp.json` | Project-scoped MCP server definitions [^3] |
+    | MCP config (user) | `~/.junie/mcp/mcp.json` | User-scoped MCP server definitions [^3] |
+    | Action allowlist | `~/.junie/allowlist.json` | Permitted actions that skip approval [^5] |
+    | Project skills | `<project>/.junie/skills/<name>/SKILL.md` | Project-specific agent skills [^4] |
+    | User skills | `~/.junie/skills/<name>/SKILL.md` | Personal skills available across all projects [^4] |
+    | Project commands | `<project>/.junie/commands/<name>.md` | Project-specific custom slash commands [^7] |
+    | User commands | `~/.junie/commands/<name>.md` | Personal custom slash commands [^7] |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Guidelines (preferred) | `<project>\.junie\AGENTS.md` or `<project>\AGENTS.md` | Project-level agent instructions [^2] |
+    | Guidelines (legacy) | `<project>\.junie\guidelines.md` | Legacy single-file guidelines [^2] |
+    | MCP config (project) | `<project>\.junie\mcp\mcp.json` | Project-scoped MCP server definitions [^3] |
+    | MCP config (user) | `%USERPROFILE%\.junie\mcp\mcp.json` | User-scoped MCP server definitions [^3] |
+    | Action allowlist | `%USERPROFILE%\.junie\allowlist.json` | Permitted actions that skip approval [^5] |
+    | Project skills | `<project>\.junie\skills\<name>\SKILL.md` | Project-specific agent skills [^4] |
+    | User skills | `%USERPROFILE%\.junie\skills\<name>\SKILL.md` | Personal skills available across all projects [^4] |
+    | Project commands | `<project>\.junie\commands\<name>.md` | Project-specific custom slash commands [^7] |
+    | User commands | `%USERPROFILE%\.junie\commands\<name>.md` | Personal custom slash commands [^7] |
+  </Tab>
+  <Tab title="IDE Settings">
+    Configuration in the JetBrains IDE is accessible via **Settings | Tools | Junie**, with sub-pages for:
+
+    - **Project Settings** -- Guidelines path, custom configuration [^6]
+    - **MCP Settings** -- MCP server management at project and global levels [^9]
+    - **Action Allowlist** -- Manage permitted actions and command patterns [^5]
+  </Tab>
+</Tabs>
+
+### Guidelines Discovery Order
+
+When Junie CLI starts a task, it searches for guidelines in the following priority order:[^2]
+
+1. `.junie/AGENTS.md` (project root)
+2. `AGENTS.md` (project root)
+3. `.junie/guidelines.md` or `.junie/guidelines/` folder (legacy formats, still supported)
+
+<Note>
+  You can also specify a custom path to the guidelines file in the IDE via **Settings | Tools | Junie | Project Settings**.[^6]
+</Note>
+
+---
+
+## Custom Instructions
+
+### AGENTS.md / Guidelines
+
+`AGENTS.md` is an open file format for guiding coding agents. It is a standard Markdown file with headings, lists, and plain text that agents parse and add to the prompt context.[^2] Junie CLI reads guidelines from this file and applies the context to every task it works on.[^2]
+
+```markdown AGENTS.md
+# Project Guidelines
+
+## Tech Stack
+- TypeScript with strict mode
+- React 19 with server components
+- PostgreSQL via Drizzle ORM
+
+## Testing
+- Use Vitest for unit tests
+- Run `pnpm test` before committing
+
+## Code Style
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+```
+
+**Recommended content includes:**[^2]
+
+- Front-end technologies and testing frameworks in use
+- Project-specific context such as tech stacks, conventions, and rules
+- Guidance on project structure, running tests, executing scripts, and best practices
+
+<Note>
+  When opening a project for the first time, Junie CLI checks for guidelines or memory files from other AI agents and suggests importing them into `.junie/AGENTS.md`.[^2]
+</Note>
+
+---
+
+## MCP Servers
+
+Junie connects to external tools and data sources through the Model Context Protocol. MCP servers can be configured at two scope levels:[^3]
+
+| Scope | Storage | Who can access |
+|---|---|---|
+| **Project** | `<project>/.junie/mcp/mcp.json` | All collaborators (can be committed to VCS) |
+| **User** | `~/.junie/mcp/mcp.json` | You, across all projects |
+
+### Transport Types
+
+| Type | Description | Availability |
+|---|---|---|
+| **Local (stdio)** | Run on your machine via Docker, npx, or binary | IDE and CLI [^3] |
+| **Remote (HTTP/HTTPS)** | Connect to a hosted server | CLI only [^3] |
+
+<Note>
+  In the IDE plugin, Junie currently supports only the stdio transport type. The CLI additionally supports remote HTTP/HTTPS connections.[^3][^8]
+</Note>
+
+### Configuration
+
+<CodeGroup>
+
+```json Local (stdio) Server
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "env": {
+        "API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
+
+```json Remote (HTTP) Server
+{
+  "mcpServers": {
+    "remote-api": {
+      "url": "https://mcp.example.com/v1",
+      "headers": {
+        "Authorization": "Bearer token"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### MCP Installation Assistant
+
+Junie CLI includes an MCP Installation Assistant accessible via the `/mcp` slash command. It can:[^3]
+
+- Add servers from a registry of pre-configured servers or from scratch
+- Automatically configure the correct command or URL
+- Prompt for required secrets, environment variables, or API tokens
+- Verify server startup after configuration
+
+<Warning>
+  For project-scope installations, avoid committing secrets or sensitive environment variables if the `.junie/mcp/mcp.json` file is checked into version control.[^3]
+</Warning>
+
+---
+
+## Agent Skills
+
+Agent skills are folders containing instructions, templates, scripts, and reference materials that provide Junie with task-specific context.[^4] Skills follow the open Agent Skills format and are portable across agents.
+
+### Skill Locations
+
+| Scope | Path |
+|---|---|
+| Project | `<project>/.junie/skills/<skill-name>/SKILL.md` |
+| User | `~/.junie/skills/<skill-name>/SKILL.md` |
+
+### Skill Structure
+
+Each skill is a directory containing a required `SKILL.md` file with YAML frontmatter:[^4]
+
+```
+.junie/skills/
+├── review-code/
+│   ├── SKILL.md          (required)
+│   ├── scripts/          (optional)
+│   ├── templates/        (optional)
+│   └── checklists/       (optional)
+```
+
+```yaml SKILL.md
+---
+name: review-code
+description: Reviews code changes for quality and consistency
+---
+
+# Code Review Instructions
+
+1. Check for adherence to project style guidelines
+2. Verify test coverage for changed code
+3. Look for potential security issues
+4. Suggest performance improvements where applicable
+```
+
+The `name` and `description` frontmatter fields are required. The `description` is used by Junie to determine skill relevance to the current task.[^4]
+
+### How Skills Are Invoked
+
+Junie CLI invokes agent skills automatically. It scans folders inside `.junie/skills/` at both user and project levels and selects the skills that are relevant to the current task.[^4] Unlike guidelines, which are applied to every prompt, agent skills are only invoked when they match the needs of the current task.
+
+<Note>
+  Project-level skills take precedence over user-level skills with identical names.[^4]
+</Note>
+
+### Importing Skills from Other Agents
+
+Junie CLI detects and suggests importing skills from other agent ecosystems:[^4]
+
+- `.cursor/skills/`
+- `.claude/skills/`
+- `.codex/skills/`
+
+---
+
+## Custom Slash Commands
+
+You can define custom slash commands for frequently used prompts and repetitive tasks.[^7] Each command is stored as a Markdown file with YAML frontmatter.
+
+### Command Locations
+
+| Scope | Path |
+|---|---|
+| Project | `<project>/.junie/commands/<command-name>.md` |
+| User | `~/.junie/commands/<command-name>.md` |
+
+### Command Format
+
+```markdown explain.md
+---
+description: Explains code in a given file and suggests improvements
+---
+Explain the code in $file and suggest improvements.
+```
+
+Commands support dynamic parameters using `$argumentName` syntax. When invoking the command, provide values like: `/explain file=src/main.kt`.[^7]
+
+<Note>
+  A custom slash command will only be executed when all arguments from the command template are provided. Junie provides inline hints for missing arguments and Tab-completion support.[^7]
+</Note>
+
+---
+
+## Action Allowlist
+
+The action allowlist manages which actions Junie runs without user approval. By default, Junie requires user approval for terminal commands, MCP tools, and other sensitive actions.[^5]
+
+The full list of allowed commands and patterns is stored in `~/.junie/allowlist.json`.[^5]
+
+### Rule Types
+
+| Type | Example | Description |
+|---|---|---|
+| Exact command | `git status` | Matches a single specific command |
+| Java Regex | `^\Qgit diff \E\S+$` | Matches multiple commands via Java regex pattern |
+| Standard Regex | `^git diff \S+$` | Matches multiple commands via standard regex |
+| MCP Rule | (all MCP tools) | Authorizes all MCP tools without confirmation |
+
+<Warning>
+  Adding an MCP Rule to the action allowlist currently authorizes all MCP tools without user confirmation. Defining specific MCP servers and tools for allowlisting is not yet supported.[^5]
+</Warning>
+
+---
+
+## Hooks / Lifecycle Events
+
+<Note>
+  Event hooks and lifecycle callbacks for agent execution are tracked as a feature request (JUNIE-1961) but are not yet available as a shipped feature.[^10]
+</Note>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Junie platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **User MCP config**: `~/.junie/mcp/mcp.json`
+    - **User skills**: `~/.junie/skills/<name>/SKILL.md`
+    - **User commands**: `~/.junie/commands/<name>.md`
+    - **User allowlist**: `~/.junie/allowlist.json`
+    - **Project MCP config**: `<project>/.junie/mcp/mcp.json`
+    - **Project guidelines**: `<project>/.junie/AGENTS.md` or `<project>/AGENTS.md`
+    - **Project skills**: `<project>/.junie/skills/<name>/SKILL.md`
+    - **Project commands**: `<project>/.junie/commands/<name>.md`
+  </Tab>
+  <Tab title="Windows">
+    - **User MCP config**: `%USERPROFILE%\.junie\mcp\mcp.json`
+    - **User skills**: `%USERPROFILE%\.junie\skills\<name>\SKILL.md`
+    - **User commands**: `%USERPROFILE%\.junie\commands\<name>.md`
+    - **User allowlist**: `%USERPROFILE%\.junie\allowlist.json`
+    - **Project MCP config**: `<project>\.junie\mcp\mcp.json`
+    - **Project guidelines**: `<project>\.junie\AGENTS.md` or `<project>\AGENTS.md`
+    - **Project skills**: `<project>\.junie\skills\<name>\SKILL.md`
+    - **Project commands**: `<project>\.junie\commands\<name>.md`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, an installer should merge into `mcp.json`:
+
+<Tabs>
+  <Tab title="Project Scope">
+    Write or merge into `<project>/.junie/mcp/mcp.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "value"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="User Scope">
+    Write or merge into `~/.junie/mcp/mcp.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "value"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="CLI (Interactive)">
+    When interactive use is available, the `/mcp` command provides the MCP Installation Assistant for guided setup.[^3]
+  </Tab>
+</Tabs>
+
+**Key considerations:**
+
+- The `mcp.json` file uses a flat `mcpServers` object; merge carefully and do not overwrite existing server entries
+- Avoid storing secrets in project-scoped `mcp.json` files that will be committed to version control[^3]
+- The CLI supports both local (stdio) and remote (HTTP/HTTPS) transport types[^3]
+
+### Installing Agent Skills
+
+To install a skill, create a directory under `.junie/skills/` with a `SKILL.md` file:
+
+<Steps>
+  <Step title="Create the skill directory">
+    Create `<project>/.junie/skills/<skill-name>/` (project scope) or `~/.junie/skills/<skill-name>/` (user scope).
+  </Step>
+  <Step title="Write the SKILL.md file">
+    The `SKILL.md` file must include YAML frontmatter with `name` and `description` fields. The description is used for automatic relevance matching.[^4]
+  </Step>
+  <Step title="Add supporting files (optional)">
+    Include any templates, scripts, checklists, or reference materials in subdirectories alongside `SKILL.md`.[^4]
+  </Step>
+</Steps>
+
+### Installing Custom Slash Commands
+
+To install a custom command, write a Markdown file with YAML frontmatter to `.junie/commands/<command-name>.md` at project or user scope.[^7]
+
+### Installing Project Instructions
+
+To install project-level instructions, write or append to `<project>/.junie/AGENTS.md` (preferred) or `<project>/AGENTS.md`. If the file already exists, the installer should append to it. Junie also supports the legacy `.junie/guidelines.md` path.[^2]
+
+### Config File Format
+
+Junie uses JSON for `mcp.json` and `allowlist.json` files. The installer must:
+
+1. Parse the existing JSON file (if it exists)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back, preserving existing entries
+
+Guidelines and skills use Markdown format with optional YAML frontmatter.
+
+---
+
+## Footnotes
+
+[^1]: https://www.jetbrains.com/junie/
+[^2]: https://junie.jetbrains.com/docs/guidelines-and-memory.html
+[^3]: https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html
+[^4]: https://junie.jetbrains.com/docs/agent-skills.html
+[^5]: https://junie.jetbrains.com/docs/action-allowlist.html
+[^6]: https://junie.jetbrains.com/docs/junie-plugin-settings.html
+[^7]: https://junie.jetbrains.com/docs/custom-slash-commands.html
+[^8]: https://www.jetbrains.com/help/junie/model-context-protocol-mcp.html
+[^9]: https://www.jetbrains.com/help/junie/mcp-settings.html
+[^10]: https://youtrack.jetbrains.com/projects/JUNIE/issues/JUNIE-1961/Add-Event-Hooks-Lifecycle-Callbacks-for-Agent-Execution
