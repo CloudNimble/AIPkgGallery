@@ -1,0 +1,398 @@
+---
+title: Gemini Code Assist
+description: Platform specification for Gemini Code Assist, the AI coding assistant by Google
+icon: google
+---
+
+## Overview
+
+[Gemini Code Assist](https://codeassist.google/) is an AI-powered coding assistant by **Google** that provides code completion, generation, chat, and agentic capabilities across multiple IDEs using Gemini models.[^1] Extensibility is via MCP servers (`.gemini/settings.json`), **Rules** (VS Code settings or IDE Prompt Library), **GEMINI.md** project instruction files (via Gemini CLI integration), **GitHub code review customization** (`.gemini/config.yaml` + `.gemini/styleguide.md`), and file exclusion controls (`.aiexclude`).
+
+Gemini Code Assist is available in three editions: **Individual** (free), **Standard** ($19/user/month), and **Enterprise** ($45/user/month), with Standard and Enterprise offered through Google Cloud.[^2][^3]
+
+---
+
+## Configuration
+
+### File Locations
+
+<Tabs>
+  <Tab title="VS Code">
+    | File / Path | Purpose |
+    |---|---|
+    | VS Code Settings (`geminicodeassist.*`) | Extension settings for completions, rules, recitation, agent mode[^4] |
+    | `~/.gemini/settings.json` | User-level Gemini settings including MCP servers[^5] |
+    | `<project>/.gemini/settings.json` | Project-level Gemini settings including MCP servers[^5] |
+    | `<project>/.aiexclude` | File exclusion patterns (similar to `.gitignore` syntax)[^6] |
+    | `<project>/.gitignore` | Also used for context exclusion by default[^6] |
+    | `<project>/GEMINI.md` | Project-level instructions (used by agent mode via Gemini CLI)[^7] |
+    | `~/.gemini/GEMINI.md` | Global instructions across all projects[^7] |
+  </Tab>
+  <Tab title="JetBrains / IntelliJ">
+    | File / Path | Purpose |
+    |---|---|
+    | Settings > Tools > Gemini > Prompt Library | Rules and custom commands configuration[^8] |
+    | `<project>/.idea/project.prompts.xml` | Project-level rules storage (shared with team)[^9] |
+    | `mcp.json` (in IDE configuration directory) | MCP server configuration[^5] |
+    | `<project>/.aiexclude` | File exclusion patterns[^6] |
+    | `<project>/GEMINI.md` | Project-level instructions[^7] |
+  </Tab>
+  <Tab title="Android Studio">
+    | File / Path | Purpose |
+    |---|---|
+    | Settings > Tools > AI > Prompt Library | Rules configuration[^9] |
+    | Settings > Tools > AI > MCP Servers | MCP server configuration UI[^10] |
+    | `mcp.json` (in Android Studio config directory) | MCP server configuration file[^10] |
+    | `<project>/.idea/project.prompts.xml` | Project-level rules (shared with team)[^9] |
+    | `<project>/.aiexclude` | File exclusion patterns[^11] |
+  </Tab>
+  <Tab title="GitHub (Code Review)">
+    | File / Path | Purpose |
+    |---|---|
+    | `<repo>/.gemini/config.yaml` | Code review feature toggles and ignore patterns[^12] |
+    | `<repo>/.gemini/styleguide.md` | Natural-language coding standards for reviews[^12] |
+  </Tab>
+</Tabs>
+
+### Settings Structure
+
+<CodeGroup>
+
+```json VS Code settings.json
+{
+  "geminicodeassist.inlineSuggestions.enableAuto": true,
+  "geminicodeassist.inlineSuggestions.nextEditPredictions": true,
+  "geminicodeassist.recitation.maxCitedLength": 0,
+  "geminicodeassist.agentYoloMode": false,
+  "geminicodeassist.rules": "Always use TypeScript strict mode. Prefer functional components.",
+  "geminicodeassist.project": "my-gcp-project-id"
+}
+```
+
+```json ~/.gemini/settings.json (MCP Servers)
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_TOKEN"
+      }
+    },
+    "remote-server": {
+      "httpUrl": "https://api.example.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer $ACCESS_TOKEN"
+      }
+    }
+  }
+}
+```
+
+```yaml .gemini/config.yaml (GitHub Code Review)
+have_fun: false
+ignore_patterns:
+  - "vendor/**"
+  - "*.generated.go"
+  - "docs/**"
+memory_config:
+  enabled: true
+code_review:
+  disable: false
+  comment_severity_threshold: MEDIUM
+  max_review_comments: -1
+pull_request_events:
+  help: false
+  summary: true
+  code_review: true
+  include_drafts: true
+```
+
+</CodeGroup>
+
+---
+
+## MCP Servers
+
+Gemini Code Assist supports the Model Context Protocol for extending agent mode with external tools and data sources. MCP servers are configured in the Gemini settings JSON file.[^5]
+
+### Configuration
+
+MCP servers must be added manually to the settings JSON file. You cannot use the command palette to install MCP servers for agent mode.[^5]
+
+<Tabs>
+  <Tab title="VS Code / Gemini CLI">
+    MCP servers are configured in `~/.gemini/settings.json` (user-level) or `<project>/.gemini/settings.json` (project-level):[^5]
+
+    ```json
+    {
+      "mcpServers": {
+        "my-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "$MY_API_KEY"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Android Studio">
+    Configure via **Settings > Tools > AI > MCP Servers**. The configuration is saved in an `mcp.json` file in the Android Studio configuration directory.[^10]
+
+    ```json
+    {
+      "mcpServers": {
+        "figma": {
+          "httpUrl": "https://mcp.figma.com/mcp"
+        },
+        "github": {
+          "httpUrl": "https://api.githubcopilot.com/mcp/",
+          "headers": {
+            "Authorization": "Bearer <TOKEN>"
+          }
+        }
+      }
+    }
+    ```
+
+    <Warning>
+      Android Studio's MCP integration does **not** support stdio transport, MCP resources, or prompt templates.[^10]
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Transport Types
+
+| Transport | Config Property | Description |
+|---|---|---|
+| **stdio** | `command` + `args` | Local servers communicating via stdin/stdout[^13] |
+| **SSE** | `url` | Remote servers using Server-Sent Events[^13] |
+| **HTTP Streaming** | `httpUrl` | Remote servers using streamable HTTP[^13] |
+
+### Server Configuration Properties
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `command` | string | One of `command`, `url`, or `httpUrl` required | Executable path for stdio transport[^13] |
+| `url` | string | | SSE endpoint URL[^13] |
+| `httpUrl` | string | | HTTP streaming endpoint URL[^13] |
+| `args` | array | No | Command-line arguments[^13] |
+| `env` | object | No | Environment variables (supports `$VAR` expansion)[^13] |
+| `headers` | object | No | Custom HTTP headers for remote servers[^5] |
+| `cwd` | string | No | Working directory for the server process[^13] |
+| `timeout` | number | No | Request timeout in milliseconds (default: 600,000)[^13] |
+| `trust` | boolean | No | Bypass confirmations when true[^13] |
+| `enabled` | boolean | No | Whether this server is active (default: true)[^10] |
+
+<Note>
+  After you configure an MCP server, Gemini Code Assist automatically decides when and how to use the tools contained within that server during agent mode.[^5]
+</Note>
+
+---
+
+## Rules and Custom Instructions
+
+Gemini Code Assist supports multiple mechanisms for providing custom instructions depending on the IDE and context.
+
+### IDE Rules (VS Code)
+
+Rules are added as a preamble to every prompt sent to Gemini. Configure them in VS Code settings under `geminicodeassist.rules` at either user or workspace scope.[^9]
+
+```
+Open Settings UI > search "Geminicodeassist: Rules"
+```
+
+### IDE Rules (JetBrains / Android Studio)
+
+Rules are managed through the **Prompt Library** in IDE settings. Both IDE-level (personal, cross-project) and project-level (shared, per-project) scopes are supported.[^9]
+
+- **IDE-level rules**: Stored in IDE settings, private to the user
+- **Project-level rules**: Stored in `<project>/.idea/project.prompts.xml`, shared with teammates[^9]
+
+When both IDE-level and project-level rules exist, both are applied to every prompt.[^9]
+
+### GEMINI.md (Via Agent Mode / Gemini CLI)
+
+Gemini Code Assist's agent mode in VS Code is powered by Gemini CLI and supports the `GEMINI.md` instruction file hierarchy:[^7][^14]
+
+| Scope | Path | Description |
+|---|---|---|
+| Global | `~/.gemini/GEMINI.md` | Instructions applied to all projects[^7] |
+| Workspace | `<project>/GEMINI.md` | Project-specific instructions[^7] |
+| Just-in-time | Auto-discovered in accessed directories | Component-specific instructions[^7] |
+
+Files can import other files using `@file.md` syntax for modular instruction management.[^7]
+
+### GitHub Code Review Customization
+
+For Gemini Code Assist's GitHub integration, place configuration files in `.gemini/` at the repository root:[^12]
+
+- **`config.yaml`**: Controls feature toggles, severity thresholds, and ignore patterns
+- **`styleguide.md`**: Natural-language description of coding standards and review expectations
+
+| `config.yaml` Setting | Type | Default | Description |
+|---|---|---|---|
+| `have_fun` | boolean | false | Enable fun features in summaries[^12] |
+| `ignore_patterns` | array | [] | Glob patterns for files to skip[^12] |
+| `code_review.disable` | boolean | false | Disable code review entirely[^12] |
+| `code_review.comment_severity_threshold` | string | MEDIUM | Minimum severity: LOW, MEDIUM, HIGH, or CRITICAL[^12] |
+| `code_review.max_review_comments` | number | -1 | Maximum review comments (-1 for unlimited)[^12] |
+
+---
+
+## File Exclusion
+
+Gemini Code Assist supports excluding files from AI context using `.aiexclude` and `.gitignore` files.[^6]
+
+| File | Purpose |
+|---|---|
+| `.aiexclude` | Explicit AI exclusion file; syntax similar to `.gitignore`[^6] |
+| `.gitignore` | Also enforced for context exclusion by default[^6] |
+
+<Note>
+  The `.aiexclude` file does not support negation patterns (lines prefixed with `!`). In case of conflict between `.aiexclude` and `.gitignore`, the `.aiexclude` directive takes precedence.[^6]
+</Note>
+
+---
+
+## Supported Environments
+
+### IDEs
+
+| IDE | Extension / Plugin | Installation Command |
+|---|---|---|
+| VS Code | `Google.geminicodeassist` | `code --install-extension Google.geminicodeassist`[^15] |
+| JetBrains IDEs | Gemini Code Assist plugin (ID: 24198) | Via Marketplace or `idea installPlugins 24198`[^16] |
+| Android Studio | Built-in Gemini integration | Included with Android Studio[^10] |
+
+### Gemini CLI (Terminal)
+
+Gemini Code Assist includes access to [Gemini CLI](https://github.com/google-gemini/gemini-cli), an open-source AI agent for the terminal. Agent mode in VS Code is powered by Gemini CLI.[^14]
+
+```bash
+# Run without installing
+npx @google/gemini-cli
+
+# Or install globally
+npm install -g @google/gemini-cli
+```
+
+---
+
+## Pricing and Quotas
+
+| Tier | Price | Agent/CLI Requests (Daily) | Rate Limit (Per Minute) |
+|---|---|---|---|
+| Individual (Free) | $0 | 1,000[^17] | 60[^17] |
+| AI Pro | $19.99/month | 1,500[^17] | 120[^17] |
+| Standard (Org) | $19/user/month | 1,500[^17] | 120[^17] |
+| Enterprise (Org) | $45/user/month | 2,000[^17] | 120[^17] |
+
+<Note>
+  Standard and Enterprise tiers are available through Google Cloud and include enterprise-grade security, VPC-SC support, and IP indemnification. Enterprise adds code customization based on private repositories.[^2][^3]
+</Note>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Gemini Code Assist platform.
+
+### Configuration File Paths
+
+| File | Path | Purpose |
+|---|---|---|
+| User Gemini settings | `~/.gemini/settings.json` | User-level MCP servers and global settings[^5] |
+| Project Gemini settings | `<project>/.gemini/settings.json` | Project-level MCP servers and settings[^5] |
+| User instructions | `~/.gemini/GEMINI.md` | Global custom instructions[^7] |
+| Project instructions | `<project>/GEMINI.md` | Project-level custom instructions[^7] |
+| VS Code settings | `<project>/.vscode/settings.json` | Extension settings (`geminicodeassist.*` keys)[^4] |
+| File exclusion | `<project>/.aiexclude` | Files to exclude from AI context[^6] |
+| GitHub review config | `<project>/.gemini/config.yaml` | Code review behavior configuration[^12] |
+| GitHub style guide | `<project>/.gemini/styleguide.md` | Coding standards for code review[^12] |
+| Android Studio MCP | `mcp.json` (in IDE config dir) | MCP servers for Android Studio[^10] |
+| JetBrains MCP | `mcp.json` (in IDE config dir) | MCP servers for JetBrains IDEs[^5] |
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into `~/.gemini/settings.json` (user scope) or `<project>/.gemini/settings.json` (project scope):
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "$API_KEY"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `mcpServers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- Environment variables in `env` blocks use `$VAR` syntax and are expanded from the shell environment[^13]
+- Gemini CLI automatically sanitizes sensitive environment variables (matching `*TOKEN*`, `*SECRET*`, `*PASSWORD*`, etc.) from MCP server processes[^13]
+- For remote servers, use `httpUrl` with optional `headers` instead of `command`/`args`[^5]
+- If Gemini CLI is available, prefer using `gemini mcp add` for validated installation[^13]
+
+### Installing Custom Instructions
+
+To install project-level instructions, write or append to `<project>/GEMINI.md`. If the file already exists, append to it. The CLI concatenates all discovered `GEMINI.md` files, so appending is safe.[^7]
+
+For VS Code workspace-level rules, merge the `geminicodeassist.rules` setting into `<project>/.vscode/settings.json`.[^4]
+
+For GitHub code review instructions, write to `<project>/.gemini/styleguide.md` (natural-language format, no schema).[^12]
+
+### Config File Format
+
+| File | Format | Merge Strategy |
+|---|---|---|
+| `settings.json` (Gemini) | JSON | Deep-merge `mcpServers` object |
+| `settings.json` (VS Code) | JSON | Merge `geminicodeassist.*` keys |
+| `GEMINI.md` | Markdown | Append to existing content |
+| `.gemini/config.yaml` | YAML | Merge keys |
+| `.gemini/styleguide.md` | Markdown | Append to existing content |
+| `.aiexclude` | gitignore-like text | Append patterns on new lines |
+| `mcp.json` (Android Studio) | JSON | Deep-merge `mcpServers` object |
+
+### Non-Interactive Considerations
+
+- Gemini Code Assist requires Google Account authentication, which involves an interactive browser-based OAuth flow[^4]
+- For Standard/Enterprise tiers, Google Cloud project association and IAM configuration are required[^3]
+- MCP server configurations in `.gemini/settings.json` take effect when agent mode is used -- no IDE restart is needed[^5]
+- `GEMINI.md` files are discovered automatically at session start[^7]
+- The VS Code extension identifier is `Google.geminicodeassist` and can be installed non-interactively via `code --install-extension Google.geminicodeassist`[^15]
+- The JetBrains plugin (ID: 24198) can be installed via `idea installPlugins 24198`[^16]
+
+<Warning>
+  MCP servers can run arbitrary code with the permissions available to your user account. Ensure you trust the source of any MCP servers you configure.[^5]
+</Warning>
+
+---
+
+## Footnotes
+
+[^1]: https://codeassist.google/
+[^2]: https://developers.google.com/gemini-code-assist/docs/overview
+[^3]: https://cloud.google.com/products/gemini/pricing
+[^4]: https://developers.google.com/gemini-code-assist/docs/write-code-gemini
+[^5]: https://developers.google.com/gemini-code-assist/docs/use-agentic-chat-pair-programmer
+[^6]: https://developers.google.com/gemini-code-assist/docs/create-aiexclude-file
+[^7]: https://geminicli.com/docs/cli/gemini-md/
+[^8]: https://plugins.jetbrains.com/plugin/24198-gemini-code-assist
+[^9]: https://developer.android.com/studio/gemini/rules
+[^10]: https://developer.android.com/studio/gemini/add-mcp-server
+[^11]: https://developer.android.com/studio/gemini/aiexclude
+[^12]: https://developers.google.com/gemini-code-assist/docs/customize-gemini-behavior-github
+[^13]: https://geminicli.com/docs/tools/mcp-server/
+[^14]: https://developers.google.com/gemini-code-assist/docs/gemini-cli
+[^15]: https://marketplace.visualstudio.com/items?itemName=Google.geminicodeassist
+[^16]: https://plugins.jetbrains.com/plugin/24198-gemini-code-assist
+[^17]: https://developers.google.com/gemini-code-assist/resources/quotas
