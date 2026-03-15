@@ -1,0 +1,501 @@
+---
+title: 'GitHub Copilot CLI'
+description: 'Platform specification for GitHub Copilot CLI, the terminal-native coding agent by GitHub'
+icon: 'terminal'
+---
+
+[GitHub Copilot CLI](https://github.com/github/copilot-cli) is a standalone terminal-native coding agent by **GitHub** (Microsoft) that brings agentic coding directly to the command line[^1]. It reached general availability on February 25, 2026[^2], and supports extensibility through MCP servers, custom agents, agent skills, hooks, plugins, and a layered custom instructions system.
+
+---
+
+## Configuration
+
+### File Locations
+
+Copilot CLI uses a layered configuration system with user-level and project-level settings. The `COPILOT_HOME` environment variable overrides the default `~/.copilot` directory[^3].
+
+<Tabs>
+  <Tab title="User-Level Files">
+    | File / Directory | Purpose |
+    |---|---|
+    | `~/.copilot/config.json` | Core CLI settings (trusted folders, preferences)[^3] |
+    | `~/.copilot/mcp-config.json` | Global MCP server configurations[^4] |
+    | `~/.copilot/lsp-config.json` | Global LSP server configurations[^5] |
+    | `~/.copilot/agents/` | Personal custom agent definitions[^6] |
+    | `~/.copilot/skills/` | Personal agent skills[^7] |
+    | `~/.copilot/plugins/` | Installed plugins[^8] |
+    | `~/.copilot/plugin-index.json` | Plugin installation tracking[^8] |
+  </Tab>
+  <Tab title="Project-Level Files">
+    | File / Directory | Purpose |
+    |---|---|
+    | `.copilot/mcp-config.json` | Project-scoped MCP server configurations[^4] |
+    | `.github/copilot-instructions.md` | Repository-wide custom instructions[^9] |
+    | `.github/instructions/*.instructions.md` | Path-specific instructions with `applyTo` globs[^9] |
+    | `.github/agents/*.agent.md` | Custom agent definitions[^6] |
+    | `.github/skills/[name]/SKILL.md` | Agent skill packages[^7] |
+    | `.github/hooks/*.json` | Agent lifecycle hooks[^10] |
+    | `.github/lsp.json` | Repository-scoped LSP server configurations[^5] |
+    | `.vscode/mcp.json` | Workspace MCP config (also read by Copilot CLI)[^4] |
+    | `AGENTS.md` | Cross-agent instructions[^9] |
+  </Tab>
+</Tabs>
+
+### Default Model
+
+Copilot CLI uses **Claude Sonnet 4.5** as the default model. Other available models include Claude Opus 4.6, GPT-5, and Gemini 3 Pro. Use the `/model` slash command to switch models during a session[^1].
+
+### Settings Precedence
+
+Settings cascade from user to repository to local scope, with more specific scopes overriding more general ones. CLI flags and environment variables take the highest precedence[^3].
+
+---
+
+## Custom Instructions
+
+### Repository Instructions
+
+The primary instruction file is `.github/copilot-instructions.md` in the repository root. Its contents are automatically included in all prompts while working in that repository[^9].
+
+```markdown .github/copilot-instructions.md
+This is a TypeScript monorepo using pnpm workspaces.
+
+- Use strict TypeScript with no `any` types
+- Prefer functional React components with hooks
+- Write tests using Vitest, not Jest
+```
+
+### Path-Specific Instructions
+
+Create `*.instructions.md` files in `.github/instructions/` with YAML frontmatter specifying an `applyTo` glob pattern[^9]:
+
+```markdown .github/instructions/api.instructions.md
+---
+applyTo: "src/api/**/*.ts"
+---
+- All endpoints must include OpenAPI documentation
+- Use middleware for authentication checks
+```
+
+### Personal / Global Instructions
+
+Personal instructions apply across all repositories[^9]:
+
+| Location | Scope |
+|---|---|
+| `~/.copilot/copilot-instructions.md` | Personal global instructions |
+| `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` env var | Additional instruction directories |
+
+### Cross-Agent Compatibility
+
+Copilot CLI also reads `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` files when present, providing compatibility with other AI agent instruction formats[^9].
+
+---
+
+## MCP Integration
+
+Copilot CLI ships with the GitHub MCP server built in and supports custom MCP servers for extending agent capabilities[^4].
+
+### Configuration Format
+
+```json ~/.copilot/mcp-config.json
+{
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    "my-tools": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "your-key"
+      }
+    }
+  }
+}
+```
+
+### Server Types
+
+| Type | Description | Configuration |
+|---|---|---|
+| **local** (stdio) | Local process communicating over stdin/stdout | `command` and `args` fields |
+| **http** | Remote server using Streamable HTTP transport | `url` field |
+| **sse** | Legacy HTTP with Server-Sent Events (deprecated in MCP spec) | `url` field |
+
+<Note>
+  The `stdio` type used by other agents is mapped to Copilot's `local` type for compatibility. Use `local` or `stdio` interchangeably[^4].
+</Note>
+
+### CLI Management
+
+```bash
+# Add a server interactively
+/mcp add
+
+# List all configured servers
+/mcp show
+
+# Inspect a specific server and its tools
+/mcp show my-tools
+
+# Edit, disable, enable, or delete
+/mcp edit my-tools
+/mcp disable my-tools
+/mcp enable my-tools
+/mcp delete my-tools
+```
+
+### Configuration Precedence
+
+MCP configurations are merged from multiple sources[^4]:
+
+1. Project-level: `.copilot/mcp-config.json` in the project root
+2. Workspace-level: `.vscode/mcp.json` (also supported)
+3. User-level: `~/.copilot/mcp-config.json`
+4. CLI flags: `--additional-mcp-config` (highest precedence)
+
+---
+
+## Agent Skills
+
+Agent Skills are portable capability packages that extend Copilot with specialized knowledge and workflows. They use the open [Agent Skills](https://agentskills.io) format and work across Copilot CLI, VS Code, and the coding agent[^7].
+
+### SKILL.md Format
+
+```markdown .github/skills/deploy-preview/SKILL.md
+---
+name: deploy-preview
+description: Deploy a preview environment for the current branch
+---
+
+When asked to deploy a preview:
+
+1. Read the deployment configuration from `templates/deploy-config.yaml`
+2. Run the deploy script: `bash scripts/verify-deploy.sh`
+3. Report the preview URL back to the user
+```
+
+**Frontmatter fields:**
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Lowercase identifier with hyphens, must match directory name |
+| `description` | Yes | What the skill does and when to use it |
+| `license` | No | License information for the skill |
+
+### Storage Locations
+
+| Scope | Path |
+|---|---|
+| Repository | `.github/skills/[skill-name]/SKILL.md` |
+| Repository (legacy) | `.claude/skills/[skill-name]/SKILL.md` |
+| Personal (global) | `~/.copilot/skills/[skill-name]/SKILL.md` |
+| Personal (legacy) | `~/.claude/skills/[skill-name]/SKILL.md` |
+
+### Discovery and Invocation
+
+Skills load progressively: Copilot reads the name and description first, loads full instructions only when relevant, and accesses bundled resources on demand[^7].
+
+```bash
+# Invoke a skill explicitly via slash command
+/deploy-preview
+
+# List, inspect, or reload skills
+/skills list
+/skills info
+/skills reload
+```
+
+Copilot also automatically selects skills based on prompt context without explicit invocation[^7].
+
+---
+
+## Custom Agents
+
+Custom agents are specialized AI personas defined in Markdown files with YAML frontmatter[^6].
+
+### Agent File Format
+
+```markdown .github/agents/security-auditor.agent.md
+---
+name: "security-auditor"
+description: "Review code for security vulnerabilities and suggest fixes"
+tools: ["read", "search", "bash"]
+---
+
+You are a security specialist. When reviewing code:
+
+1. Check for common vulnerability patterns (OWASP Top 10)
+2. Identify insecure dependencies
+3. Suggest remediation steps with code examples
+```
+
+By default, custom agents have access to all tools. Use the `tools` field to restrict access to specific tools[^6].
+
+### Storage and Precedence
+
+| Scope | Path | Priority |
+|---|---|---|
+| Personal | `~/.copilot/agents/*.agent.md` | Highest |
+| Repository | `.github/agents/*.agent.md` | Medium |
+| Plugin | `~/.copilot/plugins/*/agents/*.agent.md` | Lowest |
+
+If agents with the same name exist at multiple levels, the most specific scope takes precedence[^6].
+
+### Invoking Agents
+
+```bash
+# Via slash command in interactive mode
+/agent
+
+# Via CLI flag
+copilot --agent security-auditor --prompt "Check /src/app/validator.go"
+
+# Via natural language (Copilot infers the appropriate agent)
+"Use the security-auditor agent to review this PR"
+```
+
+### Fleet Mode
+
+The `/fleet` command takes an implementation plan and breaks it into independent tasks, then spins up parallel subagents to execute them concurrently[^2].
+
+---
+
+## Hooks
+
+Hooks execute custom shell commands at strategic points in the agent's lifecycle. They are configured as JSON files in `.github/hooks/`[^10].
+
+### Configuration Format
+
+```json .github/hooks/policy-check.json
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "./scripts/check-policy.sh",
+        "powershell": "./scripts/check-policy.ps1",
+        "cwd": ".",
+        "timeoutSec": 30
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "./scripts/audit-log.sh",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
+```
+
+### Hook Events
+
+| Event | Description |
+|---|---|
+| `sessionStart` | When a new agent session begins or resumes |
+| `sessionEnd` | When the agent session completes or is terminated |
+| `userPromptSubmitted` | When the user submits a prompt |
+| `preToolUse` | Before a tool is executed; can approve or deny the action |
+| `postToolUse` | After a tool completes (success or failure) |
+| `errorOccurred` | When an error occurs during agent execution |
+
+<Warning>
+  The `preToolUse` hook is the most powerful -- it can approve or deny tool executions before they happen. Scripts return JSON with a `permissionDecision` field (`"allow"`, `"deny"`, or `"ask"`) to enforce security policies, file access restrictions, and command blocking[^10].
+</Warning>
+
+---
+
+## Plugins
+
+Plugins are installable packages from GitHub repositories that bundle agents, skills, hooks, and MCP server configurations[^8].
+
+### Installing Plugins
+
+```bash
+# Install from a GitHub repository
+/plugin install owner/repo
+
+# Install from a marketplace
+/plugin marketplace add github/copilot-plugins
+/plugin install workiq@copilot-plugins
+
+# Update or uninstall
+/plugin update plugin-name
+/plugin uninstall plugin-name
+```
+
+### Plugin Directory Structure
+
+```
+~/.copilot/plugins/<plugin-name>/
+  plugin.json              # Plugin metadata
+  agents/
+    specialist.agent.md    # Custom agents
+  skills/
+    analyze/
+      SKILL.md             # Agent skills
+  mcp-config.json          # Bundled MCP server configs
+```
+
+<Note>
+  Project-level agents and skills always take precedence over plugin-provided ones with the same name. Plugins cannot override project-level or personal configurations[^8].
+</Note>
+
+---
+
+## LSP Integration
+
+Copilot CLI supports Language Server Protocol (LSP) for enhanced code intelligence, providing features like go-to-definition, hover information, and diagnostics[^5].
+
+### Configuration Format
+
+```json ~/.copilot/lsp-config.json
+{
+  "lspServers": {
+    "typescript": {
+      "command": "typescript-language-server",
+      "args": ["--stdio"],
+      "fileExtensions": {
+        ".ts": "typescript",
+        ".tsx": "typescript"
+      }
+    }
+  }
+}
+```
+
+| Scope | Path |
+|---|---|
+| User-level | `~/.copilot/lsp-config.json` |
+| Repository-level | `.github/lsp.json` |
+
+Repository-level LSP configuration overrides user-level settings. Use `/lsp` to manage LSP servers in an interactive session[^5].
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the GitHub Copilot CLI platform.
+
+### Configuration File Paths
+
+| Purpose | Path |
+|---|---|
+| Global config | `~/.copilot/config.json` |
+| Global MCP config | `~/.copilot/mcp-config.json` |
+| Project MCP config | `<project>/.copilot/mcp-config.json` |
+| Workspace MCP config | `<project>/.vscode/mcp.json` |
+| Repository instructions | `<project>/.github/copilot-instructions.md` |
+| Path-specific instructions | `<project>/.github/instructions/*.instructions.md` |
+| Cross-agent instructions | `<project>/AGENTS.md` |
+| Project skills | `<project>/.github/skills/` |
+| Global skills | `~/.copilot/skills/` |
+| Project agents | `<project>/.github/agents/` |
+| Global agents | `~/.copilot/agents/` |
+| Project hooks | `<project>/.github/hooks/` |
+| Global LSP config | `~/.copilot/lsp-config.json` |
+| Project LSP config | `<project>/.github/lsp.json` |
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, add an entry to the `mcpServers` object in `~/.copilot/mcp-config.json` (global) or `.copilot/mcp-config.json` (project):
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The root key is `mcpServers` (not `servers` as in VS Code's `.vscode/mcp.json`)
+- Merge carefully to avoid overwriting existing server entries
+- For remote servers, use `"type": "http"` with a `"url"` field instead of `command`/`args`
+- The `PATH` variable is automatically inherited; all other environment variables must be set in `env`
+- Copilot CLI also reads `.vscode/mcp.json` (which uses the `servers` root key)
+
+### Installing Skills
+
+To install a skill, create a directory with a `SKILL.md` file in the appropriate scope:
+
+- **Project scope:** `<project>/.github/skills/<skill-name>/SKILL.md`
+- **User scope:** `~/.copilot/skills/<skill-name>/SKILL.md`
+
+The `name` field in frontmatter must be lowercase with hyphens and match the parent directory name[^7].
+
+### Installing Custom Instructions
+
+Write to `.github/copilot-instructions.md`. If the file already exists, append to it. For path-specific instructions, create new `*.instructions.md` files in `.github/instructions/` with `applyTo` frontmatter -- each file is independent[^9].
+
+### Installing Custom Agents
+
+Write a Markdown file with `.agent.md` extension to `<project>/.github/agents/` or `~/.copilot/agents/`. Include a YAML frontmatter block with `name`, `description`, and optionally `tools`[^6].
+
+### Installing Hooks
+
+Create a JSON file in `.github/hooks/` with `"version": 1` and a `hooks` object containing event arrays. Each hook file is independent -- adding a new file does not conflict with existing ones[^10].
+
+### Config File Formats
+
+| File | Format | Root Key | Merge Strategy |
+|---|---|---|---|
+| `mcp-config.json` | JSON | `mcpServers` | Deep-merge server entries |
+| `copilot-instructions.md` | Markdown | N/A | Append to existing content |
+| `*.instructions.md` | Markdown + YAML frontmatter | N/A | Add new files (no merge needed) |
+| `*.agent.md` | Markdown + YAML frontmatter | N/A | Add new files (no merge needed) |
+| `SKILL.md` | Markdown + YAML frontmatter | N/A | One per skill directory |
+| `hooks/*.json` | JSON | `hooks` (under `version: 1`) | Add new files (no merge needed) |
+| `lsp-config.json` / `lsp.json` | JSON | `lspServers` | Deep-merge server entries |
+
+### CLI Installation
+
+<CodeGroup>
+
+```bash npm
+npm install -g @github/copilot
+```
+
+```bash Homebrew
+brew install copilot-cli
+```
+
+```bash WinGet
+winget install GitHub.CopilotCLI
+```
+
+</CodeGroup>
+
+Requires Node.js 22 or later for npm installation. An active GitHub Copilot subscription is required[^1][^2].
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/github/copilot-cli
+[^2]: https://github.blog/changelog/2026-02-25-github-copilot-cli-is-now-generally-available/
+[^3]: https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/configure-copilot-cli
+[^4]: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers
+[^5]: https://deepwiki.com/github/copilot-cli/5.4-lsp-server-configuration
+[^6]: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-custom-agents-for-cli
+[^7]: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-skills
+[^8]: https://docs.github.com/en/copilot/concepts/agents/copilot-cli/about-cli-plugins
+[^9]: https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli-agents/overview
+[^10]: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-hooks
