@@ -1,0 +1,371 @@
+---
+title: 'Kode'
+description: 'Platform specification for Kode, an AI coding agent'
+icon: 'code'
+---
+
+[Kode CLI](https://github.com/shareAI-lab/Kode-cli) is an open-source terminal-based AI coding agent developed by **shareAI-lab**, designed for multi-model collaboration and post-human workflows[^1]. It supports extensibility through AGENTS.md instruction files, MCP server integration, a skills/plugin system compatible with the Agent Skills open format, custom agents, hooks, and layered JSON configuration.
+
+---
+
+## Configuration
+
+### File Locations
+
+Kode uses a layered configuration system with global and project-level settings. The `KODE_CONFIG_DIR` environment variable (or the legacy `CLAUDE_CONFIG_DIR`) overrides the default home directory[^1].
+
+| File | Path | Purpose |
+|---|---|---|
+| Global config | `~/.kode.json` | Models, pointers, theme, API configuration |
+| Global config (alt) | `<KODE_CONFIG_DIR>/config.json` | Alternative when env var is set |
+| Project settings | `./.kode/settings.json` | Project-specific output style and hooks |
+| Local overrides | `./.kode/settings.local.json` | User-specific overrides (not committed) |
+| MCP config | `./.mcp.json` | MCP server definitions (project root) |
+
+<Note>
+  Kode maintains backward compatibility with the `.claude` directory layout. Legacy `.claude/settings.json`, `.claude/settings.local.json`, and related files are still recognized for certain features[^1].
+</Note>
+
+### Settings Precedence
+
+Settings are resolved with project-local overrides taking priority over project settings, which take priority over global configuration[^1]. CLI flags such as `--agents` and `--setting-sources user,project,local` provide further control over which sources are loaded[^1].
+
+---
+
+## Custom Instructions
+
+### AGENTS.md
+
+Kode supports the [AGENTS.md standard](https://github.com/openai/codex/blob/main/docs/AGENTS.md) for providing project-level guidance to the agent[^1].
+
+### Discovery Order
+
+<Steps>
+  <Step title="Repository Root">
+    Kode starts at the Git repository root and walks toward the current working directory. In each directory along the path, it checks for `AGENTS.override.md` first, then `AGENTS.md`. Only one file is used per directory level[^1].
+  </Step>
+  <Step title="Legacy Fallback">
+    If `CLAUDE.md` exists in the current directory, Kode reads it as a legacy instruction file[^1].
+  </Step>
+  <Step title="Concatenation">
+    Discovered files are concatenated root-to-leaf. The combined size is capped at 32 KiB by default, configurable via the `KODE_PROJECT_DOC_MAX_BYTES` environment variable[^1].
+  </Step>
+</Steps>
+
+### Documentation Generation Mode
+
+Prefixing a query with `#` activates documentation generation mode, which auto-generates structured AGENTS.md sections and appends them to the project's AGENTS.md file[^1]:
+
+```bash
+# How do I set up the development environment?
+# What are the testing procedures?
+```
+
+---
+
+## MCP Integration
+
+Kode connects to external tools through Model Context Protocol servers. Configuration is stored in `.mcp.json` (recommended) or `.mcprc` in the project root[^1][^2].
+
+### Configuration Format
+
+```json .mcp.json
+{
+  "my-sse-server": {
+    "type": "sse",
+    "url": "http://127.0.0.1:3333/sse"
+  }
+}
+```
+
+### CLI Management
+
+```bash
+# Add a server
+kode mcp add
+
+# List configured servers and status
+kode mcp list
+
+# Inspect a specific server
+kode mcp get <name>
+
+# Remove a server
+kode mcp remove <name>
+```
+
+### Performance Tuning
+
+MCP connections can be tuned via environment variables[^1][^2]:
+
+| Variable | Purpose |
+|---|---|
+| `MCP_CONNECTION_TIMEOUT_MS` | Connection timeout for MCP servers |
+| `MCP_SERVER_CONNECTION_BATCH_SIZE` | Number of servers to connect in parallel |
+| `MCP_TOOL_TIMEOUT` | Timeout for individual MCP tool calls |
+
+---
+
+## Skills / Slash Commands
+
+Kode supports the [Agent Skills open format](https://agentskills.io) for extending agent capabilities with reusable instruction sets[^3].
+
+### Skill Structure
+
+Each skill is a directory containing a `SKILL.md` file with YAML frontmatter:
+
+```markdown .kode/skills/my-skill/SKILL.md
+---
+name: my-skill
+description: What this skill does and when to use it.
+allowed-tools: Read Bash(git:*) Bash(jq:*)
+---
+
+Step-by-step instructions for the skill go here.
+```
+
+**Naming rules:** The `name` field must match the parent directory name, use only lowercase letters, numbers, and hyphens (`a-z0-9-`), and be 1-64 characters long[^3].
+
+### Discovery Paths
+
+Kode discovers skills from multiple locations[^3]:
+
+| Scope | Path |
+|---|---|
+| Project | `.kode/skills/<skill-name>/SKILL.md` |
+| User (global) | `~/.kode/skills/<skill-name>/SKILL.md` |
+| Legacy (project) | `.claude/skills/` and `.claude/commands/` |
+
+### Using Skills
+
+In interactive mode, skills are invoked as slash commands[^3]:
+
+```
+/pdf
+/xlsx
+```
+
+Kode also automatically invokes skills via the `Skill` tool when contextually relevant[^3].
+
+### Installing Skills
+
+<CodeGroup>
+
+```bash add-skill CLI
+# Install to project scope
+npx add-skill vercel-labs/agent-skills -a kode
+
+# Install to global scope
+npx add-skill vercel-labs/agent-skills -a kode -g
+
+# Install specific skills only
+npx add-skill vercel-labs/agent-skills -a kode -s pdf -s xlsx
+```
+
+```bash Plugin Marketplace
+# Add a marketplace source
+kode plugin marketplace add owner/repo
+
+# Install a plugin (user scope)
+kode plugin install <plugin>@<marketplace> --scope user
+
+# Install a plugin (project scope)
+kode plugin install <plugin>@<marketplace> --scope project
+
+# Disable / enable a plugin
+kode plugin disable <plugin>@<marketplace> --scope user
+kode plugin enable <plugin>@<marketplace> --scope user
+```
+
+</CodeGroup>
+
+### Marketplace Distribution
+
+A marketplace repository requires a `.kode-plugin/marketplace.json` file listing plugin packs and their skill directories. Legacy `.claude-plugin/marketplace.json` is also supported[^3].
+
+For full plugins (beyond skills), include a `.kode-plugin/plugin.json` at the plugin root. Plugin names must use kebab-case, paths must be relative starting with `./`, and no parent directory segments are allowed[^3].
+
+---
+
+## Custom Agents
+
+Kode supports custom agent definitions for task delegation and specialized workflows[^1].
+
+### Agent File Format
+
+Agent files are Markdown with YAML frontmatter, stored in `.kode/agents/` or `~/.kode/agents/` (legacy `.claude/agents/` is also supported)[^1]:
+
+```markdown .kode/agents/reviewer.md
+---
+name: reviewer
+description: "Review diffs for correctness, security, and simplicity"
+tools: ["Read", "Grep"]
+model: inherit
+---
+
+Review instructions go here.
+```
+
+### Invoking Agents
+
+Agents can be invoked in multiple ways[^1]:
+
+- **Mention syntax:** `@run-agent-reviewer` in the chat
+- **Tool call:** `Task(subagent_type: "reviewer", ...)`
+- **CLI flag:** `--agents <json>` to inject agents for a run
+
+### Model Consultation
+
+Kode also supports consulting specific AI models via mention syntax without defining a full agent[^1]:
+
+```
+@ask-claude-sonnet-4
+@ask-gpt-5
+@ask-o1-preview
+```
+
+The `/agents` command opens an interactive UI for creating and managing agents[^1].
+
+---
+
+## Hooks
+
+Kode supports hooks for executing custom logic at specific points in the agent's lifecycle. Hooks are configured in `settings.json` (either `.kode/settings.json` or `.kode/settings.local.json`)[^1].
+
+### Configuration Format
+
+```json .kode/settings.json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./scripts/validate-command.js"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | xargs npx prettier --write"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Hook Events
+
+| Event | Description |
+|---|---|
+| `PreToolUse` | Runs before a tool is executed; can block the action |
+| `PostToolUse` | Runs after successful tool execution |
+
+### Matchers
+
+The `matcher` field supports tool name patterns. MCP server tools follow the naming pattern `mcp__<server>__<tool>`[^1].
+
+<Note>
+  Hook scripts are typically stored in `.kode/hooks/` (or `.claude/hooks/`). Use the `$CLAUDE_PROJECT_DIR` prefix for hook paths in `settings.json` to ensure reliable path resolution across different working directories[^1].
+</Note>
+
+---
+
+## Output Styles
+
+Kode supports configurable output styles that alter system-prompt behavior[^1]:
+
+- Select via `/output-style` (menu) or `/output-style <style>`
+- Stored per-project in `.kode/settings.local.json` as `outputStyle`
+- Custom styles can be placed as Markdown files under `output-styles/` in `.kode` (user or project scope)
+- Plugins can provide styles under `output-styles/` or via the plugin manifest `outputStyles` field, namespaced as `<plugin>:<style>`
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Kode platform.
+
+### Configuration File Paths
+
+| Purpose | Path |
+|---|---|
+| Global config | `~/.kode.json` |
+| Project settings | `<project>/.kode/settings.json` |
+| Local overrides | `<project>/.kode/settings.local.json` |
+| MCP config | `<project>/.mcp.json` |
+| Project instructions | `<project>/AGENTS.md` |
+| Global instructions | Discovered from Git root to cwd |
+| Project skills | `<project>/.kode/skills/` |
+| Global skills | `~/.kode/skills/` |
+| Project agents | `<project>/.kode/agents/` |
+| Global agents | `~/.kode/agents/` |
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, add an entry to `.mcp.json` in the project root:
+
+```json
+{
+  "package-server-name": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@scope/mcp-server-package"]
+  }
+}
+```
+
+Alternatively, use the CLI:
+
+```bash
+kode mcp add
+```
+
+**Key considerations:**
+
+- Config format is **JSON** (`.mcp.json`), not TOML or YAML
+- Merge carefully to avoid overwriting existing server entries
+- For remote servers, use `"type": "sse"` with a `"url"` field instead of `command`/`args`
+- Kode reads MCP config at session start; changes require starting a new session
+
+### Installing Skills
+
+To install a skill, write a `SKILL.md` file with proper frontmatter into the appropriate scope directory:
+
+- **Project scope:** `<project>/.kode/skills/<skill-name>/SKILL.md`
+- **User scope:** `~/.kode/skills/<skill-name>/SKILL.md`
+
+The `name` field in frontmatter must match the parent directory name. Use `npx add-skill` or `kode plugin install` for automated installation[^3].
+
+### Installing Custom Instructions
+
+Write an `AGENTS.md` file to the project root. If one already exists, use `AGENTS.override.md` to take precedence without modifying the existing file[^1].
+
+### Installing Custom Agents
+
+Write a Markdown file with YAML frontmatter to `<project>/.kode/agents/<agent-name>.md` or `~/.kode/agents/<agent-name>.md`. The frontmatter must include `name`, `description`, and optionally `tools` and `model` fields[^1].
+
+### Installing Hooks
+
+Hooks are configured in `.kode/settings.json` under the `hooks` key. The installer must parse the existing JSON, merge new hook entries into the appropriate event arrays, and write the result back[^1].
+
+<Warning>
+  Kode runs in permissionless ("YOLO") mode by default, bypassing all permission checks. For production or sensitive environments, use `kode --safe` to enable permission checks and manual approval[^1].
+</Warning>
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/shareAI-lab/Kode-cli
+[^2]: https://github.com/shareAI-lab/Kode-Agent
+[^3]: https://github.com/shareAI-lab/Kode-cli/blob/main/docs/skills.md
