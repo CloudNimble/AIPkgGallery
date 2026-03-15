@@ -1,0 +1,232 @@
+---
+title: 'AdaL'
+description: 'Platform specification for AdaL, an AI coding agent'
+icon: 'code'
+---
+
+## Overview
+
+[AdaL](https://www.sylph.ai/) (named after Ada Lovelace) is a self-evolving AI coding agent created by **SylphAI**, available as a terminal CLI (`adal`) or browser UI (`adal --web`), built on the open-source AdalFlow library.[^1][^2] Extensibility is provided through Skills (`SKILL.md` capability packages), a plugin marketplace system, MCP server integration, and `AGENTS.md` project context files.[^1][^3]
+
+---
+
+## Configuration
+
+### File Locations
+
+AdaL uses a hierarchical configuration system with a `.adal/` directory for skills and plugin cache, and Markdown files for instructions.[^3][^4]
+
+| File | Path | Purpose |
+|---|---|---|
+| Global skills | `~/.adal/skills/<name>/SKILL.md` | Personal skills available across all projects[^4][^5] |
+| Project skills | `<project>/.adal/skills/<name>/SKILL.md` | Project-specific skills, shareable via version control[^4] |
+| Plugin cache | `~/.adal/plugin-cache/` | Cached plugins installed via the marketplace[^4] |
+| Project context | `<project>/AGENTS.md` | Project-specific custom instructions[^1][^3] |
+
+<Note>
+  AdaL skills are compatible with Claude Code skills and follow the same `SKILL.md` format, so skills written for one platform generally work on the other.[^4]
+</Note>
+
+### Skills Priority
+
+AdaL resolves skills across three sources in the following priority order (highest to lowest):[^4]
+
+1. **Personal** (`~/.adal/skills/`) -- highest priority
+2. **Project** (`<project>/.adal/skills/`) -- mid-level
+3. **Plugin** (`~/.adal/plugin-cache/`) -- lowest priority
+
+Use the `/skills` command within AdaL to display all active skills from all sources.[^4]
+
+---
+
+## Custom Instructions
+
+### AGENTS.md
+
+AdaL supports `AGENTS.md` project context files, the open standard for providing coding agents with project-specific instructions.[^1][^3] Place an `AGENTS.md` file at the root of your repository to provide AdaL with build steps, conventions, and project structure guidance.
+
+```markdown AGENTS.md
+# Project Conventions
+
+This is a TypeScript monorepo managed with pnpm.
+
+## Build & Test
+- Build: `pnpm build`
+- Test: `pnpm test`
+- Lint: `pnpm lint`
+
+## Code Style
+- Use strict TypeScript, no `any` types
+- Prefer functional patterns over classes
+```
+
+<Note>
+  AdaL also supports its own `ADAL.md` format for platform-specific instructions.[^3] However, `AGENTS.md` is the recommended cross-platform standard that works with AdaL and other coding agents.
+</Note>
+
+---
+
+## MCP Servers
+
+AdaL lists MCP servers as a core capability with support for integrating external tools and data sources.[^1][^3] The docs site navigation references MCP support under a "proposed" label (`/features/mcp-support-proposed`), suggesting the feature may still be evolving.[^5] The underlying AdalFlow library provides two tool abstractions for MCP integration:[^6]
+
+- **`FunctionTool`** -- wraps any Python function as a tool for LLM agents
+- **`MCPFunctionTool`** -- wraps tools served by an MCP server, enabling dynamic tool discovery and invocation
+
+AdalFlow supports both local (stdio) and remote (HTTP) MCP server transports.[^6]
+
+<Warning>
+  Specific documentation on AdaL CLI's MCP server configuration file format (e.g., a dedicated `mcp_config.json` or equivalent) was not found in publicly available documentation at the time of writing. The AdalFlow library provides programmatic MCP configuration via Python, but the CLI's user-facing MCP setup mechanism is not well-documented.[^6]
+</Warning>
+
+---
+
+## Skills
+
+Skills are modular capability extensions defined as `SKILL.md` files with YAML frontmatter. They follow the open Agent Skills specification and are compatible across multiple coding agents.[^4][^5][^7]
+
+### Skill Structure
+
+Each skill is a directory containing a `SKILL.md` file and optional supporting assets:[^4][^7]
+
+```
+skill-name/
+├── SKILL.md          # Required: definition and instructions
+├── templates/        # Optional: document templates
+├── scripts/          # Optional: Bash or PowerShell scripts
+└── references/       # Optional: reference documentation
+```
+
+### SKILL.md Format
+
+```markdown SKILL.md
+---
+name: my-skill
+description: Brief explanation of what the skill does
+---
+
+Instructions for the agent when this skill is activated.
+
+1. Step one of the skill procedure
+2. Step two of the skill procedure
+```
+
+### Plugin Marketplace
+
+AdaL provides a built-in plugin marketplace for discovering and installing skills:[^4]
+
+<Steps>
+  <Step title="Add a marketplace source">
+    Use `/plugin marketplace add <owner>/<repo>` to register a skill repository as a marketplace source.
+  </Step>
+  <Step title="Browse and install">
+    Use `/plugin` to browse available skills, or install directly with `/plugin install <skill-name>@<repo>`.
+  </Step>
+  <Step title="Verify installation">
+    Use `/skills` to confirm the newly installed skill appears in the active skills list.
+  </Step>
+</Steps>
+
+<Tabs>
+  <Tab title="Global Install">
+    Clone or copy skill directories to `~/.adal/skills/` to make them available across all projects:
+
+    ```bash
+    cp -r skill-name ~/.adal/skills/
+    ```
+  </Tab>
+  <Tab title="Project Install">
+    Place skill directories in `.adal/skills/` within your project to share them with your team via version control:
+
+    ```bash
+    cp -r skill-name .adal/skills/
+    ```
+  </Tab>
+  <Tab title="Windows">
+    ```powershell
+    Copy-Item -Recurse skill-name $env:USERPROFILE\.adal\skills\
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Hooks / Lifecycle Events
+
+<Warning>
+  No public documentation was found describing native lifecycle hooks or event callbacks in AdaL CLI at the time of writing. The underlying AdalFlow framework provides agent execution lifecycle concepts (planning, tool selection, execution, observation, iteration)[^8], but these are framework-level abstractions rather than user-configurable hooks in the CLI.
+</Warning>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the AdaL platform.
+
+### Prerequisites
+
+AdaL CLI is installed via npm and requires Node.js 20+:[^2]
+
+```bash
+npm install -g @sylphai/adal-cli
+```
+
+### Configuration File Paths
+
+- **Global skills**: `~/.adal/skills/<skill-name>/SKILL.md`
+- **Project skills**: `<project>/.adal/skills/<skill-name>/SKILL.md`
+- **Plugin cache**: `~/.adal/plugin-cache/`
+- **Project instructions**: `<project>/AGENTS.md`
+
+### Installing Skills
+
+To install a skill, create a directory with a `SKILL.md` file at one of:
+
+- **Global scope**: `~/.adal/skills/<skill-name>/SKILL.md`
+- **Project scope**: `<project>/.adal/skills/<skill-name>/SKILL.md`
+
+Skills are auto-discovered by AdaL at runtime. No additional registration step is required.[^4]
+
+### Installing Project Instructions
+
+To install project-level instructions, write an `AGENTS.md` file to the project root. If an `AGENTS.md` already exists, the installer should append to it rather than overwrite.
+
+### Installing MCP Server Extensions
+
+<Warning>
+  The specific file format and location for AdaL's MCP server configuration is not publicly documented at the time of writing. Programmatic MCP server registration may require using AdalFlow's Python API or the AdaL CLI interface directly. Check the [AdaL documentation](https://docs.sylph.ai/) for updates.[^6]
+</Warning>
+
+### Skill Install Paths (Vercel Skills)
+
+The Vercel Skills project uses the following install paths for AdaL:[^7]
+
+- **Project path**: `.adal/skills/`
+- **Global path**: `~/.adal/skills/`
+
+Skills can also be installed via the Vercel Skills CLI:[^7]
+
+```bash
+npx skills add vercel-labs/agent-skills -a adal
+```
+
+### Config File Format
+
+AdaL uses Markdown for all instruction and skill files (`AGENTS.md`, `SKILL.md`). The installer should:
+
+1. Create skill directories with a `SKILL.md` file containing YAML frontmatter (`name`, `description`) and Markdown instructions
+2. Avoid overwriting existing skills or instructions -- merge or append where appropriate
+3. Skills placed in the correct directory are automatically discovered; no config file registration is needed
+
+---
+
+## Footnotes
+
+[^1]: https://www.sylph.ai/
+[^2]: https://github.com/SylphAI-Inc/adal-cli
+[^3]: https://codingagents.md/agents/adal/
+[^4]: https://github.com/OthmanAdi/planning-with-files/blob/master/docs/adal.md
+[^5]: https://docs.sylph.ai/features/plugins-and-skills
+[^6]: https://adalflow.sylph.ai/new_tutorials/tool.html
+[^7]: https://github.com/vercel-labs/skills
+[^8]: https://adalflow.sylph.ai/new_tutorials/agents_runner.html
