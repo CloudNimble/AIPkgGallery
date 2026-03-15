@@ -1,0 +1,468 @@
+---
+title: 'OpenClaw'
+description: 'Platform specification for OpenClaw, an AI coding agent'
+icon: 'paw'
+---
+
+## Overview
+
+[OpenClaw](https://openclaw.ai/) is a free and open-source autonomous AI agent created by Peter Steinberger (PSPDFKit founder), originally published in November 2025 under the name Clawdbot.[^1] It is a self-hosted gateway that connects messaging platforms to LLMs, with extensibility via a **skills** system, **hooks**, **cron jobs**, **MCP servers**, and Markdown-based agent instruction files.[^2]
+
+---
+
+## Configuration
+
+### File Locations
+
+OpenClaw uses a central JSON5 configuration file and a set of Markdown instruction files in the workspace directory.[^3]
+
+| File | Path | Purpose |
+|---|---|---|
+| Main config | `~/.openclaw/openclaw.json` | All gateway, agent, model, skill, cron, and plugin settings |
+| Agent instructions | `<workspace>/AGENTS.md` | System prompt and behavioral rules for the agent |
+| Agent identity | `<workspace>/SOUL.md` | Persona and identity definition |
+| User profile | `<workspace>/USER.md` | Information about the human being assisted |
+| Tool notes | `<workspace>/TOOLS.md` | Local tool configuration notes |
+| Long-term memory | `<workspace>/MEMORY.md` | Curated persistent memories across sessions |
+| Daily logs | `<workspace>/memory/YYYY-MM-DD.md` | Raw session logs per day |
+| Heartbeat tasks | `<workspace>/HEARTBEAT.md` | Periodic task checklist for the agent |
+| Cron storage | `~/.openclaw/cron/jobs.json` | Persisted cron job definitions |
+
+<Note>
+  The default workspace directory is `~/.openclaw/workspace`, configurable via the `agents.defaults.workspace` key in `openclaw.json`.[^4]
+</Note>
+
+### openclaw.json Structure
+
+The configuration file uses JSON5 format and is validated against a Zod schema (`OpenClawSchema` in `src/config/zod-schema.ts`) with `.strict()` on every object -- unknown keys are rejected.[^3] The only exception is `$schema`, which is allowed for editor tooling.
+
+<CodeGroup>
+
+```json Basic Structure
+{
+  "agents": {
+    "defaults": { },
+    "list": []
+  },
+  "models": { },
+  "providers": { },
+  "gateway": { },
+  "channels": { },
+  "skills": { },
+  "plugins": { },
+  "hooks": { },
+  "crons": { },
+  "mcpServers": { },
+  "tools": { },
+  "memory": { },
+  "env": { },
+  "session": { }
+}
+```
+
+```json Agent Defaults with Overrides
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.openclaw/workspace",
+      "model": "claude-4-sonnet"
+    },
+    "list": [
+      {
+        "name": "coder",
+        "model": "claude-4-opus",
+        "workspace": "~/projects/coder-workspace"
+      }
+    ]
+  }
+}
+```
+
+```json Splitting Config with $include
+{
+  "$include": ["./agents.json", "./providers.json"],
+  "gateway": {
+    "port": 18789
+  }
+}
+```
+
+</CodeGroup>
+
+<Note>
+  Large configs can be split using `$include` -- supports single files, arrays of files (deep-merged in order, later wins), sibling key overrides, and nesting up to 10 levels deep.[^3]
+</Note>
+
+### Configuration Priority
+
+OpenClaw uses a defaults-with-overrides pattern: `agents.defaults` sets the baseline for all agents, and individual entries in `agents.list[]` can override specific fields per agent.[^3]
+
+### Hot Reload
+
+The Gateway watches `~/.openclaw/openclaw.json` for changes. Reload behavior is controlled by `gateway.reload.mode`:[^3]
+
+| Mode | Behavior |
+|---|---|
+| `hybrid` (default) | Hot-applies safe changes instantly; auto-restarts for critical ones |
+| `hot` | Applies safe changes only; logs warnings when restart needed |
+| `restart` | Restarts on any config change |
+| `off` | Disables file watching |
+
+Channels, agents, models, and tools apply immediately. Gateway server settings (port, auth, TLS) require restarts.[^3]
+
+---
+
+## Custom Instructions
+
+OpenClaw uses a file-based instruction system where Markdown files in the workspace directory are injected into the agent's system prompt at session startup.[^4]
+
+### AGENTS.md
+
+`AGENTS.md` is the core identity and rules file. Its content is injected as the agent's system prompt, so writing quality directly affects behavior.[^4] The default template includes rules for:
+
+- **Privacy and security**: Do not exfiltrate private data or run destructive commands without asking.
+- **Group chat behavior**: In groups, act as a participant, not a proxy.
+- **Memory continuity**: On each session start, read `SOUL.md`, `USER.md`, and daily memory files to restore context.
+- **Self-improvement**: When learning a lesson, update `AGENTS.md`, `TOOLS.md`, or the relevant skill. When making a mistake, document it.
+
+<Warning>
+  The agent reads these files every session. Keep them scannable -- use headers, bullets, and code blocks. Avoid long paragraphs.[^5]
+</Warning>
+
+### Companion Files
+
+| File | Purpose |
+|---|---|
+| `SOUL.md` | Defines the agent's persona and identity |
+| `USER.md` | Stores information about the human being assisted |
+| `TOOLS.md` | Documents available tools and integrations; updated as new tools are added |
+| `MEMORY.md` | Long-term curated memories (main sessions only) |
+| `HEARTBEAT.md` | Periodic task checklist polled by the heartbeat system |
+
+### Multi-Agent Isolation
+
+OpenClaw can run multiple fully isolated agents inside one Gateway process. Each agent can have its own workspace directory with independent `SOUL.md`, `AGENTS.md`, and other instruction files.[^6]
+
+---
+
+## MCP Servers
+
+OpenClaw has native MCP server support using `@modelcontextprotocol/sdk`, allowing agents to connect to MCP servers and use their tools directly.[^7]
+
+### Configuring MCP Servers
+
+MCP servers are configured in `openclaw.json` under the `mcpServers` key:[^8]
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "node",
+      "args": ["/app/mcp-servers/filesystem/dist/index.js"],
+      "env": {}
+    },
+    "custom-server": {
+      "command": "npx",
+      "args": ["-y", "@some-org/mcp-server"],
+      "env": {
+        "API_KEY": "${API_KEY}"
+      }
+    }
+  }
+}
+```
+
+Each server entry requires `command` and `args`, with an optional `env` object. Environment variables can be referenced using `${VAR_NAME}` syntax.[^3]
+
+<Tabs>
+  <Tab title="CLI">
+    ```bash
+    # Configure a custom MCP server via CLI
+    openclaw config set mcpServers.myserver.command "npx"
+    openclaw config set mcpServers.myserver.args '["@my-org/my-mcp-server"]'
+    openclaw config set mcpServers.myserver.env.API_KEY "your-key"
+    ```
+  </Tab>
+  <Tab title="Plugin Install">
+    ```bash
+    # Install official MCP servers as plugins
+    openclaw plugins install @anthropic/mcp-filesystem
+    openclaw plugins install @anthropic/mcp-github
+    openclaw plugins install @anthropic/mcp-postgres
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  OpenClaw's skill system is built on MCP. When you install a skill like `openclaw-google-calendar`, it is actually an MCP server that exposes tools (create event, list events, etc.).[^7]
+</Note>
+
+---
+
+## Skills System
+
+Skills are the primary extensibility mechanism in OpenClaw. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter and natural-language instructions that teach the agent how to use a tool.[^9]
+
+### Skill Directory Structure
+
+```
+my-skill/
+  SKILL.md        # Required: metadata + instructions
+  handler.ts      # Optional: implementation code
+  auxiliary/      # Optional: additional reference files
+```
+
+### SKILL.md Format
+
+```markdown
+---
+name: nano-banana-pro
+description: Generate or edit images via Gemini 3 Pro Image
+homepage: https://example.com
+user-invocable: true
+disable-model-invocation: false
+metadata: {"openclaw":{"requires":{"bins":["uv"],"env":["GEMINI_API_KEY"]}}}
+---
+
+# Nano Banana Pro
+
+Generate images using the Gemini 3 Pro image model.
+
+## Usage
+When the user asks to generate or edit an image...
+
+## Implementation
+Run the following command with uv...
+```
+
+### Frontmatter Fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Skill identifier |
+| `description` | Yes | Brief explanation of what the skill does |
+| `homepage` | No | URL for skill website |
+| `user-invocable` | No | Boolean (default: `true`); exposes skill as slash command |
+| `disable-model-invocation` | No | Boolean (default: `false`); excludes from model prompt |
+| `command-dispatch` | No | Set to `"tool"` to bypass model and dispatch directly |
+| `command-tool` | No | Tool name invoked when command-dispatch is enabled |
+| `command-arg-mode` | No | `"raw"` (default); how arguments are forwarded |
+| `metadata` | No | JSON object for gating, requirements, and configuration |
+
+The `metadata.openclaw.requires` object can specify `bins` (CLI tools that must be present), `env` (required environment variables), and `config` (configuration keys the user must provide).[^9]
+
+### Skill Loading and Precedence
+
+Skills are loaded from three locations, with workspace skills taking highest priority:[^9]
+
+<Steps>
+  <Step title="Workspace skills (highest priority)">
+    `<workspace>/skills/` -- per-agent skills, specific to a workspace.
+  </Step>
+  <Step title="Managed / local skills">
+    `~/.openclaw/skills/` -- user-installed skills, shared across all agents.
+  </Step>
+  <Step title="Bundled skills (lowest priority)">
+    Shipped with the OpenClaw install. Can be overridden by workspace or managed skills.
+  </Step>
+</Steps>
+
+Additional skill directories can be configured via `skills.load.extraDirs` in `openclaw.json`.[^9]
+
+### Progressive Disclosure
+
+Skills use a three-level loading strategy to minimize token cost:[^10]
+
+- **Level 1** (always loaded): Name and description from frontmatter metadata.
+- **Level 2** (loaded when skill triggers): Full `SKILL.md` body.
+- **Level 3** (loaded on demand): Auxiliary files in the skill directory.
+
+### ClawHub Registry
+
+[ClawHub](https://github.com/openclaw/clawhub) is the public skills registry for OpenClaw, containing over 5,700 skills as of early 2026.[^10]
+
+---
+
+## Hooks
+
+Hooks are event-driven scripts that run automatically in response to agent events. They provide an extensible system for automating actions without user input.[^11]
+
+### Hook Event Types
+
+| Event Type | Action | Description |
+|---|---|---|
+| `command` | `new`, `reset`, `stop` | Triggered by agent commands |
+| `session` | `compact:before`, `compact:after` | Session compaction lifecycle |
+| `agent` | `bootstrap` | Agent initialization |
+| `gateway` | `startup` | Gateway process start |
+| `message` | `received`, `transcribed`, `preprocessed`, `sent` | Message lifecycle |
+
+### Hook Discovery
+
+Hooks are automatically discovered from three directories in order of precedence:[^11]
+
+1. **Workspace hooks**: `<workspace>/hooks/` (highest priority)
+2. **Managed hooks**: `~/.openclaw/hooks/` (user-installed, shared)
+3. **Bundled hooks**: `<openclaw>/dist/hooks/bundled/` (shipped with install)
+
+Each hook directory requires a `HOOK.md` (metadata with YAML frontmatter) and a `handler.ts` (implementation).[^11]
+
+### Hook Configuration
+
+Hooks can be enabled and configured in `openclaw.json`:[^11]
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "my-hook": {
+          "enabled": true,
+          "env": { "CUSTOM_VAR": "value" }
+        }
+      }
+    }
+  }
+}
+```
+
+### Lifecycle Hooks
+
+Some hooks are synchronous interceptors rather than event-stream listeners. `tool_result_persist` transforms tool results before they are written to the session transcript. It must be synchronous and return the updated payload or `undefined` to keep it as-is.[^11]
+
+---
+
+## Cron Jobs
+
+Cron jobs handle time-based scheduling for recurring or one-shot tasks.[^12]
+
+### Creating Cron Jobs
+
+```bash
+# One-time job
+openclaw cron add --at "2026-03-15T09:00:00" --message "Check morning emails"
+
+# Recurring interval
+openclaw cron add --every 30m --system-event --message "Monitor server health"
+
+# Cron expression
+openclaw cron add --cron "0 9 * * MON-FRI" --session isolated \
+  --message "Generate daily standup summary"
+```
+
+### Delivery Modes
+
+| Mode | Behavior |
+|---|---|
+| `announce` | Delivers summary to target channel and posts brief to main session |
+| `webhook` | POSTs finished event payload to an HTTP(S) endpoint |
+| `none` | Internal only; no delivery or summary |
+
+Isolated jobs default to `announce` mode when delivery is omitted.[^12]
+
+### Storage
+
+Cron jobs are persisted at `~/.openclaw/cron/jobs.json`. Run history is stored in `~/.openclaw/cron/runs/<jobId>.jsonl`. Manual edits to `jobs.json` are only safe when the Gateway is stopped -- prefer `openclaw cron add/edit` or the cron tool call API.[^12]
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the OpenClaw platform.
+
+### Configuration File Paths
+
+| Purpose | Path |
+|---|---|
+| Main config | `~/.openclaw/openclaw.json` |
+| Skills (project) | `skills/` |
+| Skills (global) | `~/.openclaw/skills/` |
+| Hooks (global) | `~/.openclaw/hooks/` |
+| Hooks (workspace) | `<workspace>/hooks/` |
+| Agent instructions | `<workspace>/AGENTS.md` |
+| Cron jobs | `~/.openclaw/cron/jobs.json` |
+
+### Installing Skills
+
+To install a skill, create a directory under the appropriate skills path containing a `SKILL.md` file:
+
+<Tabs>
+  <Tab title="Project Scope">
+    Write the skill to `skills/<skill-name>/SKILL.md` in the project directory. This is the highest-precedence location and is specific to the workspace.
+  </Tab>
+  <Tab title="Global Scope">
+    Write the skill to `~/.openclaw/skills/<skill-name>/SKILL.md`. This makes the skill available across all agents and workspaces.
+  </Tab>
+</Tabs>
+
+### Installing MCP Servers
+
+<Tabs>
+  <Tab title="CLI Command">
+    ```bash
+    openclaw config set mcpServers.package-server.command "npx"
+    openclaw config set mcpServers.package-server.args '["@scope/mcp-server-package"]'
+    openclaw config set mcpServers.package-server.env.API_KEY "value"
+    ```
+  </Tab>
+  <Tab title="Direct Config Merge">
+    Merge into `~/.openclaw/openclaw.json` under the `mcpServers` key:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "${API_KEY}"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Plugin Install">
+    ```bash
+    openclaw plugins install @scope/mcp-server-package
+    ```
+  </Tab>
+</Tabs>
+
+### Config File Format
+
+OpenClaw uses JSON5 for `openclaw.json` (standard JSON extended with comments, trailing commas, etc.). The installer must:[^3]
+
+1. Parse the existing JSON5 file (if it exists)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back, preserving existing entries
+4. Validate that the result conforms to the Zod schema -- unknown keys will cause the Gateway to refuse to start
+
+<Warning>
+  The Gateway watches `openclaw.json` for changes and hot-reloads automatically. Ensure writes are atomic to avoid the Gateway reading a partially-written file.[^3]
+</Warning>
+
+### Key Considerations
+
+- Sensitive values (API keys) should use `${VAR_NAME}` environment variable references rather than hardcoded strings.[^3]
+- The `openclaw config set` CLI is the safest approach for programmatic configuration changes, as it handles validation and atomic writes.
+- Skills installed to `~/.openclaw/skills/` are loaded at lower precedence than workspace skills -- a workspace skill with the same name will override a global one.[^9]
+- The config file is validated with `.strict()` Zod schemas -- adding unknown keys will prevent the Gateway from starting.[^3]
+
+---
+
+## Footnotes
+
+[^1]: https://en.wikipedia.org/wiki/OpenClaw
+[^2]: https://github.com/openclaw/openclaw
+[^3]: https://docs.openclaw.ai/gateway/configuration
+[^4]: https://docs.openclaw.ai/reference/templates/AGENTS
+[^5]: https://openclawready.com/blog/customize-openclaw-agents-md-configuration-guide/
+[^6]: https://lumadock.com/tutorials/openclaw-multi-agent-setup
+[^7]: https://safeclaw.io/blog/openclaw-mcp
+[^8]: https://clawtank.dev/blog/openclaw-config-reference
+[^9]: https://docs.openclaw.ai/tools/skills
+[^10]: https://lumadock.com/tutorials/build-custom-openclaw-skills
+[^11]: https://docs.openclaw.ai/automation/hooks
+[^12]: https://docs.openclaw.ai/automation/cron-jobs
