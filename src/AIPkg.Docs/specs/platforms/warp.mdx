@@ -1,0 +1,467 @@
+---
+title: 'Warp'
+description: 'Platform specification for Warp, the AI-native terminal application'
+icon: 'terminal'
+---
+
+## Overview
+
+[Warp](https://www.warp.dev/) is an AI-native terminal and agentic development environment built by **Warp** (formerly Warp.dev), designed from the ground up for prompt-driven development with integrated agents, code editing, and terminal access.[^1] Extensibility is via **Rules** (`AGENTS.md` project instruction files), **Skills** (`SKILL.md` workflow definitions), **MCP servers** (Model Context Protocol integrations), and **YAML Workflows** (parameterized command templates).[^2][^3][^4]
+
+---
+
+## Configuration
+
+### File Locations
+
+Warp uses a combination of GUI-managed settings, YAML configuration files, and Markdown instruction files. Core application settings are managed through the Settings panel and are not currently exposed as a user-editable config file.[^5]
+
+<Tabs>
+  <Tab title="macOS">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Launch configurations | `~/.warp/launch_configurations/*.yaml` | Saved window/tab/pane layouts |
+    | Local workflows | `~/.warp/workflows/*.yaml` | Personal YAML workflow commands |
+    | Global skills | `~/.warp/skills/<name>/SKILL.md` | Personal skills available across all projects |
+    | Global skills (alt) | `~/.agents/skills/<name>/SKILL.md` | Cross-tool compatible global skills |
+    | Custom themes | `~/.warp/themes/` | Custom terminal themes |
+    | Project rules | `<project>/AGENTS.md` | Project-level agent instructions |
+    | Project skills | `<project>/.agents/skills/<name>/SKILL.md` | Project-specific skills |
+    | Project skills (alt) | `<project>/.warp/skills/<name>/SKILL.md` | Warp-native project skills |
+    | Repo workflows | `<project>/.warp/workflows/*.yaml` | Repository-scoped YAML workflows |
+  </Tab>
+  <Tab title="Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Launch configurations | `${XDG_DATA_HOME:-~/.local/share}/warp-terminal/launch_configurations/*.yaml` | Saved window/tab/pane layouts |
+    | Local workflows | `${XDG_DATA_HOME:-~/.local/share}/warp-terminal/workflows/*.yaml` | Personal YAML workflow commands |
+    | Global skills | `~/.warp/skills/<name>/SKILL.md` | Personal skills available across all projects |
+    | Global skills (alt) | `~/.agents/skills/<name>/SKILL.md` | Cross-tool compatible global skills |
+    | Project rules | `<project>/AGENTS.md` | Project-level agent instructions |
+    | Project skills | `<project>/.agents/skills/<name>/SKILL.md` | Project-specific skills |
+    | Project skills (alt) | `<project>/.warp/skills/<name>/SKILL.md` | Warp-native project skills |
+    | Repo workflows | `<project>/.warp/workflows/*.yaml` | Repository-scoped YAML workflows |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Launch configurations | `%APPDATA%\warp\Warp\data\launch_configurations\` | Saved window/tab/pane layouts |
+    | Local workflows | `%APPDATA%\warp\Warp\data\workflows\` | Personal YAML workflow commands |
+    | Global skills | `~\.warp\skills\<name>\SKILL.md` | Personal skills available across all projects |
+    | Global skills (alt) | `~\.agents\skills\<name>\SKILL.md` | Cross-tool compatible global skills |
+    | Project rules | `<project>\AGENTS.md` | Project-level agent instructions |
+    | Project skills | `<project>\.agents\skills\<name>\SKILL.md` | Project-specific skills |
+    | Project skills (alt) | `<project>\.warp\skills\<name>\SKILL.md` | Warp-native project skills |
+    | Repo workflows | `<project>\.warp\workflows\` | Repository-scoped YAML workflows |
+  </Tab>
+</Tabs>
+
+<Note>
+  Warp's core application settings (appearance, keybindings, AI preferences) are managed through the GUI Settings panel and are not currently exportable as a standalone config file. There is an open feature request (GitHub issue #3447) to expose settings in a versionable format.[^5]
+</Note>
+
+### Launch Configuration Schema
+
+Launch configurations are YAML files that save window, tab, and pane layouts for quick session restoration.[^6]
+
+```yaml Launch Configuration
+name: My Project Layout
+active_window_index: 0
+windows:
+  - active_tab_index: 0
+    tabs:
+      - title: "Backend"
+        color: Blue
+        layout:
+          cwd: "/absolute/path/to/backend"
+          split_direction: vertical
+          panes:
+            - cwd: "/absolute/path/to/backend"
+              is_focused: true
+              commands:
+                - exec: "npm run dev"
+            - cwd: "/absolute/path/to/backend"
+              commands:
+                - exec: "npm run test:watch"
+      - title: "Frontend"
+        color: Green
+        layout:
+          cwd: "/absolute/path/to/frontend"
+```
+
+<Warning>
+  The `cwd` value must contain an absolute path or `""`. Using `~` or empty paths will cause the configuration to not appear in the launch configurations list.[^6]
+</Warning>
+
+---
+
+## Custom Instructions (Rules)
+
+Warp uses a rules system to provide persistent instructions to its agents. Rules come in two scopes: **Global Rules** (managed through Warp Drive) and **Project Rules** (stored in Markdown files in your codebase).[^7]
+
+### Project Rules (AGENTS.md)
+
+Warp uses `AGENTS.md` as the default project rules file. The filename must be in all caps for Warp to recognize it.[^7]
+
+```markdown AGENTS.md
+# Project: My API
+
+## Build & Test
+- Build: `cargo build`
+- Test: `cargo test`
+- Lint: `cargo clippy`
+
+## Code Style
+- Use Rust 2024 edition conventions
+- Prefer Result<T, E> over panics
+- All public functions must have doc comments
+
+## Architecture
+- src/api: HTTP handlers
+- src/domain: Business logic
+- src/infra: Database and external services
+```
+
+### Directory Hierarchy
+
+Rules can be organized hierarchically. Warp automatically applies the root-level `AGENTS.md` and the current directory's `AGENTS.md`. When editing files in other subdirectories, Warp makes a best-effort attempt to include that subdirectory's rules file as well.[^7]
+
+```
+project/
+  AGENTS.md          # Project-wide rules (always applied)
+  api/
+    AGENTS.md        # API-specific rules
+  ui/
+    AGENTS.md        # UI-specific rules
+```
+
+### Supported Rules Files
+
+Warp recognizes multiple rules file formats for cross-tool compatibility:[^7]
+
+| File | Notes |
+|---|---|
+| `AGENTS.md` | Default, recommended for new projects |
+| `WARP.md` | Legacy Warp-native format, still fully supported |
+| `CLAUDE.md` | Claude Code compatible |
+| `AGENT.md` | Generic agent rules |
+| `GEMINI.md` | Gemini compatible |
+| `.cursorrules` | Cursor compatible |
+| `.clinerules` | Cline compatible |
+| `.windsurfrules` | Windsurf compatible |
+| `.github/copilot-instructions.md` | GitHub Copilot compatible |
+
+### Global Rules
+
+Global Rules apply across all projects and are managed through **Warp Drive > Personal > Rules**. Warp may also suggest Global Rules based on your usage patterns. Global Rules are currently text entries within Warp Drive rather than standalone files on disk.[^7][^8]
+
+### Rules Precedence
+
+Rules follow this hierarchy (most-to-least specific):[^7]
+
+1. Current subdirectory project rules
+2. Root directory project rules
+3. Global Rules
+
+### Auto-Generation
+
+When entering a git repository for the first time, Warp runs an initialization flow to index the codebase and generate an `AGENTS.md` file. You can also trigger this manually using the `/init` slash command.[^7]
+
+---
+
+## MCP Servers
+
+Warp agents can be extended with external tools and data sources through the Model Context Protocol (MCP). MCP servers act as modular plugins, exposing custom tools through a standardized interface.[^9]
+
+### Adding MCP Servers
+
+MCP servers can be configured through the Warp GUI or the Oz CLI:[^9]
+
+<Tabs>
+  <Tab title="GUI (Warp Drive)">
+    Navigate to **Settings > MCP Servers** (or **Warp Drive > MCP Servers > + Add**) and paste a JSON configuration snippet.
+  </Tab>
+  <Tab title="Oz CLI (--mcp flag)">
+    ```bash
+    # Pass a Warp MCP server UUID
+    oz agent run --mcp <server-uuid>
+
+    # Pass inline JSON configuration
+    oz agent run --mcp '{"mcpServers":{"github":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":{"GITHUB_TOKEN":"your-token"}}}}'
+
+    # Pass a path to a JSON config file
+    oz agent run --mcp /path/to/mcp-config.json
+    ```
+  </Tab>
+</Tabs>
+
+### Configuration Format
+
+<CodeGroup>
+
+```json CLI Server (stdio)
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "env": {
+        "NODE_ENV": "production"
+      },
+      "working_directory": "/path/to/project"
+    }
+  }
+}
+```
+
+```json URL Server (Streamable HTTP / SSE)
+{
+  "mcpServers": {
+    "external-docs": {
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer your-token"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Server Types
+
+| Type | Description | Lifecycle |
+|---|---|---|
+| **CLI (stdio)** | Provide a startup command; Warp launches on startup and shuts down on exit | Managed by Warp |
+| **Streamable HTTP / SSE** | Provide a URL to an already-running MCP server | Externally managed |
+
+<Note>
+  Always set `working_directory` explicitly when your MCP server command or args include relative paths. This ensures consistent behavior across machines and sessions.[^9]
+</Note>
+
+### Auto-Detection
+
+Warp auto-detects MCP configurations from Claude Code and Codex, spawning user-scoped servers on startup and project-scoped servers when entering relevant repositories.[^9]
+
+### Authentication
+
+Warp supports three authentication methods for MCP servers:[^9]
+
+- **Environment variables** -- pass API keys or tokens via the server's `env` configuration
+- **OAuth login** -- one-click browser-based authentication; credentials are stored securely on device
+- **Custom headers** -- pass authorization headers for URL-based servers
+
+### Syncing and Sharing
+
+Warp syncs MCP server configuration between machines logged in with the same Warp account, but does not sync environment variables. Team members can share MCP configurations -- sensitive values in the `env` configuration are automatically scrubbed when sharing.[^9]
+
+---
+
+## Skills
+
+Skills are reusable, shareable instructions that agents can invoke when performing tasks. They complement Rules (which provide persistent guidelines) by defining specific task workflows.[^3]
+
+### SKILL.md Format
+
+Each skill lives in its own subdirectory and must contain a `SKILL.md` file with YAML frontmatter:[^3]
+
+```markdown SKILL.md
+---
+name: check-broken-links
+description: Scan the project for broken internal and external links.
+---
+
+# Check Broken Links
+
+## Instructions
+1. Run the link checker script against the project
+2. Parse the output for any broken links
+3. Report findings grouped by link type (internal vs external)
+
+## Examples
+- `/check-broken-links` -- scan entire project
+- `/check-broken-links docs/` -- scan only the docs directory
+```
+
+### Skill Directory Structure
+
+```
+.agents/skills/
+└── check-broken-links/
+    ├── SKILL.md            # Required: skill definition
+    ├── check_links.py      # Optional: supporting script
+    └── config.yaml         # Optional: configuration file
+```
+
+Supporting files (scripts, templates, configs) should be referenced in `SKILL.md` so the agent knows they exist.[^3]
+
+### Skill Locations
+
+<Tabs>
+  <Tab title="Project Skills">
+    Project-specific skills are stored in any of these directories within your project root:[^3]
+
+    | Path | Notes |
+    |---|---|
+    | `.agents/skills/` | Recommended, cross-tool compatible |
+    | `.warp/skills/` | Warp-native |
+    | `.claude/skills/` | Claude Code compatible |
+    | `.codex/skills/` | Codex compatible |
+    | `.cursor/skills/` | Cursor compatible |
+    | `.gemini/skills/` | Gemini compatible |
+    | `.copilot/skills/` | Copilot compatible |
+    | `.factory/skills/` | Factory compatible |
+    | `.github/skills/` | GitHub compatible |
+    | `.opencode/skills/` | OpenCode compatible |
+
+    Warp scans all supported skill directory names, allowing you to maintain skills compatible with multiple AI coding tools in the same repository.
+  </Tab>
+  <Tab title="Global Skills">
+    Global skills are stored in your home directory equivalents and are available across all projects:[^3]
+
+    | Path | Notes |
+    |---|---|
+    | `~/.agents/skills/` | Recommended, cross-tool compatible |
+    | `~/.warp/skills/` | Warp-native |
+    | `~/.claude/skills/` | Claude Code compatible |
+  </Tab>
+</Tabs>
+
+### Invoking Skills
+
+Skills can be invoked in three ways:[^3]
+
+1. **Natural language** -- describe the desired outcome; the agent selects the appropriate skill automatically
+2. **Slash commands** -- use `/{skill-name}` format (e.g., `/check-broken-links`)
+3. **With arguments** -- append context after the skill name (e.g., `/deploy push to staging`)
+
+### Skill Arguments
+
+Skills support parameterized arguments using placeholder syntax:[^3]
+
+| Placeholder | Description |
+|---|---|
+| `$ARGUMENTS` | Full argument string passed after the skill name |
+| `$ARGUMENTS[N]` | Nth whitespace-separated argument (0-indexed) |
+| `$N` | Shorthand for `$ARGUMENTS[N]` |
+
+Placeholders are substituted before the agent receives the instructions. Without placeholders, extra text becomes a follow-up user message.
+
+### Skills as Agents
+
+Skills can serve as the base prompt for launching agents. When running an agent from a skill, the skill provides the behavior definition while you supply additional context for that specific run. This works with both local and cloud agents.[^10]
+
+```bash
+# Run a skill as a cloud agent from a repository
+oz agent run-cloud --skill owner/repo:skill-name
+```
+
+Warp maintains a public collection of ready-to-use skills in the `warpdotdev/oz-skills` repository.[^3]
+
+---
+
+## YAML Workflows
+
+YAML Workflows are parameterized command templates that can be named, saved, and searched within Warp. They are accessed from the Command Palette.[^4]
+
+<Note>
+  Warp recommends using Warp Drive workflows for new workflows. YAML-based workflows remain fully supported.[^4]
+</Note>
+
+### Workflow Schema
+
+```yaml Example Workflow
+name: Git Interactive Rebase
+command: git rebase -i HEAD~{{num_commits}}
+description: Interactively rebase the last N commits
+tags:
+  - git
+shells:
+  - bash
+  - zsh
+arguments:
+  - name: num_commits
+    description: Number of commits to include in the rebase
+    default_value: "5"
+```
+
+### Schema Fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Name of the workflow |
+| `command` | Yes | Command to execute (supports `{{argument}}` placeholders) |
+| `description` | No | Description of what the workflow does |
+| `tags` | No | Array of categorization tags |
+| `shells` | No | Valid shells: `zsh`, `bash`, `fish` (defaults to all) |
+| `source_url` | No | Attribution URL for original source |
+| `author` | No | Original author name |
+| `author_url` | No | Author profile URL |
+| `arguments` | No | Array of parameterized arguments |
+
+Each argument entry supports `name` (matching `{{name}}` in the command), `description`, and `default_value`.[^4]
+
+---
+
+## Hooks and Lifecycle Events
+
+<Warning>
+  Warp does not currently support user-configurable lifecycle hooks for agent events. An open feature request (GitHub issue #7834) proposes adding a `~/.warp/hooks.yaml` configuration for agent lifecycle events such as `agent_prompt_submit`, `agent_tool_use_pre`, `agent_code_change`, and `agent_session_start`.[^11]
+</Warning>
+
+Warp uses internal shell hooks (`precmd`/`preexec`) for its block-based terminal rendering model, but these are not exposed as user-configurable extension points.[^12]
+
+The Warp Platform (Oz) provides orchestration-level lifecycle tracking for agent tasks -- tracking state transitions (`created`, `running`, `completed`, `failed`) and exposing task lifecycle operations via the CLI and REST API -- but this is an observability layer rather than a user-extensible hook system.[^13]
+
+---
+
+## Installation Provider Notes
+
+<Steps>
+  <Step title="Install skills to the project">
+    Copy skill directories into the project's `.agents/skills/` directory. Each skill must be in its own subdirectory containing a `SKILL.md` file.
+
+    ```
+    <project>/.agents/skills/<skill-name>/SKILL.md
+    ```
+  </Step>
+  <Step title="Install skills globally">
+    Copy skill directories into the global `~/.agents/skills/` directory to make them available across all projects.
+
+    ```
+    ~/.agents/skills/<skill-name>/SKILL.md
+    ```
+  </Step>
+  <Step title="Install YAML workflows">
+    Place `.yaml` or `.yml` workflow files in the appropriate OS-specific directory, or in the repository's `.warp/workflows/` directory for shared workflows.
+  </Step>
+  <Step title="Configure MCP servers">
+    MCP servers are configured through the Warp Drive GUI or via the `--mcp` flag on the Oz CLI. There is no fixed file path for MCP configuration -- servers are managed through Warp's interface and synced across machines via your Warp account.[^9]
+  </Step>
+  <Step title="Set up project rules">
+    Create an `AGENTS.md` file at the project root. Warp will also auto-generate one via the `/init` slash command when entering a git repository for the first time.[^7]
+  </Step>
+</Steps>
+
+<Note>
+  Warp scans multiple skill directory names (`.agents/skills/`, `.warp/skills/`, `.claude/skills/`, etc.), so skills installed for other compatible tools will be automatically discovered.[^3]
+</Note>
+
+---
+
+## Footnotes
+
+[^1]: https://www.warp.dev/
+[^2]: https://docs.warp.dev/agent-platform/capabilities/capabilities
+[^3]: https://docs.warp.dev/agent-platform/capabilities/skills
+[^4]: https://docs.warp.dev/terminal/entry/yaml-workflows
+[^5]: https://github.com/warpdotdev/Warp/issues/3447
+[^6]: https://docs.warp.dev/terminal/sessions/launch-configurations
+[^7]: https://docs.warp.dev/agent-platform/capabilities/rules
+[^8]: https://github.com/warpdotdev/Warp/issues/8283
+[^9]: https://docs.warp.dev/agent-platform/capabilities/mcp
+[^10]: https://docs.warp.dev/agent-platform/cloud-agents/skills-as-agents
+[^11]: https://github.com/warpdotdev/warp/issues/7834
+[^12]: https://www.warp.dev/blog/how-warp-works
+[^13]: https://docs.warp.dev/platform/warp-platform
