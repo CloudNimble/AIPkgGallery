@@ -1,0 +1,445 @@
+---
+title: 'Kimi Code CLI'
+description: 'Platform specification for Kimi Code CLI, Moonshot AI''s terminal-based coding agent'
+icon: 'terminal'
+---
+
+## Overview
+
+[Kimi Code CLI](https://github.com/MoonshotAI/kimi-cli) is an open-source agentic coding tool by **Moonshot AI** that runs directly in the terminal, powered by the Kimi K2.5 model.[^1] Extensibility is via MCP servers, **Agent Skills** (`SKILL.md` workflow definitions), **Custom Agents** (YAML-defined agent configurations with inheritance), and **AGENTS.md** project instruction files.
+
+---
+
+## Configuration
+
+### File Locations
+
+Kimi Code CLI stores configuration in a `~/.kimi/` directory using TOML format, with Markdown instruction files and YAML agent definitions for customization.[^2]
+
+| File | Path | Purpose |
+|---|---|---|
+| User config | `~/.kimi/config.toml` | Global settings: default model, providers, loop control[^2] |
+| MCP config | `~/.kimi/mcp.json` | Global MCP server definitions[^3] |
+| Project instructions | `<project>/AGENTS.md` | Project-level instructions injected via `${KIMI_AGENTS_MD}`[^4] |
+| Project skills | `<project>/.agents/skills/<name>/SKILL.md` | Project-scoped skills (recommended path)[^5] |
+| Project skills (alt) | `<project>/.kimi/skills/<name>/SKILL.md` | Alternate project skill path[^5] |
+| User skills | `~/.config/agents/skills/<name>/SKILL.md` | Cross-project personal skills (recommended path)[^5] |
+| User skills (alt) | `~/.kimi/skills/<name>/SKILL.md` | Alternate user skill path[^5] |
+
+<Note>
+  Kimi Code CLI also discovers skills in `.claude/skills/` and `.codex/skills/` directories (both project and user level), providing cross-tool compatibility.[^5]
+</Note>
+
+### config.toml Structure
+
+The default configuration file is created automatically on first run at `~/.kimi/config.toml`. You can specify an alternate file with `--config-file` or pass inline configuration with `--config`.[^2]
+
+<CodeGroup>
+
+```toml Basic Configuration
+default_model = "kimi-for-coding"
+default_thinking = true
+default_yolo = false
+default_editor = ""
+
+[loop_control]
+max_steps_per_turn = 100
+max_retries_per_step = 3
+max_ralph_iterations = 0
+reserved_context_size = 50000
+compaction_trigger_ratio = 0.85
+```
+
+```toml Provider Configuration
+[providers.moonshot]
+type = "kimi"
+base_url = "https://api.moonshot.cn/v1"
+api_key = "sk-..."
+
+[providers.openrouter]
+type = "openai_legacy"
+base_url = "https://openrouter.ai/api/v1"
+api_key = "sk-or-..."
+
+[models.kimi-for-coding]
+provider = "moonshot"
+model = "kimi-for-coding"
+max_context_size = 131072
+capabilities = ["thinking", "image_in"]
+```
+
+```toml MCP and Services
+[mcp.client]
+tool_call_timeout_ms = 60000
+
+[services.moonshot_search]
+base_url = "https://api.moonshot.cn/search"
+api_key = "sk-..."
+
+[services.moonshot_fetch]
+base_url = "https://api.moonshot.cn/fetch"
+api_key = "sk-..."
+```
+
+</CodeGroup>
+
+<Note>
+  If `~/.kimi/config.toml` does not exist but `~/.kimi/config.json` does, Kimi Code CLI automatically migrates the JSON configuration to TOML format and backs up the original as `config.json.bak`.[^2]
+</Note>
+
+### Configuration Priority
+
+Settings can be specified via file or command-line flags. The `/login` (alias `/setup`) slash command provides an interactive wizard for initial platform and model configuration.[^2]
+
+---
+
+## Custom Instructions (AGENTS.md)
+
+`AGENTS.md` is a Markdown file placed in the project root that provides project-level context and instructions. Its content is injected into the system prompt via the built-in `${KIMI_AGENTS_MD}` template variable.[^4]
+
+You can generate an `AGENTS.md` file by running the `/init` slash command, which analyzes the project structure and produces a description document.[^4]
+
+```markdown AGENTS.md
+# Project: My App
+
+## Build & Test
+- Build: `npm run build`
+- Test: `npm test`
+
+## Code Style
+- Use TypeScript strict mode
+- Prefer functional patterns
+```
+
+<Warning>
+  As of the latest documentation, `AGENTS.md` content is injected into the system prompt template but may require explicit reference (e.g., `@AGENTS.md`) in some configurations to be actively consulted by the agent. The `/init` command is the recommended way to bootstrap this file.[^6]
+</Warning>
+
+---
+
+## MCP Servers
+
+Kimi Code CLI connects to external tools through the Model Context Protocol. MCP servers are managed via the `kimi mcp` subcommand group and stored in `~/.kimi/mcp.json`.[^3]
+
+<Tabs>
+  <Tab title="CLI (kimi mcp add)">
+    ```bash
+    # Add an HTTP server
+    kimi mcp add --transport http context7 https://mcp.context7.com/mcp \
+      --header "CONTEXT7_API_KEY: ctx7sk-your-key"
+
+    # Add an HTTP server with OAuth
+    kimi mcp add --transport http --auth oauth linear https://mcp.linear.app/mcp
+
+    # Add a stdio server
+    kimi mcp add --transport stdio chrome-devtools \
+      -- npx chrome-devtools-mcp@latest
+
+    # List, remove, test servers
+    kimi mcp list
+    kimi mcp remove chrome-devtools
+    kimi mcp test context7
+
+    # Authorize OAuth server
+    kimi mcp auth linear
+
+    # Reset cached OAuth tokens
+    kimi mcp reset-auth linear
+    ```
+  </Tab>
+  <Tab title="JSON (~/.kimi/mcp.json)">
+    ```json
+    {
+      "mcpServers": {
+        "context7": {
+          "url": "https://mcp.context7.com/mcp",
+          "headers": {
+            "CONTEXT7_API_KEY": "your-key"
+          }
+        },
+        "chrome-devtools": {
+          "command": "npx",
+          "args": ["chrome-devtools-mcp@latest"],
+          "env": {
+            "SOME_VAR": "value"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Ad-hoc (CLI flags)">
+    ```bash
+    # Load MCP config from a custom file
+    kimi --mcp-config-file /path/to/mcp.json
+
+    # Pass MCP config inline as JSON
+    kimi --mcp-config '{"mcpServers": {"test": {"url": "https://..."}}}'
+    ```
+  </Tab>
+</Tabs>
+
+### Transport Types
+
+| Type | Description | Configuration Fields |
+|---|---|---|
+| **http** | Remote servers via HTTP | `url`, optional `headers`, optional OAuth via `--auth` flag[^3] |
+| **stdio** | Local processes over standard I/O | `command`, `args`, optional `env`[^3] |
+
+<Note>
+  MCP configuration is currently global only (`~/.kimi/mcp.json`). There is no documented project-level MCP configuration file (e.g., no `.kimi/mcp.json` in the project root).[^3][^7]
+</Note>
+
+---
+
+## Custom Agents and Subagents
+
+An agent defines the AI's behavior, including its system prompt, available tools, and subagents. Agents are defined in YAML files and loaded with the `--agent` or `--agent-file` flag.[^4]
+
+### Agent YAML Schema
+
+<CodeGroup>
+
+```yaml Custom Agent (Standalone)
+version: 1
+agent:
+  name: my-agent
+  system_prompt_path: ./system.md
+  system_prompt_args:
+    PROJECT_TYPE: "web-app"
+  tools:
+    - "kimi_cli.tools.file:ReadFile"
+    - "kimi_cli.tools.file:WriteFile"
+    - "kimi_cli.tools.shell:RunCommand"
+```
+
+```yaml Custom Agent (Extending Default)
+version: 1
+agent:
+  extend: default
+  system_prompt_path: ./my-prompt.md
+  exclude_tools:
+    - "kimi_cli.tools.web:SearchWeb"
+```
+
+```yaml Agent with Subagents
+version: 1
+agent:
+  extend: default
+  subagents:
+    coder:
+      path: ./coder-sub.yaml
+      description: "Handle coding tasks"
+    reviewer:
+      path: ./reviewer-sub.yaml
+      description: "Review code changes"
+```
+
+</CodeGroup>
+
+### Agent Configuration Fields
+
+| Field | Type | Purpose |
+|---|---|---|
+| `extend` | string | Inherit from `default` or a relative YAML path[^4] |
+| `name` | string | Agent identifier[^4] |
+| `system_prompt_path` | string | Path to a Markdown template file[^4] |
+| `system_prompt_args` | map | Custom variables for `${VAR}` substitution in the prompt[^4] |
+| `tools` | list | Tools in `module:ClassName` format[^4] |
+| `exclude_tools` | list | Tools to remove from inherited configuration[^4] |
+| `subagents` | map | Nested subagent definitions with `path` and `description`[^4] |
+
+### System Prompt Template Variables
+
+System prompt files support `${VAR}` syntax. Built-in variables include:[^4]
+
+| Variable | Value |
+|---|---|
+| `${KIMI_NOW}` | Current timestamp |
+| `${KIMI_WORK_DIR}` | Working directory path |
+| `${KIMI_WORK_DIR_LS}` | Working directory listing |
+| `${KIMI_AGENTS_MD}` | Content of `AGENTS.md` |
+| `${KIMI_SKILLS}` | Loaded skills list |
+
+Custom variables defined in `system_prompt_args` are also available for substitution.
+
+---
+
+## Skills
+
+Agent Skills is an open format for adding specialized knowledge and workflows. A skill is a directory containing a `SKILL.md` file with YAML frontmatter and Markdown content.[^5]
+
+### Skill Discovery Paths
+
+Kimi Code CLI uses layered loading to discover skills. Later entries override skills with the same name.[^5]
+
+<Steps>
+  <Step title="Built-in skills">
+    Skills shipped with the Kimi Code CLI package (e.g., `kimi-cli-help`, `skill-creator`).[^5]
+  </Step>
+  <Step title="User-level skills">
+    Loaded from (in priority order): `~/.config/agents/skills/`, `~/.agents/skills/`, `~/.kimi/skills/`, `~/.claude/skills/`, `~/.codex/skills/`.[^5]
+  </Step>
+  <Step title="Project-level skills">
+    Loaded from (in priority order): `.agents/skills/`, `.kimi/skills/`, `.claude/skills/`, `.codex/skills/`.[^5]
+  </Step>
+</Steps>
+
+You can override discovery with the `--skills-dir` flag.[^5]
+
+### SKILL.md Format
+
+```yaml SKILL.md
+---
+name: deploy-staging
+description: Deploy the current branch to the staging environment
+license: MIT
+---
+
+## Steps
+
+1. Run `npm run build` to create a production build
+2. Run `npm run test` to verify all tests pass
+3. Deploy to staging with `./scripts/deploy.sh staging`
+4. Verify deployment at https://staging.example.com
+```
+
+**Frontmatter fields:**[^5]
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | 1-64 characters, lowercase letters/numbers/hyphens only |
+| `description` | Yes | 1-1024 characters explaining the skill's purpose |
+| `license` | No | License identifier |
+| `compatibility` | No | Tool compatibility metadata |
+| `metadata` | No | Additional metadata |
+| `type` | No | Set to `flow` for flow skills |
+
+### Invoking Skills
+
+Skills are invoked via slash commands:[^5]
+
+```
+/skill:deploy-staging
+/skill:deploy-staging with extra instructions here
+/flow:multi-step-workflow
+```
+
+When Kimi Code CLI starts, it discovers all skills and injects their names, paths, and descriptions into the system prompt. The agent decides whether to consult a skill's `SKILL.md` based on the current task context.[^5]
+
+### Flow Skills
+
+Flow skills are a special type that embed a Mermaid or D2 diagram to define multi-step automated workflows. Set `type: flow` in the frontmatter. Flow diagrams must have `BEGIN` and `END` nodes, and decision nodes output `<choice>branch name</choice>`.[^5]
+
+Invoke flow skills with `/flow:<name>` for automatic step execution, or `/skill:<name>` to treat the content as a standard prompt.[^5]
+
+---
+
+## Hooks
+
+<Warning>
+  A lifecycle hooks system was proposed (GitHub Issue #785) but was closed without direct implementation. The maintainers suggested using Agent Flow skills as an alternative for workflow-like use cases. A `--starting-prompt` flag was added (PR #864) to address some orchestration needs.[^8]
+</Warning>
+
+Kimi Code CLI does not currently have a built-in hooks system for lifecycle events (e.g., `SessionStart`, `PreToolUse`). For deterministic automation needs, consider using flow skills or the `--starting-prompt` flag for session initialization logic.[^8]
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for Kimi Code CLI.
+
+### Configuration File Paths
+
+- **User config**: `~/.kimi/config.toml` (TOML format)[^2]
+- **MCP config**: `~/.kimi/mcp.json` (JSON format)[^3]
+- **Project instructions**: `<project>/AGENTS.md`[^4]
+- **Project skills**: `<project>/.agents/skills/<name>/SKILL.md` (recommended)[^5]
+- **User skills**: `~/.config/agents/skills/<name>/SKILL.md` (recommended)[^5]
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, an installer has two options:
+
+<Tabs>
+  <Tab title="CLI Command">
+    The safest approach is to use the `kimi mcp add` command:
+
+    ```bash
+    # Add a stdio server
+    kimi mcp add --transport stdio \
+      --env API_KEY=value \
+      package-server -- npx -y @scope/mcp-server-package
+
+    # Add an HTTP server
+    kimi mcp add --transport http \
+      --header "Authorization: Bearer token" \
+      package-server https://api.example.com/mcp
+    ```
+  </Tab>
+  <Tab title="Direct JSON (~/.kimi/mcp.json)">
+    Merge into `~/.kimi/mcp.json` under the `mcpServers` key:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "value"
+          }
+        }
+      }
+    }
+    ```
+
+    The installer must parse the existing JSON file (if present), deep-merge the new server entry, and write the result back without overwriting existing entries.
+  </Tab>
+</Tabs>
+
+### Installing Skills
+
+To install a skill, create a directory with a `SKILL.md` file at the appropriate path:
+
+<Tabs>
+  <Tab title="Project Scope">
+    Write to `<project>/.agents/skills/<skill-name>/SKILL.md`. This path is the recommended project-level location and is compatible with other tools that support the Agent Skills format.[^5]
+  </Tab>
+  <Tab title="User Scope">
+    Write to `~/.config/agents/skills/<skill-name>/SKILL.md`. This path is the recommended user-level location for skills available across all projects.[^5]
+  </Tab>
+</Tabs>
+
+### Installing Project Instructions
+
+To install project-level instructions, write or append to `<project>/AGENTS.md`. If the file already exists, the installer should append content rather than overwrite.[^4]
+
+### Config File Format
+
+Kimi Code CLI uses TOML for `config.toml` and JSON for `mcp.json`. The installer must:
+
+1. Parse the existing file (if it exists)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back, preserving existing entries
+
+<Note>
+  MCP configuration is global-only. There is no project-scoped MCP config file. For project-specific tool needs, consider installing skills instead of MCP servers.[^3]
+</Note>
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows, Kimi Code CLI supports a `--starting-prompt` flag to provide an initial prompt without requiring interactive input.[^8]
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/MoonshotAI/kimi-cli
+[^2]: https://moonshotai.github.io/kimi-cli/en/configuration/config-files.html
+[^3]: https://moonshotai.github.io/kimi-cli/en/customization/mcp.html
+[^4]: https://moonshotai.github.io/kimi-cli/en/customization/agents.html
+[^5]: https://moonshotai.github.io/kimi-cli/en/customization/skills.html
+[^6]: https://github.com/MoonshotAI/kimi-cli/issues/850
+[^7]: https://moonshotai.github.io/kimi-cli/en/reference/kimi-mcp.html
+[^8]: https://github.com/MoonshotAI/kimi-cli/issues/785
