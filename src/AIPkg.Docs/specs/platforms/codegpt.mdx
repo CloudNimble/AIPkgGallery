@@ -1,0 +1,426 @@
+---
+title: CodeGPT
+description: Platform specification for CodeGPT, the AI coding assistant by Judini Labs
+icon: message-bot
+---
+
+## Overview
+
+[CodeGPT](https://www.codegpt.co/) is an AI coding assistant developed by Judini Labs. It is available as an extension for VS Code (`DanielSanMedium.dscodegpt`), Cursor, and JetBrains IDEs (`24372-codegpt-chat--ai-agents`), with over 2.3 million installs on the VS Code Marketplace [^1]. CodeGPT provides AI chat, agentic coding with plan mode, code autocompletion, inline editing, and a code interpreter. Key extensibility points include MCP server integration via `mcp.json`, custom AI agents with RAG-based knowledge bases, and BYOK (Bring Your Own Key) support for 20+ AI providers [^2]. CodeGPT also publishes its own MCP Code Graph server for semantic codebase analysis [^3].
+
+---
+
+## Configuration
+
+### File Locations
+
+CodeGPT stores its settings through the host IDE's settings system. The MCP configuration uses a dedicated `mcp.json` file managed by the extension.
+
+<Tabs>
+  <Tab title="VS Code / Cursor">
+    | File | Path | Purpose |
+    |---|---|---|
+    | VS Code settings | `settings.json` (standard VS Code locations) | Extension settings (API keys, model selection, temperature, tokens) |
+    | MCP config | Managed by extension (open via Settings > MCP Configuration > "Open MCP Config File") | MCP server definitions |
+
+    VS Code `settings.json` locations:
+
+    | Platform | Path |
+    |---|---|
+    | **Linux** | `~/.config/Code/User/settings.json` |
+    | **macOS** | `~/Library/Application Support/Code/User/settings.json` |
+    | **Windows** | `%APPDATA%\Code\User\settings.json` |
+
+    <Note>
+      The MCP configuration file (`mcp.json`) is managed internally by the CodeGPT extension. The recommended way to locate and edit it is through the extension's settings UI rather than navigating to it manually on disk [^4].
+    </Note>
+  </Tab>
+  <Tab title="JetBrains">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Plugin settings | IDE Settings > Tools > CodeGPT | API key and model configuration |
+    | IDE config directory | OS-specific (see below) | Plugin state and preferences stored as XML |
+
+    JetBrains IDE configuration directories:
+
+    | Platform | Path |
+    |---|---|
+    | **Linux** | `~/.config/JetBrains/<product><version>/` |
+    | **macOS** | `~/Library/Application Support/JetBrains/<product><version>/` |
+    | **Windows** | `%APPDATA%\JetBrains\<product><version>\` |
+
+    <Note>
+      CodeGPT's JetBrains plugin requires Node.js 20 or higher to be available on the system. Ensure that port 54112 or 54113 is available for the extension's local server [^5].
+    </Note>
+  </Tab>
+</Tabs>
+
+### Settings Structure
+
+CodeGPT settings in VS Code are configured under the `CodeGPT` namespace in `settings.json`. Key settings include API key, model selection, max tokens, and temperature [^6].
+
+<CodeGroup>
+
+```json VS Code settings.json
+{
+  "CodeGPT.apiKey": "your-api-key-here",
+  "CodeGPT.maxTokens": 1024,
+  "CodeGPT.temperature": 0.5
+}
+```
+
+```json MCP Configuration (mcp.json)
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
+    },
+    "my-custom-server": {
+      "command": "node",
+      "args": ["/path/to/server.js"],
+      "env": {
+        "API_KEY": "your-key"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+---
+
+## MCP Server Support
+
+CodeGPT acts as an MCP (Model Context Protocol) host, connecting to external MCP servers that expose tools for file operations, database queries, API interactions, and more [^4].
+
+### Configuring MCP Servers
+
+1. Open Settings by clicking the gear icon in the sidebar
+2. Navigate to the **MCP Configuration** tab
+3. Click **Open MCP Config File** to open `mcp.json`
+4. Add server definitions to the `mcpServers` object
+5. Return to the MCP Configuration tab and click **Refresh Server Connections**
+
+### MCP Configuration Format
+
+The `mcp.json` file uses the following structure:
+
+```json mcp.json
+{
+  "mcpServers": {
+    "server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "ENV_VAR": "value"
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `command` | string | The executable to run (e.g., `npx`, `node`, `python`) |
+| `args` | string[] | Arguments passed to the command |
+| `env` | object | Environment variables for the server process |
+
+### Managing Tools
+
+After refreshing server connections, you can click on any server in the MCP Configuration tab to view its exposed tools and descriptions. Individual tools can be enabled or disabled for use by the AI models [^4].
+
+### Deep Graph MCP Server (Code Graph)
+
+CodeGPT provides its own MCP server, `mcp-code-graph`, for semantic code graph analysis and visualization. It enables interaction with code repositories through knowledge graphs [^3].
+
+**Available tools:**
+
+| Tool | Description |
+|---|---|
+| `list-graphs` | Lists available repository graphs with basic information |
+| `get-code` | Retrieves complete source code for specific functionality |
+| `find-direct-connections` | Explores direct relationships of a functionality within the code graph |
+| `nodes-semantic-search` | Uses natural language to find code functionalities |
+| `docs-semantic-search` | Semantically searches repository documentation |
+| `get-usage-dependency-links` | Analyzes functionalities affected by changes to a code entity |
+| `folder-tree-structure` | Retrieves repository folder hierarchies |
+
+The server supports two modes:
+
+<CodeGroup>
+
+```json Public Graphs (no authentication)
+{
+  "mcpServers": {
+    "Deep Graph MCP": {
+      "command": "npx",
+      "args": ["-y", "mcp-code-graph@latest", "username/repository-name"]
+    }
+  }
+}
+```
+
+```json Private Graphs (requires credentials)
+{
+  "mcpServers": {
+    "Deep Graph MCP": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-code-graph@latest",
+        "CODEGPT_API_KEY",
+        "CODEGPT_ORG_ID",
+        "CODEGPT_GRAPH_ID"
+      ]
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+<Note>
+  For public graphs, you can access any public repository indexed by DeepGraph by converting GitHub URLs: change `github.com` to `deepgraph.co` (e.g., `deepgraph.co/username/repo`) [^3].
+</Note>
+
+**Required credentials for private graphs:**
+
+| Parameter | Description | Where to find |
+|---|---|---|
+| `CODEGPT_API_KEY` | Your CodeGPT API key | [app.codegpt.co/user/api-keys](https://app.codegpt.co/user/api-keys) |
+| `CODEGPT_ORG_ID` | Organization identifier (optional) | CodeGPT organization settings |
+| `CODEGPT_GRAPH_ID` | Specific graph identifier (optional) | CodeGPT graph settings |
+
+---
+
+## AI Agents
+
+CodeGPT allows users to create custom AI agents with specialized knowledge bases using Retrieval Augmented Generation (RAG). Agents are created and managed through CodeGPT Studio at [app.codegpt.co](https://app.codegpt.co) and sync to the IDE extension [^7].
+
+### Agent Configuration
+
+- **AI Model**: Select from any supported model (configurable per agent)
+- **Conversation Style**: Adjustable precision-to-creativity slider
+- **Main Instructions**: Custom system prompt for the agent
+- **Knowledge Base**: Upload files, URLs, or connect to repositories; supports configurable chunking (chunk size, overlap, separators)
+- **Tools**: Enable MCP integrations and the Knowledge Graph tool per agent
+
+### Agent Modes
+
+CodeGPT offers multiple interaction modes [^2]:
+
+| Mode | Description |
+|---|---|
+| **Chat** | Standard conversational interaction for coding questions |
+| **Search** | Semantic search across codebase and documentation |
+| **Agent** | Autonomous agentic mode with planning for complex multi-step tasks |
+
+### Chat Commands
+
+The extension provides built-in slash commands for common operations [^1]:
+
+| Command | Description |
+|---|---|
+| `/Fix` | Detect and fix errors in code |
+| `/Document` | Generate documentation for code |
+| `/Unit Testing` | Generate unit tests |
+| `/Refactor` | Improve code quality and structure |
+| `@file-name` | Include a specific file as context |
+
+---
+
+## BYOK (Bring Your Own Key)
+
+CodeGPT supports over 20 AI providers through its BYOK model. API keys are encrypted and stored locally -- they are never sent to CodeGPT's servers [^8].
+
+### Supported Providers
+
+| Provider | Example Models |
+|---|---|
+| **OpenAI** | GPT-4.1, o3, GPT-5 |
+| **Anthropic** | Claude 4.5 Sonnet, Claude 4.1 Opus |
+| **Google AI Studio** | Gemini Pro 2.5, Gemini Flash |
+| **Mistral** | Mistral Large, Codestral |
+| **Cohere** | Command R+ |
+| **xAI (Grok)** | Grok |
+| **Groq** | Groq-hosted models |
+| **DeepSeek** | DeepSeek Coder |
+| **NVIDIA** | NVIDIA-hosted models |
+| **HuggingFace** | Hugging Face models |
+| **Microsoft Azure AI** | Azure OpenAI Service |
+| **AWS Bedrock** | Bedrock-hosted models |
+| **GitHub Models** | GitHub-hosted models |
+| **GitHub Copilot** | Copilot-provided models |
+| **Ollama** | Local models |
+| **LM Studio** | Local models |
+| **Docker** | Docker Model Runner |
+| **Cerebras** | Cerebras models |
+| **Fireworks** | Fireworks AI models |
+| **Perplexity** | Perplexity models |
+| **Byteplus** | Byteplus models |
+| **Gemini CLI** | Gemini CLI integration |
+| **Custom** | Any provider with an API endpoint (Teams plan required) |
+
+<Note>
+  The Custom provider option allows connecting to any provider using an API key and custom endpoint URL. This feature requires a Professional or Teams subscription [^9].
+</Note>
+
+---
+
+## CodeGPT API / SDK
+
+CodeGPT provides a RESTful API for programmatic interaction with AI agents created in the platform. SDKs are available in Python and JavaScript via the `judini` package [^10].
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `https://api.codegpt.co/api/v1/agent` | List all agents |
+| `GET` | `https://api.codegpt.co/api/v1/agent/{id}` | Get a specific agent |
+| `POST` | Chat completion endpoint | Send messages to an agent (streaming and non-streaming) |
+
+### SDK Usage
+
+<CodeGroup>
+
+```python Python (judini)
+from judini import CodeGPTPlus
+
+codegpt = CodeGPTPlus(api_key="your-api-key", org_id="your-org-id")
+
+response = codegpt.chat_completion(
+    agent_id="your-agent-id",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
+
+```javascript JavaScript (judini)
+const { CodeGPTPlus } = require("judini");
+
+const codegpt = new CodeGPTPlus({
+  apiKey: "your-api-key",
+  orgId: "your-org-id"
+});
+```
+
+</CodeGroup>
+
+---
+
+## Pricing
+
+CodeGPT offers a free tier with BYOK support and a paid autocomplete add-on [^11].
+
+| Plan | Price | Key Features |
+|---|---|---|
+| **Free** | $0/month | BYOK with 15+ providers, unlimited interactions with own API keys, local model support (Ollama, LM Studio), optional token credit purchase |
+| **AutoComplete** | $8/seat/month ($6.67 billed annually) | All Free features plus unlimited AI autocompletion, agentic mode with planning |
+| **AI-First Services** | Custom | SSO, enterprise security, flexible deployment, custom AI agents, AI voice agents, omnichannel support |
+
+<Note>
+  The AutoComplete feature is provided directly by CodeGPT and does not consume tokens from your AI provider [^11].
+</Note>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for CodeGPT.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="VS Code / Cursor">
+    | Platform | Settings Path |
+    |---|---|
+    | **Linux** | `~/.config/Code/User/settings.json` |
+    | **macOS** | `~/Library/Application Support/Code/User/settings.json` |
+    | **Windows** | `%APPDATA%\Code\User\settings.json` |
+
+    - **MCP config**: Managed internally by the extension; accessible via Settings > MCP Configuration > "Open MCP Config File"
+    - **Extension ID**: `DanielSanMedium.dscodegpt`
+  </Tab>
+  <Tab title="JetBrains">
+    | Platform | Config Directory |
+    |---|---|
+    | **Linux** | `~/.config/JetBrains/<product><version>/` |
+    | **macOS** | `~/Library/Application Support/JetBrains/<product><version>/` |
+    | **Windows** | `%APPDATA%\JetBrains\<product><version>\` |
+
+    - **Plugin ID**: `24372-codegpt-chat--ai-agents`
+    - Settings configured via IDE Settings > Tools > CodeGPT
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically add an MCP server, merge the server definition into the `mcpServers` object in CodeGPT's `mcp.json` file:
+
+```json mcp.json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+<Warning>
+  The exact filesystem path of CodeGPT's `mcp.json` file is not publicly documented. The extension manages this file internally and opens it through its settings UI. Programmatic installers may need to locate the file within the extension's global storage directory (e.g., `globalStorage/DanielSanMedium.dscodegpt/`) or write to the VS Code-native `.vscode/mcp.json` if CodeGPT supports reading from it.
+</Warning>
+
+### Installing Custom Instructions
+
+CodeGPT does not use a project-level custom instructions file (such as `.clinerules` or `CLAUDE.md`). Custom instructions are configured through:
+
+1. **AI Agent system prompts** -- configured in CodeGPT Studio at [app.codegpt.co](https://app.codegpt.co) and synced to the IDE extension [^7]
+2. **Agent knowledge bases** -- files, URLs, and repository content uploaded to agents via the Studio
+3. **VS Code settings** -- extension settings allow customizing prompts sent to the AI [^6]
+
+### Config File Format
+
+- **MCP configuration**: JSON format with a `mcpServers` top-level object containing named server entries
+- **VS Code settings**: Standard JSON `settings.json` with `CodeGPT.*` namespace keys
+- **JetBrains settings**: XML configuration files in the IDE's `options/` directory
+
+### Non-Interactive Considerations
+
+- CodeGPT requires an account (sign in via Gmail or GitHub) and network connectivity for most features [^6]
+- The extension requires port 54112 or 54113 to be available for its local server [^5]
+- BYOK API keys are encrypted and stored locally on the user's machine [^8]
+- The VS Code extension requires VS Code engine `^1.82.0` or higher [^1]
+- JetBrains plugin requires Node.js 20+ [^5]
+
+### Extension Detection
+
+To detect whether CodeGPT is installed:
+
+```bash
+# VS Code
+code --list-extensions | grep DanielSanMedium.dscodegpt
+```
+
+For JetBrains, check for the plugin directory in the IDE's plugins folder or query installed plugins programmatically.
+
+---
+
+## Footnotes
+
+[^1]: [CodeGPT: Chat & AI Agents - Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=DanielSanMedium.dscodegpt)
+[^2]: [Features - AI Coding Assistant for Developers | CodeGPT](https://www.codegpt.co/developers)
+[^3]: [JudiniLabs/mcp-code-graph - GitHub](https://github.com/JudiniLabs/mcp-code-graph)
+[^4]: [MCP (Model Control Protocol) | CodeGPT Documentation](https://docs.codegpt.co/docs/tutorial-features/mcp)
+[^5]: [Installation | CodeGPT Documentation](https://docs.codegpt.co/docs/tutorial-basics/installation)
+[^6]: [Configuration | CodeGPT Documentation](https://docs.codegpt.co/docs/tutorial-basics/configuration)
+[^7]: [AI Agents | CodeGPT Developer Documentation](https://developers.codegpt.co/ai-agents)
+[^8]: [Bring Your Own API Key (BYOK) | CodeGPT](https://www.codegpt.co/bring-your-own-api-key)
+[^9]: [AI Providers | CodeGPT Documentation](https://docs.codegpt.co/docs/category/-ai-providers)
+[^10]: [CodeGPT Plus API | CodeGPT Documentation](https://docs.codegpt.co/docs/codegpt_plus_api)
+[^11]: [Pricing - AI Coding Plans | CodeGPT](https://www.codegpt.co/pricing)
