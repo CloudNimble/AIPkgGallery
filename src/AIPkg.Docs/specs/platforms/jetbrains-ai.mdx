@@ -6,59 +6,7 @@ icon: brain
 
 ## Overview
 
-[JetBrains AI Assistant](https://www.jetbrains.com/ai-assistant/) is an AI-powered development tool built by **JetBrains** and distributed as a plugin across all JetBrains IDEs. It provides context-aware code completion, AI chat, inline code generation, multi-file editing, and an agentic coding assistant called **Junie**. AI Assistant is also available as a VS Code extension.
-
-AI Assistant is a multi-model platform, routing requests through the JetBrains AI service to cloud providers (Anthropic, OpenAI, Google, xAI) while also supporting local models via Ollama and LM Studio, and Bring Your Own Key (BYOK) configurations.
-
-<Info>
-  AI Assistant is a plugin, not a standalone application. It runs inside a host JetBrains IDE and shares access to the IDE's project model, indexing, inspections, refactoring engine, and language server data.
-</Info>
-
-### Supported IDEs
-
-AI Assistant is available in all major JetBrains IDEs, including:
-
-- IntelliJ IDEA (Ultimate and Community)
-- PyCharm (Professional and Community)
-- WebStorm
-- GoLand
-- Rider
-- CLion
-- PhpStorm
-- RubyMine
-- RustRover
-- DataGrip
-- Fleet
-
-### Key AI Features
-
-| Feature | Description |
-|---|---|
-| **Code Completion** | Single-line and multi-line completions that follow your coding style and naming conventions |
-| **AI Chat** | Conversational interface with codebase context for explanations, refactoring, debugging, and generation |
-| **Multi-File Edit** | Apply AI-generated changes across multiple files with diff review and per-file acceptance |
-| **Junie (Agent)** | Autonomous agentic coding assistant that plans, writes, tests, and iterates on tasks |
-| **Inline Editing** | In-place code transforms directly in the editor |
-| **Next Edit Suggestions** | Predictive suggestions for the next likely edit at your cursor position |
-| **Prompt Library** | Configurable prompt templates available as AI Actions in the editor context menu |
-| **MCP Support** | Model Context Protocol integration for connecting to external tools and data sources |
-| **Project Rules** | Markdown-based instruction files that guide AI behavior per project |
-
-### Subscription Tiers
-
-| Tier | Key Inclusions |
-|---|---|
-| **AI Free** | Unlimited code completion, local model support, limited cloud-based feature quota |
-| **AI Pro** ($100/yr) | Higher cloud quota for AI Assistant and Junie |
-| **AI Ultimate** ($300/yr) | Full cloud access for AI Assistant, Junie, and advanced agent features |
-| **AI Enterprise** | Organization-level controls, SSO, admin management |
-
-### Privacy
-
-- Zero data retention with third-party LLM providers for text inputs
-- `.aiignore` file support to exclude sensitive files and folders from AI processing
-- Local model support for fully offline workflows
-- Opt-in detailed telemetry
+[JetBrains AI Assistant](https://www.jetbrains.com/ai-assistant/) is a multi-model AI plugin for all JetBrains IDEs, extensible through MCP servers, project rules, custom prompt libraries, and the Agent Client Protocol (ACP) for third-party agent integration.
 
 ---
 
@@ -312,49 +260,7 @@ MCP tools are invoked in AI Chat using the `/` symbol. Codebase mode must be ena
 
 ---
 
-## Junie / Agent Mode
-
-[Junie](https://www.jetbrains.com/junie/) is JetBrains' agentic AI coding assistant. Unlike code completion or chat, Junie handles multi-step tasks autonomously -- planning, writing code, running tests, and iterating without manual intervention at each step.
-
-### How Junie Works
-
-<Steps>
-  <Step title="Describe Your Task">
-    Open AI Chat and describe what you want Junie to do. Junie is integrated directly into the AI Assistant chat experience.
-  </Step>
-  <Step title="Review the Plan">
-    Junie produces a plan before writing any code: a breakdown of intended changes, which files will be touched, and in what order. You can review and approve the plan before execution begins.
-  </Step>
-  <Step title="Junie Executes">
-    Junie writes code, creates or modifies files, runs tests, and iterates based on results. It operates autonomously within the approved plan.
-  </Step>
-  <Step title="Review Changes">
-    Review all modifications through the IDE's diff viewer. Accept, reject, or request revisions to individual changes.
-  </Step>
-</Steps>
-
-### Operating Modes
-
-| Mode | Description |
-|---|---|
-| **Code Mode** | Full agent mode -- Junie plans and executes multi-step coding tasks |
-| **Ask Mode** | Conversational -- ask questions about the codebase, explore architecture, or discuss design decisions with full project context |
-
-### Supported IDEs
-
-Junie is available in IntelliJ IDEA Ultimate, PyCharm Professional, WebStorm, GoLand, PhpStorm, RustRover, and RubyMine.
-
-### Junie CLI (March 2026)
-
-Junie CLI is a standalone, LLM-agnostic coding agent that runs directly from the terminal, independent of any IDE:
-
-- Supports models from OpenAI, Anthropic, Google, and xAI
-- BYOK (Bring Your Own Key) pricing -- use your own API keys with no additional platform fees
-- Works in CI/CD pipelines, GitHub, and GitLab workflows
-- One-click migration from Claude Code, Codex, and other agents
-- Next-task prediction based on project context
-
-### Agent Client Protocol (ACP)
+## Agent Client Protocol (ACP)
 
 JetBrains has developed the **Agent Client Protocol (ACP)**, which standardizes communication between IDEs and coding agents (analogous to LSP for language servers). Third-party agents integrated via ACP include:
 
@@ -364,113 +270,6 @@ JetBrains has developed the **Agent Client Protocol (ACP)**, which standardizes 
 
 You can pass custom MCP servers to installed agents and expose the IDE's built-in MCP server to them.
 
----
-
-## Model Configuration
-
-### JetBrains AI Service (Default)
-
-By default, AI Assistant routes requests through the JetBrains AI service, which provides access to curated cloud models. No additional configuration is required beyond an AI subscription.
-
-### Cloud Models Available via JetBrains AI Service
-
-| Provider | Models | Context Window |
-|---|---|---|
-| **Anthropic** | Claude 4.6 Opus, Claude 4.5 Sonnet, Claude 4.5 Haiku | 200K tokens |
-| **Google** | Gemini 3.1 Pro, Gemini 2.5 Pro, Gemini 2.0 Flash | Up to 1M tokens |
-| **OpenAI** | GPT-5, GPT-4o, o1, o3, o3-mini, o4-mini | Up to 400K tokens |
-| **xAI** | Grok-4, Grok-4.1 Fast | Up to 2M tokens |
-
-### Bring Your Own Key (BYOK)
-
-Use your own API keys to access models directly from third-party providers. No JetBrains AI subscription is required for BYOK chat and agent usage.
-
-<Steps>
-  <Step title="Open Provider Settings">
-    Navigate to **Settings | Tools | AI Assistant | Providers & API keys**.
-  </Step>
-  <Step title="Select Provider">
-    Choose from: **Anthropic**, **OpenAI**, **OpenAI-compatible**, **LM Studio**, or **Ollama**.
-  </Step>
-  <Step title="Enter API Key">
-    Provide your API key and click **Test Connection**. For OpenAI-compatible providers, also specify the API endpoint URL.
-  </Step>
-  <Step title="Enable Tool Calling (Optional)">
-    For OpenAI-compatible providers, enable or disable the **Tool calling** setting to indicate MCP support.
-  </Step>
-</Steps>
-
-### Local Model Support
-
-AI Assistant supports locally hosted models through **Ollama** and **LM Studio** for offline, privacy-focused workflows:
-
-- Supported local models include Qwen2.5-Coder, DeepSeek-Coder, CodeStral, and JetBrains' open-source Mellum
-- Default context window: 64,000 tokens (adjustable in settings)
-- Local code completion supports multi-line suggestions for Java and C++
-
-### Model Assignment
-
-Models can be assigned to specific feature categories in **Settings | Tools | AI Assistant | Providers & API keys** under the **Models Assignment** section:
-
-| Category | Purpose |
-|---|---|
-| **Core features** | Code generation, documentation, testing, chat defaults |
-| **Instant helpers** | Lightweight operations like context collection, name suggestions, title generation |
-| **Completion model** | Inline code completion (Fill-in-the-Middle models only) |
-
-<Info>
-  When third-party or local models do not support a specific feature, AI Assistant automatically falls back to JetBrains AI service models if a subscription is active. This allows mixing local and cloud models.
-</Info>
-
----
-
-## Context and Attachments
-
-### Codebase Mode
-
-When enabled (the default), AI Assistant automatically gathers relevant context from your project to inform responses. Context is not gathered from files listed in `.gitignore` or `.aiignore`. Enhanced Codebase Mode uses chat history for improved relevance.
-
-To add context manually instead, disable Codebase Mode and use the attachment button or `@` references.
-
-### Attachment Types
-
-| Attachment | Description |
-|---|---|
-| **Files** | Attach specific files for context |
-| **Folders** | Attach entire directories |
-| **Images** | Attach screenshots or diagrams for vision-capable models |
-| **Symbols** | Reference specific code symbols (classes, functions, etc.) |
-| **Commits** | Reference specific git commits |
-| **Database objects** | Attach database schemas and objects (DataGrip and IDEs with Database Tools plugin, 2025.2+) |
-| **Rules** | Reference project rules via `@rule:` syntax |
-
-### Context Trimming
-
-AI Assistant includes a context trimming mechanism that automatically reduces attachment size when approaching the model's context window limit. The trimming threshold is configurable in settings.
-
----
-
-## Plugin Integration
-
-### Installation
-
-AI Assistant is distributed as a plugin through the [JetBrains Plugin Marketplace](https://plugins.jetbrains.com/plugin/22282-jetbrains-ai-assistant).
-
-<Steps>
-  <Step title="Open Plugin Manager">
-    Navigate to **Settings | Plugins** in your JetBrains IDE.
-  </Step>
-  <Step title="Search and Install">
-    Search for "JetBrains AI Assistant" in the Marketplace tab and click **Install**.
-  </Step>
-  <Step title="Restart IDE">
-    Restart the IDE to activate the plugin.
-  </Step>
-  <Step title="Sign In">
-    Sign in with your JetBrains account to activate AI features.
-  </Step>
-</Steps>
-
 ### Built-in MCP Server (IDE as MCP Server)
 
 Starting with IDE version 2025.2, JetBrains IDEs can act as an MCP server themselves, exposing IDE capabilities (code navigation, refactoring, search, inspections) to external AI clients:
@@ -478,10 +277,6 @@ Starting with IDE version 2025.2, JetBrains IDEs can act as an MCP server themse
 - Enable via **Settings | Tools | MCP Server** and check **Enable MCP Server**
 - External clients like Claude Code, Claude Desktop, Cursor, VS Code, and Windsurf can connect automatically
 - Configuration can be performed via the settings UI for supported external clients
-
-### Supported File Types for Code Completion
-
-AI Assistant supports code completion across a wide range of file types, including all languages natively supported by the host IDE plus SQL, YAML, JSON, Text, and Markdown.
 
 ---
 

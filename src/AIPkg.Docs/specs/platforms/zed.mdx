@@ -6,24 +6,7 @@ icon: code
 
 ## Overview
 
-[Zed](https://zed.dev) is an open-source, high-performance code editor written in Rust, developed by **Zed Industries**. It was created by Nathan Sobo, one of the original creators of Atom, and has received $32 million in funding from Sequoia Capital. Zed is available on macOS, Linux, and Windows.
-
-Zed distinguishes itself through native GPU-accelerated rendering at 120fps, built-in real-time collaboration, and first-class AI features integrated directly into the editor core rather than bolted on through extensions. Its AI capabilities center on the **Agent Panel** for agentic coding, the **Inline Assistant** for in-place code transforms, and **Edit Prediction** (Zeta) for intelligent autocomplete.
-
-<Info>
-  Zed's AI features are not a separate plugin. They ship as part of the editor itself, running in the same process with shared access to the editor's internal state, syntax trees, and language server data.
-</Info>
-
-### Key AI Features
-
-| Feature | Description |
-|---|---|
-| **Agent Panel** | Agentic AI coding assistant with tool use, file editing, and terminal access |
-| **Inline Assistant** | Prompt-driven inline code generation and transformation |
-| **Edit Prediction (Zeta)** | Open-source model that predicts your next edit based on context |
-| **Rules System** | Project-level and global AI instruction prompts |
-| **MCP Support** | Model Context Protocol integration for external tools and data |
-| **Multi-Provider LLM** | Support for Anthropic, OpenAI, Google, Ollama, DeepSeek, OpenRouter, and more |
+[Zed](https://zed.dev) is an open-source, high-performance code editor written in Rust, available on macOS, Linux, and Windows. It supports extensibility through a WebAssembly extension system, MCP server integration via `context_servers` in settings, project-level rules files, custom agent profiles, and external agent connections via the Agent Client Protocol (ACP).
 
 ---
 
@@ -91,134 +74,6 @@ Within project settings, nested `.zed/settings.json` files closer to the file be
 ### The `.zed/` Directory
 
 The `.zed/` directory at a project root holds project-specific configuration. It is created when you run the `zed: open project settings` command from the command palette. The primary file is `settings.json`, which merges on top of your global user settings.
-
-### Disabling AI Features
-
-To completely turn off all AI functionality:
-
-```json
-{
-  "disable_ai": true
-}
-```
-
----
-
-## AI Assistant
-
-### Agent Panel
-
-The Agent Panel is Zed's primary AI interface -- an agentic coding assistant that can read, write, and execute code across your entire project. Open it via the `agent: new thread` command or the status bar icon.
-
-<Steps>
-  <Step title="Configure a Provider">
-    Set up at least one LLM provider: subscribe to Zed Pro for hosted models, use your own API keys (Anthropic, OpenAI, etc.), or connect an external agent (Gemini CLI, Claude Agent).
-  </Step>
-  <Step title="Open the Agent Panel">
-    Use the command palette (`agent: new thread`) or click the sparkle icon in the status bar. Select your preferred model from the dropdown.
-  </Step>
-  <Step title="Start a Conversation">
-    Type your prompt in the message editor and press Enter. Add context with `@`-mentions for files, directories, symbols, diagnostics, threads, or rules.
-  </Step>
-  <Step title="Review Changes">
-    After the agent edits files, use the Review Changes button (`Ctrl+Shift+R` / `Cmd+Shift+R`) to see a multi-buffer diff. Accept or reject individual hunks or all changes at once.
-  </Step>
-</Steps>
-
-#### Agent Profiles
-
-The Agent Panel ships with three built-in profiles controlling which tools the agent can use:
-
-| Profile | Tools | Use Case |
-|---|---|---|
-| **Write** | Full tool access (file editing, terminal, search) | Code generation and modification |
-| **Ask** | Read-only tools | Code questions and exploration |
-| **Minimal** | No tools | General conversation |
-
-Custom profiles can be created through the Agent Profile modal and are stored under the `agent.profiles` settings key.
-
-#### Context Mentions
-
-Add context by typing `@` in the message editor:
-
-- `@file` -- Reference a specific file
-- `@directory` -- Reference a directory
-- `@symbol` -- Reference a code symbol
-- `@thread` -- Reference a previous conversation thread
-- `@rules` -- Reference a rules file
-- `@diagnostics` -- Include language server diagnostics
-
-Images can be attached via `@`-mention or drag-and-drop for vision-capable models (GPT-4o, Claude 3+, Gemini 1.5+).
-
-#### Thread Management
-
-- **Navigate threads**: `Cmd+Shift+J` / `Ctrl+Shift+J` shows recent threads; `Cmd+Shift+H` / `Ctrl+Shift+H` shows full history
-- **Auto-generated titles**: Based on conversation content; manually editable
-- **Checkpoints**: A "Restore Checkpoint" button lets you roll back to pre-modification states
-- **Persistence**: Threads survive editor restarts; draft prompts are also persisted
-
-#### Following the Agent
-
-Click the crosshair icon at the bottom left of the panel to follow the agent as it navigates and edits files. Hold `Cmd` / `Ctrl` when submitting to auto-follow.
-
-### Inline Assistant
-
-The Inline Assistant transforms code in place. Select code (or place your cursor on a line), press `Ctrl+Enter`, type a prompt, and the model rewrites the selection.
-
-<Info>
-  The Inline Assistant works in editors, text threads, the rules library, channel notes, and even the terminal panel.
-</Info>
-
-#### Multi-Model Comparison
-
-Configure `inline_alternatives` to generate outputs from multiple models in parallel:
-
-```json
-{
-  "agent": {
-    "default_model": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-5"
-    },
-    "inline_alternatives": [
-      {
-        "provider": "openai",
-        "model": "gpt-4o"
-      },
-      {
-        "provider": "google",
-        "model": "gemini-2.0-flash"
-      }
-    ]
-  }
-}
-```
-
-When alternatives are configured, the UI displays buttons to cycle between outputs from each model.
-
-#### Custom Keybindings for Inline Assist
-
-You can bind custom keybindings that pre-fill prompts:
-
-```json
-{
-  "context": "Editor && mode == full",
-  "bindings": {
-    "ctrl-shift-enter": [
-      "assistant::InlineAssist",
-      { "prompt": "Add error handling" }
-    ]
-  }
-}
-```
-
-### Edit Prediction (Zeta)
-
-Zeta is Zed's open-source prediction model that goes beyond simple autocomplete. It predicts developer intent based on recent changes, visited files, and cursor position -- no prompting required. This works automatically and is distinct from the prompt-driven Inline Assistant.
-
-### Text Threads
-
-Text Threads provide a raw text-based interface to LLMs. Unlike the Agent Panel, text threads expose the entire LLM request as editable plain text -- code snippets, conversation history, and file contents are all visible and editable. Text threads do not support autonomous code editing but offer full control over the prompt.
 
 ---
 
@@ -366,76 +221,9 @@ MCP tools use the key format `mcp:<server-name>:<tool_name>` for granular per-to
 
 ---
 
-## Slash Commands
+## Custom Agent Profiles
 
-Slash commands inject dynamic content into text threads and rules. Type `/` at the beginning of a line to see available commands.
-
-### Built-in Slash Commands
-
-| Command | Description |
-|---|---|
-| `/file` | Inserts file or directory contents. Supports glob patterns. |
-| `/now` | Inserts the current date and time |
-| `/prompt` | Inserts a rule from the Rules Library |
-| `/diagnostics` | Injects language server errors and warnings |
-| `/default` | Inserts the default rules |
-
-<Note>
-  Slash commands are evaluated once -- when the text thread is created or when the command is inserted. They do not continuously update. For example, `/now` captures the time at insertion, and `/file` captures file contents at that moment.
-</Note>
-
-### Extension Slash Commands
-
-Extensions can provide additional slash commands. Each slash command must be registered in the extension's `extension.toml`. See [Slash Command Extensions](https://zed.dev/docs/extensions/slash-commands) for authoring details.
-
----
-
-## Model Configuration
-
-### Supported LLM Providers
-
-Zed supports a wide range of LLM providers, either through Zed's hosted proxy or via direct API keys:
-
-| Provider | Config Key | Environment Variable |
-|---|---|---|
-| Zed Hosted (Pro) | `zed.dev` | N/A (uses Zed account) |
-| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
-| OpenAI | `openai` | `OPENAI_API_KEY` |
-| Google AI | `google` | `GOOGLE_AI_API_KEY` |
-| Ollama (local) | `ollama` | N/A |
-| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` |
-| Mistral | `mistral` | `MISTRAL_API_KEY` |
-| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` |
-| Vercel AI Gateway | `vercel-ai` | N/A |
-| AWS Bedrock | `bedrock` | AWS credentials |
-
-### Adding API Keys
-
-API keys can be set through:
-
-1. **Agent Panel settings UI**: `agent: open settings`, then paste the key into the provider's input field
-2. **Environment variables**: Set the appropriate `*_API_KEY` variable
-3. **OS keychain**: Keys entered through the UI are stored in your operating system's secure credential storage, not in `settings.json`
-
-<Info>
-  API keys are never stored as plain text in `settings.json`. They are saved in your OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager) or read from environment variables.
-</Info>
-
-### Model Selection
-
-Switch models via:
-
-- The model selector dropdown in the Agent Panel message editor
-- The keybinding `Cmd+Alt+/` / `Ctrl+Alt+/`
-- Favorite frequently used models by clicking the star icon to pin them at the top
-
-### Custom OpenAI-Compatible Providers
-
-Add any OpenAI-compatible inference provider through the Agent Panel settings ("Add Provider" button) or in `settings.json`. You configure the API URL, model slug, and token limits. The API key must be set via environment variable using the format `<PROVIDER_NAME>_API_KEY`.
-
-### Bedrock Extended Context
-
-For AWS Bedrock models that support extended context windows (up to 1M tokens):
+The Agent Panel supports custom profiles that control which tools the agent can use. Custom profiles can be created through the Agent Profile modal and are stored under the `agent.profiles` settings key.
 
 ```json
 {
@@ -449,10 +237,6 @@ For AWS Bedrock models that support extended context windows (up to 1M tokens):
   }
 }
 ```
-
-### Thinking / Reasoning Control
-
-For models that support reasoning (e.g., Claude with extended thinking), Zed provides a thinking mode toggle and effort level selector in the Agent Panel. These preferences persist across threads.
 
 ---
 

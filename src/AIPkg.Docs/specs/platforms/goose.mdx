@@ -6,26 +6,7 @@ icon: bird
 
 ## Overview
 
-[Goose](https://block.github.io/goose/) is an open-source, extensible AI agent developed by **Block** (the company behind Square and Cash App). Released in January 2025 under the Apache 2.0 license, Goose goes beyond code suggestions -- it can build entire projects, write and execute code, debug failures, orchestrate workflows, and interact with external APIs autonomously. It is available as both a **CLI** and a **Desktop application** for macOS, Linux, and Windows.
-
-Goose is deeply built on the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). In Goose's terminology, MCP servers are called **extensions**. In December 2025, Block contributed Goose to the Linux Foundation's Agentic AI Foundation alongside Anthropic's MCP and OpenAI's AGENTS.md.
-
-<Info>
-  Goose is model-agnostic. It supports 30+ LLM providers including Anthropic, OpenAI, Google Gemini, AWS Bedrock, Ollama, and many more. It works best with models that have strong tool-calling capabilities.
-</Info>
-
-### Key Features
-
-| Feature | Description |
-|---|---|
-| **Agentic Execution** | Autonomously runs shell commands, edits files, executes code, and orchestrates multi-step workflows |
-| **MCP-Native Architecture** | Extensions are MCP servers; connects to 3,000+ available MCP servers |
-| **Model Flexibility** | Works with any LLM provider including local models via Ollama or Docker Model Runner |
-| **Recipes** | YAML-based shareable workflow definitions with parameters, sub-recipes, and scheduling |
-| **Multi-Model Support** | Lead/worker model configurations and planning mode for specialized task handling |
-| **Desktop and CLI** | Full-featured desktop app and powerful command-line interface |
-| **Built-in Extensions** | Developer tools and Computer Controller ship out of the box |
-| **.goosehints** | Project-level instruction files appended to the system prompt |
+[Goose](https://block.github.io/goose/) is an open-source, extensible AI agent by **Block**. It is deeply built on MCP -- in Goose's terminology, MCP servers are called **extensions**. It also supports **Recipes** (YAML-based shareable workflow definitions) and `.goosehints` for project-level instructions.
 
 ---
 
@@ -59,24 +40,6 @@ Goose uses YAML configuration files with a hierarchical system. Both the Desktop
 
 <CodeGroup>
 
-```yaml Basic Configuration
-# Provider and model
-GOOSE_PROVIDER: anthropic
-GOOSE_MODEL: claude-sonnet-4-20250514
-
-# Execution behavior
-GOOSE_MODE: auto          # auto | approve | chat | smart_approve
-GOOSE_MAX_TURNS: 1000     # Max turns without user input
-GOOSE_TEMPERATURE: 0.5    # Response randomness (0.0-1.0)
-
-# CLI display
-GOOSE_CLI_THEME: dark     # light | dark | ansi
-
-# Security
-SECURITY_PROMPT_ENABLED: true
-SECURITY_PROMPT_THRESHOLD: 0.5  # 0.01-1.0
-```
-
 ```yaml Extensions Configuration
 extensions:
   developer:
@@ -98,25 +61,6 @@ extensions:
       API_KEY: "your-key-here"
     timeout: 300
     description: "My custom MCP server"
-```
-
-```yaml Advanced Multi-Model Configuration
-# Lead/Worker mode
-GOOSE_LEAD_PROVIDER: anthropic
-GOOSE_LEAD_MODEL: claude-sonnet-4-20250514
-
-# Planning mode
-GOOSE_PLANNER_PROVIDER: openai
-GOOSE_PLANNER_MODEL: o3-mini
-
-# Tool interpretation
-GOOSE_TOOLSHIM: true
-
-# Search paths for tools
-GOOSE_SEARCH_PATHS:
-  - "/usr/local/bin"
-  - "~/custom/tools"
-  - "/opt/homebrew/bin"
 ```
 
 </CodeGroup>
@@ -182,15 +126,6 @@ Goose's extension system is built entirely on the Model Context Protocol. In Goo
 | **stdio** | Local MCP servers communicating over standard I/O | Command, args, and env vars in `config.yaml` |
 | **sse** | Remote MCP servers using Server-Sent Events | URI endpoint in `config.yaml` |
 | **streamable_http** | Remote MCP servers using HTTP streaming | URI endpoint in `config.yaml` |
-
-### Built-in Extensions
-
-Goose ships with two built-in extensions:
-
-| Extension | Description |
-|---|---|
-| **Developer** | Core development tools: file operations, shell command execution, code editing |
-| **Computer Controller** | Browser automation and system interaction capabilities |
 
 ### Adding Extensions
 
@@ -394,168 +329,6 @@ This allows users to type `/onboarding` in a session to execute the recipe.
 
 ---
 
-## Model Configuration
-
-### Supported Providers
-
-Goose supports 30+ LLM providers across three categories:
-
-| Category | Providers |
-|---|---|
-| **API-based** | Anthropic, OpenAI, Google Gemini, xAI, Mistral AI, Groq, DeepSeek, OpenRouter |
-| **Cloud Platforms** | Amazon Bedrock, GCP Vertex AI, Azure OpenAI, Databricks, Snowflake |
-| **Local** | Ollama, Ramalama, LM Studio, Docker Model Runner |
-| **Special** | GitHub Copilot (device flow auth) |
-
-### Provider Environment Variables
-
-| Provider | Required Variables | Optional Variables |
-|---|---|---|
-| **Anthropic** | `ANTHROPIC_API_KEY` | `ANTHROPIC_HOST` |
-| **OpenAI** | `OPENAI_API_KEY` | `OPENAI_HOST`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT`, `OPENAI_CUSTOM_HEADERS` |
-| **Google Gemini** | `GOOGLE_API_KEY` | `GEMINI3_THINKING_LEVEL` |
-| **Azure OpenAI** | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT_NAME` | `AZURE_OPENAI_API_KEY` (or credential chain) |
-| **AWS Bedrock** | `AWS_REGION` | `AWS_PROFILE` or `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` |
-| **Groq** | `GROQ_API_KEY` | |
-| **Mistral** | `MISTRAL_API_KEY` | |
-| **Ollama** | (none) | `OLLAMA_HOST` (defaults to localhost) |
-
-### Configuring a Provider
-
-<Steps>
-  <Step title="Run goose configure">
-    Execute `goose configure` in the CLI (or open the Models tab in the Desktop app). Select your provider from the filterable list.
-  </Step>
-  <Step title="Enter API Key">
-    Provide your API key when prompted. Goose stores keys in the system keyring by default (macOS Keychain, Windows Credential Manager). If a keyring is unavailable, it falls back to `~/.config/goose/secrets.yaml`.
-  </Step>
-  <Step title="Select a Model">
-    Choose a model from the available options for your provider. You can also type a custom model name if it is not listed.
-  </Step>
-</Steps>
-
-### Custom Providers
-
-Define custom OpenAI-compatible providers by placing a JSON file in `~/.config/goose/custom_providers/`:
-
-```json my-provider.json
-{
-  "name": "my_provider",
-  "engine": "openai",
-  "display_name": "My Custom Provider",
-  "api_key_env": "MY_PROVIDER_API_KEY",
-  "base_url": "https://api.my-provider.com/v1",
-  "models": [
-    {
-      "name": "my-model-v1",
-      "context_limit": 128000
-    }
-  ],
-  "headers": {},
-  "supports_streaming": true,
-  "requires_auth": true
-}
-```
-
-### Multi-Model Configurations
-
-Goose supports two advanced multi-model modes:
-
-| Mode | Environment Variables | Description |
-|---|---|---|
-| **Lead/Worker** | `GOOSE_LEAD_PROVIDER`, `GOOSE_LEAD_MODEL` | Uses a lead model for planning and a worker model for execution |
-| **Planning Mode** | `GOOSE_PLANNER_PROVIDER`, `GOOSE_PLANNER_MODEL` | Separate model specifically for planning steps before acting |
-
----
-
-## CLI Commands
-
-### Core Commands
-
-| Command | Description |
-|---|---|
-| `goose session` | Start an interactive chat session |
-| `goose session --resume` | Resume the previous session |
-| `goose session --session-id <id>` | Resume a specific session by ID |
-| `goose session --name <name>` | Name the session |
-| `goose session --fork` | Duplicate a session with its history |
-| `goose run -t "instructions"` | Run a one-shot task non-interactively |
-| `goose run -i instructions.md` | Run instructions from a file |
-| `goose run --recipe recipe.yaml` | Run a recipe file |
-| `goose configure` | Interactive configuration wizard |
-| `goose info` | Show version, config path, session storage, and logs |
-| `goose info -v` | Show detailed configuration including env vars and extensions |
-| `goose version` | Print the installed version |
-| `goose update` | Update to the latest stable version |
-| `goose update --canary` | Update to the latest canary (development) version |
-
-### Session Management
-
-| Command | Description |
-|---|---|
-| `goose session list` | List all saved sessions |
-| `goose session list -f json` | List sessions in JSON format |
-| `goose session remove --session-id <id>` | Delete a specific session |
-| `goose session remove -r "<regex>"` | Delete sessions matching a pattern |
-| `goose session export -o file.md` | Export session (json, yaml, or markdown) |
-| `goose session diagnostics` | Generate a troubleshooting ZIP bundle |
-
-### Project Management
-
-| Command | Description |
-|---|---|
-| `goose project` | Start working on your last project or create a new one |
-| `goose project list` | Choose from your existing projects |
-
-### Recipe and Schedule Commands
-
-| Command | Description |
-|---|---|
-| `goose recipe list` | List available recipes |
-| `goose recipe validate <file>` | Validate recipe syntax |
-| `goose recipe open <file>` | Open recipe in Desktop |
-| `goose recipe deeplink <name>` | Generate a shareable link |
-| `goose schedule add` | Create a scheduled recipe job |
-| `goose schedule list` | View all scheduled jobs |
-| `goose schedule remove` | Delete a scheduled job |
-
-### Other Commands
-
-| Command | Description |
-|---|---|
-| `goose web --open` | Start the web interface and open in browser |
-| `goose web --port 8080` | Start web interface on a custom port |
-| `goose bench` | Evaluate system configuration across tasks |
-| `goose mcp` | Run an enabled MCP server by name |
-| `goose acp` | Run as an Agent Client Protocol server over stdio |
-| `goose completion <shell>` | Generate shell completions (bash, zsh, fish, powershell, elvish) |
-
-### Interactive Session Commands
-
-Within an active session, these slash commands are available:
-
-| Command | Description |
-|---|---|
-| `/?` or `/help` | Display help |
-| `/clear` | Clear chat history |
-| `/mode <name>` | Set execution mode |
-| `/plan <message>` | Enter planning mode |
-| `/recipe [filepath]` | Generate a recipe from the conversation |
-| `/t` | Toggle theme (light/dark/ansi) |
-| `/builtin <names>` | Add built-in extensions mid-session |
-| `/prompts` | List available prompt templates |
-
-### Terminal Integration
-
-After setting up terminal integration, you can invoke Goose directly from your shell prompt:
-
-```bash
-@goose create a python script that parses CSV files
-@g how do I fix these errors?
-```
-
-Command history is automatically included in the context.
-
 ---
 
 ## Extension Development
@@ -605,51 +378,6 @@ Extensions in Goose are standard MCP servers. You can build them in any language
 </Info>
 
 ---
-
-## Installation
-
-<Tabs>
-  <Tab title="macOS">
-    **CLI (curl):**
-    ```bash
-    curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash
-    ```
-
-    **Desktop (Homebrew):**
-    ```bash
-    brew install --cask block-goose
-    ```
-
-    **Non-interactive install (no configure prompt):**
-    ```bash
-    curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
-    ```
-  </Tab>
-  <Tab title="Linux">
-    **CLI (curl):**
-    ```bash
-    curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash
-    ```
-
-    **Desktop:** Available as DEB (Ubuntu/Debian), RPM (RHEL/Fedora), and Flatpak packages from the [releases page](https://github.com/block/goose/releases).
-  </Tab>
-  <Tab title="Windows">
-    **CLI (Git Bash recommended):**
-    ```bash
-    curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash
-    ```
-
-    **Desktop:** Download and unzip from the [releases page](https://github.com/block/goose/releases).
-
-    Prerequisites: Git Bash (recommended, bundled with Git for Windows) which includes `curl` and `unzip`.
-  </Tab>
-</Tabs>
-
-Verify installation:
-
-```bash
-goose --version
-```
 
 ---
 

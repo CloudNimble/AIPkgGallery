@@ -6,29 +6,7 @@ icon: message-bot
 
 ## Overview
 
-[Claude Desktop](https://claude.com/download) is a native desktop application developed by **Anthropic** for interacting with Claude, Anthropic's family of AI models. Available for **macOS** and **Windows**, Claude Desktop provides a rich conversational interface with support for file uploads, vision, artifacts, projects, and deep integration with local tools and services via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). It serves as both a consumer-facing AI assistant and a developer-extensible platform.
-
-Claude Desktop is tightly coupled with the claude.ai web experience -- conversations, projects, memory, and preferences sync across devices when signed in. It extends beyond the web interface by offering native OS integrations such as a global keyboard shortcut for quick access, desktop extensions for local tool access, and the Cowork agentic mode for knowledge work.
-
-<Info>
-  Claude Desktop uses Anthropic's own Claude models exclusively. It is not model-agnostic. The specific model used depends on the user's subscription plan (Free, Pro, Max, Team, or Enterprise).
-</Info>
-
-### Key Features
-
-| Feature | Description |
-|---|---|
-| **Conversational AI** | Full access to Claude's writing, analysis, coding, and reasoning capabilities in a native desktop interface |
-| **MCP Support** | Connects to local and remote MCP servers for tool use, file access, database queries, and API interactions |
-| **Desktop Extensions** | One-click installable MCP server packages (`.mcpb` format) with built-in runtimes and secure configuration |
-| **Projects** | Organized workspaces with custom instructions, file uploads, and shared context (up to 200K tokens) |
-| **Artifacts** | Interactive, shareable outputs including code, visualizations, documents, and full web applications |
-| **Vision** | Analyze images, screenshots, charts, diagrams, and scanned documents (PNG, JPEG, GIF, WebP) |
-| **File Analysis** | Drag-and-drop support for CSV, DOCX, PPTX, PDF, and other file types for summarization and extraction |
-| **Connectors** | Web-based integrations (Google Drive, Slack, etc.) that work across web, desktop, and mobile |
-| **Cowork** | Agentic desktop mode that runs locally in an isolated VM with access to local files and MCP integrations |
-| **Quick Entry** | Global keyboard shortcut to invoke Claude from any application |
-| **Cross-Device Sync** | Conversations, projects, memory, and preferences sync across all devices |
+[Claude Desktop](https://claude.com/download) is a native desktop application by **Anthropic** for macOS and Windows that provides a conversational AI interface with extensibility through [MCP servers](https://modelcontextprotocol.io/) and Desktop Extensions for local tool integration.
 
 ---
 
@@ -114,25 +92,6 @@ Claude Desktop uses a JSON configuration file primarily for MCP server definitio
 ```
 
 </CodeGroup>
-
-### Accessing the Configuration
-
-The configuration file can be accessed directly through the Claude Desktop UI:
-
-<Steps>
-  <Step title="Open Settings">
-    Click the settings icon in the Claude Desktop application.
-  </Step>
-  <Step title="Navigate to Developer Tab">
-    Select the **Developer** tab in the left sidebar.
-  </Step>
-  <Step title="Edit Config">
-    Click the **Edit Config** button. This opens `claude_desktop_config.json` in your default editor, creating it if it does not already exist.
-  </Step>
-  <Step title="Restart Claude Desktop">
-    After saving changes, completely quit and restart Claude Desktop to load the new configuration.
-  </Step>
-</Steps>
 
 <Note>
   Claude Desktop does not hot-reload configuration changes. You must fully quit and restart the application after editing `claude_desktop_config.json`.
@@ -221,17 +180,6 @@ Claude Desktop was one of the first MCP clients and remains the reference implem
   Claude Desktop runs MCP servers in an isolated environment with no access to your shell profile or locally installed applications. You must explicitly pass all required environment variables via the `env` field. Paths must be absolute, not relative.
 </Warning>
 
-### Verification
-
-After restarting Claude Desktop with MCP servers configured, a hammer (tools) icon appears in the bottom-right corner of the chat input box. Click the icon to see the list of active tools provided by your MCP servers.
-
-### Troubleshooting
-
-- **macOS logs**: `tail -n 20 -f ~/Library/Logs/Claude/mcp-server-*.log`
-- Ensure all file paths in configuration are absolute
-- On Windows, use double backslashes (`\\`) in paths within JSON
-- On Windows, `npx`-based servers may require wrapping with `cmd /c` (e.g., `"command": "cmd", "args": ["/c", "npx", "-y", "@scope/package"]`)
-
 ---
 
 ## Desktop Extensions
@@ -300,76 +248,6 @@ dxt pack
 <Info>
   The toolchain package `@anthropic-ai/dxt` is being renamed to `@anthropic-ai/mcpb`. The `.dxt` file extension continues to work but `.mcpb` is recommended for new extensions. The specification is open-source at [github.com/anthropics/dxt](https://github.com/anthropics/dxt).
 </Info>
-
----
-
-## Model Configuration
-
-Claude Desktop uses Anthropic's Claude models exclusively. The model is determined by the user's subscription plan and cannot be configured to use third-party models.
-
-### Available Plans
-
-| Plan | Models | Key Limits |
-|---|---|---|
-| **Free** | Claude Sonnet (limited) | Basic usage with rate limits |
-| **Pro** ($20/month) | Claude Sonnet, Claude Opus, Claude Haiku | Higher usage limits, Projects, extended thinking |
-| **Max** ($100-200/month) | All Claude models | Highest usage limits |
-| **Team** ($30/user/month) | All Claude models | Shared projects, admin controls, minimum 5 users |
-| **Enterprise** | All Claude models | SSO, custom deployment, admin policies |
-
-<Note>
-  Model selection within the app is done through the model picker in the chat interface. There is no configuration file setting for model selection.
-</Note>
-
----
-
-## Installation
-
-<Tabs>
-  <Tab title="macOS">
-    **Download from Anthropic:**
-    1. Visit [claude.com/download](https://claude.com/download)
-    2. Download the PKG installer (Universal build supports both Intel and Apple Silicon)
-    3. Open the PKG file and follow the installation prompts
-    4. Launch Claude from the Applications folder
-
-    **Homebrew (unofficial):**
-    ```bash
-    brew install --cask claude
-    ```
-
-    **Requirements:** macOS 11 (Big Sur) or later. The Cowork tab requires Apple Silicon (M1 or later).
-  </Tab>
-  <Tab title="Windows">
-    **Download from Anthropic:**
-    1. Visit [claude.com/download](https://claude.com/download)
-    2. Download the MSIX or EXE installer
-    3. Run the installer
-    4. Launch Claude from the Start menu
-
-    **Notes:**
-    - If MSIX installation fails, enable sideloading in **Settings > For Developers**
-    - Git for Windows is required for the Code tab functionality
-    - Windows ARM64 devices are fully supported
-  </Tab>
-  <Tab title="Linux">
-    There is no official Linux build of Claude Desktop. Community options include:
-
-    - Running the Windows version under WINE
-    - Unofficial third-party builds
-    - Using [claude.ai](https://claude.ai) in a browser as an alternative
-  </Tab>
-</Tabs>
-
-### Enterprise Deployment
-
-Claude Desktop supports standard enterprise deployment workflows:
-
-- **MSIX** installers for Windows with Group Policy support
-- **PKG** installers for macOS with MDM (e.g., Jamf, Kandji) support
-- Controlled version updates for IT approval workflows
-- Automatic SSO authentication for managed devices
-- Pre-approved desktop extension policies
 
 ---
 

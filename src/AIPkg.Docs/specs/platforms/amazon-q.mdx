@@ -6,43 +6,7 @@ icon: aws
 
 ## Overview
 
-[Amazon Q Developer](https://aws.amazon.com/q/developer/) is an AI-powered software development assistant built by **Amazon Web Services (AWS)**. It is the direct successor to **Amazon CodeWhisperer**, which was rebranded and expanded into Amazon Q Developer in April 2024. All features previously available in CodeWhisperer are now part of Amazon Q Developer.
-
-Amazon Q Developer is a full-lifecycle AI assistant that goes beyond code completion to include chat, autonomous agents for feature development, code transformation, testing, documentation generation, security scanning, and deep AWS integration. It is fine-tuned on over 20 years of AWS best practices, internal documentation, and high-quality open-source code.
-
-<Info>
-  Amazon Q Developer is available in a perpetual **Free Tier** (50 agentic requests/month) and a **Pro Tier** ($19/user/month, 1,000 agentic requests/month). The Pro plan includes data isolation, IP indemnity, and SSO support via IAM Identity Center.
-</Info>
-
-### Key AI Features
-
-| Feature | Description |
-|---|---|
-| **Inline Code Suggestions** | Real-time single-line and multi-line code completions as you type |
-| **Chat** | Conversational AI assistant with codebase and AWS awareness |
-| **Agent `/dev`** | Generate new features or implement changes from natural language descriptions |
-| **Agent `/test`** | Automatically generate unit tests for selected code |
-| **Agent `/review`** | Identify code quality issues, security vulnerabilities, and anti-patterns |
-| **Agent `/doc`** | Generate project documentation including READMEs and data flow diagrams |
-| **Agent `/transform`** | Modernize and upgrade legacy code (Java version upgrades, .NET porting) |
-| **Security Scanning** | SAST, secrets detection, and IaC scanning with automated remediation |
-| **MCP Support** | Model Context Protocol integration for external tools and data sources |
-| **Custom Rules** | Project-level rules in `.amazonq/rules/` to enforce coding standards |
-
-### Supported Platforms
-
-| Platform | Status | Access |
-|---|---|---|
-| **VS Code** | Generally available | Extension: "Amazon Q" from AWS |
-| **JetBrains** | Generally available | Plugin from JetBrains Marketplace |
-| **Visual Studio** | Generally available | Extension from Marketplace |
-| **Eclipse** | Preview | Plugin |
-| **CLI** | Generally available | `q` command (macOS, Linux, WSL) |
-| **AWS Console** | Generally available | Built into the AWS Management Console |
-
-### Supported Languages
-
-Amazon Q Developer supports **Python, Java, JavaScript, TypeScript, C#, Go, Rust, PHP, Ruby, Kotlin, C, C++, shell scripting, SQL, Scala, JSON, YAML, and HCL**, with security scanning covering thousands of detectors across more than a dozen languages.
+[Amazon Q Developer](https://aws.amazon.com/q/developer/) is an AI-powered software development assistant built by **Amazon Web Services (AWS)**, available in VS Code, JetBrains, Visual Studio, Eclipse, and as a CLI. It supports extensibility through project-level custom rules in `.amazonq/rules/` and MCP server integration for external tools and data sources.
 
 ---
 
@@ -69,9 +33,6 @@ Amazon Q Developer uses configuration files at both global and workspace levels.
     | `mcp.json` | `<project>/.amazonq/mcp.json` | Workspace MCP server configuration |
     | Rules (`*.md`) | `<project>/.amazonq/rules/` | Project-specific rules and guidelines |
     | Profiles | `~/.aws/amazonq/profiles/` | CLI context profiles |
-    | History | `~/.aws/amazonq/history/` | Chat session history |
-    | Cache | `~/.aws/amazonq/cache/` | Local cache |
-    | Prompts | `~/.aws/amazonq/prompts/` | Saved prompts |
   </Tab>
 </Tabs>
 
@@ -104,20 +65,8 @@ project-root/
 └── amazonq/
     ├── default.json   # Global MCP + settings (IDE)
     ├── mcp.json       # Global MCP (CLI)
-    ├── profiles/      # CLI context profiles
-    ├── cache/         # Cache data
-    ├── history/       # Chat history
-    └── prompts/       # Saved prompts
+    └── profiles/      # CLI context profiles
 ```
-
-### Authentication
-
-Amazon Q Developer requires authentication through one of two methods:
-
-| Method | Use Case |
-|---|---|
-| **AWS Builder ID** | Free tier for individual developers. Sign up during first use. |
-| **IAM Identity Center** | Enterprise/Pro tier. Requires organizational setup in AWS. |
 
 ---
 
@@ -196,15 +145,6 @@ Amazon Q can auto-generate a **memory bank** -- a set of context files placed in
 | `guidelines.md` | Development standards and patterns |
 
 These files are automatically used as context when chatting with Amazon Q, giving it deep background knowledge about your project without manual configuration.
-
-### CLI Context Management
-
-In the CLI, you can manage rules and context using built-in commands:
-
-- `/context add` -- add project rules to your context
-- `/context show` -- display the current context
-- `/load` -- load a previous chat session
-- `/save` -- save the current chat session
 
 <Note>
   Keep rule files focused and concise. Very large files consume significant token budget, reducing the context available for your actual queries. Organize rules into logical, domain-specific files with descriptive filenames.
@@ -363,220 +303,6 @@ Pro-tier customers using IAM Identity Center can control MCP access organization
 - Q Developer fetches the MCP registry at startup and every 24 hours
 - If a locally installed server is removed from the registry, Q Developer terminates it
 - If a version differs, Q Developer relaunches the server with the registry-defined version
-
-### Progressive Loading
-
-Amazon Q loads MCP servers in the background, allowing you to start interacting immediately. Tools become available progressively as their respective servers finish initializing.
-
----
-
-## Agent Capabilities
-
-Amazon Q Developer provides specialized agents accessible through slash commands in the IDE chat panel.
-
-### `/dev` -- Development Agent
-
-The `/dev` agent transforms natural language descriptions into fully implemented features, handling complex multi-file changes with contextual awareness. It analyzes your codebase, generates a step-by-step implementation plan, and executes approved changes.
-
-**Supported languages:** Java, Python, JavaScript, TypeScript
-
-```
-/dev Add a REST API endpoint to create new users with email validation
-```
-
-### `/test` -- Testing Agent
-
-The `/test` agent automatically generates unit tests for selected code. It identifies necessary test cases, generates appropriate mocks and stubs, and produces test code.
-
-**Supported frameworks:**
-- **Java**: JUnit 4, JUnit 5, JUnit Jupiter, Mockito
-- **Python**: PyTest, Unittest
-
-```
-/test Generate unit tests for the UserService class
-```
-
-You can also highlight a function, right-click, and select **Amazon Q > Generate Unit Tests**.
-
-### `/review` -- Review Agent
-
-The `/review` agent identifies code quality issues including:
-
-- Code smells and anti-patterns
-- Naming convention violations
-- Potential bugs and logical errors
-- Code duplication
-- Poor documentation
-- Security vulnerabilities
-
-It provides detailed issue reports with explanations and actionable recommendations, including in-place code fixes.
-
-```
-/review Check this file for security issues
-```
-
-### `/doc` -- Documentation Agent
-
-The `/doc` agent generates comprehensive documentation that reflects your project structure, including READMEs and data flow diagrams.
-
-```
-/doc Generate a README for this project
-```
-
-### `/transform` -- Transformation Agent
-
-The `/transform` agent modernizes legacy code through automated upgrades:
-
-- **Java**: Upgrade from Java 8 or 11 to Java 17, including code updates, unit tests, and deployment readiness verification
-- **.NET**: Port from .NET Framework to cross-platform .NET, including dependency mapping, code analysis, and refactoring
-
-```
-/transform Upgrade this project from Java 8 to Java 17
-```
-
-<Info>
-  The Free tier includes 50 agentic chat interactions, 5 `/dev` sessions, and 1,000 lines of `/transform` code per month. The Pro tier increases these limits significantly.
-</Info>
-
----
-
-## Security Scanning
-
-Amazon Q Developer provides comprehensive code security scanning powered by both generative AI and rule-based automatic reasoning.
-
-### Scanning Modes
-
-| Mode | Description | Availability |
-|---|---|---|
-| **Scan as You Code** | Real-time background scanning that flags issues as you write | Pro tier only |
-| **Full Project Scan** | On-demand scan of all files in your project or workspace | Free and Pro |
-| **File Scan** | Scan a single file on demand | Free and Pro |
-
-### Detection Categories
-
-| Category | Description |
-|---|---|
-| **SAST** | Static application security testing for vulnerabilities like SQL injection, XSS, and resource leaks |
-| **Secrets Detection** | Identifies hardcoded passwords, database connection strings, API keys, and other sensitive data |
-| **IaC Scanning** | Evaluates infrastructure-as-code files for misconfigurations, compliance, and security issues |
-| **Code Quality** | Detects performance issues, ML rule violations, and AWS best practice deviations |
-
-### Automated Remediation
-
-When Amazon Q discovers a vulnerability or quality issue, it generates a finding with:
-- A description of the issue
-- A recommended fix
-- For some findings, an automatic one-click fix that updates your code in-place
-
-### Initiating a Scan
-
-You can initiate scans from:
-- The chat panel using `/review`
-- Right-click context menu in the editor
-- The Amazon Q status bar
-- Automatically in the background (Pro tier)
-
-<Note>
-  Amazon Q security scanning incorporates thousands of security detectors informed by years of AWS and Amazon.com security best practices. Detectors are continuously updated to ensure compliance with the latest security policies.
-</Note>
-
----
-
-## CLI Usage
-
-Amazon Q Developer CLI (`q`) brings agentic AI capabilities to your terminal. It is available on macOS, Linux, and Windows (via WSL).
-
-### Installation
-
-<Tabs>
-  <Tab title="macOS">
-    ```bash
-    brew install amazon-q
-    ```
-  </Tab>
-  <Tab title="Linux">
-    Follow the installation instructions from the [AWS Getting Started guide](https://aws.amazon.com/q/developer/getting-started/).
-  </Tab>
-  <Tab title="Windows">
-    Use Windows Subsystem for Linux (WSL) and follow the Linux installation instructions.
-  </Tab>
-</Tabs>
-
-### Core Commands
-
-```bash
-# Start an interactive chat session
-q chat
-
-# Ask a specific question
-q chat "How do I set up an S3 bucket with encryption?"
-
-# Non-interactive mode with auto-approved tools
-q chat --no-interactive --trust-all-tools "Show me the current directory"
-
-# Resume a previous chat session
-q chat --resume
-
-# Use a specific agent
-q chat --agent my-agent "Help me with CDK"
-
-# Use context from shell history
-q chat "@history Update my CloudFront distribution"
-
-# Translate natural language to shell commands
-q translate "list all files in the current directory"
-q translate "find all Python files modified in the last week"
-q translate "compress all log files older than 30 days"
-
-# Diagnose issues with your Q Developer setup
-q doctor
-
-# Show help
-q help
-```
-
-### Chat Session Commands
-
-Within a `q chat` session, the following slash commands are available:
-
-| Command | Description |
-|---|---|
-| `/context add` | Add project rules or files to context |
-| `/context show` | Display current context |
-| `/load` | Load a previous chat session |
-| `/save` | Save the current chat session |
-| `/quit` | Exit the chat (or use Ctrl+D) |
-
-### Debugging
-
-```bash
-# Enable debug logging
-export Q_LOG_LEVEL=debug
-q chat
-
-# Log files are stored in $TMPDIR/qlog
-```
-
-<Warning>
-  The CLI currently only supports local MCP servers via STDIO. MCP tools function exclusively within the chat interface and are not available for command completion or translate features.
-</Warning>
-
----
-
-## Model Configuration
-
-Amazon Q Developer uses AWS-managed models and does not expose user-facing model selection in the same way that tools like Cody or Continue do. The underlying models are hosted on **Amazon Bedrock** and are selected by AWS based on the task.
-
-### Enterprise Customization
-
-Pro-tier customers can **customize** Amazon Q Developer by connecting it to internal code repositories. This fine-tunes Q Developer's recommendations to be more relevant to your organization's codebases, APIs, and coding patterns. Customizations are configured through the AWS Console, not through local files.
-
-### Key Points for Model Configuration
-
-- Models are managed server-side by AWS; there is no local model selection
-- An internet connection is required, as inference runs on AWS infrastructure
-- Enterprise customers can customize recommendations using private code repositories
-- The Pro plan provides data isolation (your code is not used for model training)
 
 ---
 

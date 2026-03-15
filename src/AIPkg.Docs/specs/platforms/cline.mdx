@@ -6,30 +6,7 @@ icon: terminal
 
 ## Overview
 
-[Cline](https://cline.bot/) is an open-source autonomous AI coding agent that runs as a **VS Code extension**, capable of creating/editing files, executing terminal commands, using the browser, and more -- with your permission every step of the way. Originally named "Claude Dev," Cline is developed by **Cline Bot Inc.** and has been trusted by 5M+ developers. It is licensed under the Apache 2.0 license and published on the VS Code Marketplace under the extension ID `saoudrizwan.claude-dev`.
-
-[Roo Code](https://docs.roocode.com/) (formerly "Roo Cline") is a popular fork of Cline developed by **Roo Code, Inc.** With 22,000+ GitHub stars and nearly 300 contributors, Roo Code extends Cline's foundation with a multi-mode agent system, project-level MCP configuration, and enhanced customization features. It is published on the VS Code Marketplace under the extension ID `RooVeterinaryInc.roo-cline`. Roo Code has achieved SOC 2 Type 2 compliance and offers team-oriented cloud features.
-
-Both extensions share the same core architecture but differ in configuration paths and feature sets. This document covers both platforms, noting differences where they exist.
-
-<Info>
-  Both Cline and Roo Code are model-agnostic. They support API providers including Anthropic, OpenAI, Google Gemini, OpenRouter, AWS Bedrock, Azure OpenAI, GCP Vertex AI, Cerebras, Groq, Mistral, DeepSeek, and any OpenAI-compatible API. Local models are supported via Ollama and LM Studio.
-</Info>
-
-### Key Features
-
-| Feature | Cline | Roo Code |
-|---|---|---|
-| **File Operations** | Read, create, and edit files with VS Code diff view | Same |
-| **Terminal Execution** | Run commands directly in the integrated terminal | Same |
-| **Browser Use** | Launch headless browser for web interaction, screenshots, and console logs | Same |
-| **MCP Support** | Extend capabilities via Model Context Protocol servers | Same, plus project-level `.roo/mcp.json` |
-| **Plan & Act Modes** | Plan (read-only exploration) and Act (execution with approval) | Same |
-| **Custom Modes** | Not available | Code, Architect, Ask, Debug, and user-defined custom modes |
-| **Custom Instructions** | `.clinerules` file or `.clinerules/` directory | `.roo/rules/` directory with mode-specific rules |
-| **Checkpoints** | Workspace snapshots at each step with compare and restore | Same |
-| **Auto-Approve / YOLO** | Granular per-category auto-approve and full YOLO mode | Granular per-category auto-approve with allowlist/denylist |
-| **AGENTS.md** | Supported as fallback | Supported and loaded by default |
+[Cline](https://cline.bot/) is an open-source AI coding agent VS Code extension (`saoudrizwan.claude-dev`). [Roo Code](https://docs.roocode.com/) is a popular fork (`RooVeterinaryInc.roo-cline`) that adds custom modes, project-level MCP config, and mode-specific rules. Both use MCP for extensibility, `.clinerules`/`.roo/rules/` for custom instructions, and Roo Code supports custom modes via `.roomodes`.
 
 ---
 
@@ -160,32 +137,7 @@ Files within each directory are read recursively and appended to the system prom
 
 ---
 
-## Modes
-
-### Cline: Plan & Act
-
-Cline provides two operational modes that control whether the agent can make changes:
-
-| Mode | Behavior |
-|---|---|
-| **Plan** | Read-only exploration phase. Cline reads files and proposes changes without executing them. Use this to refine the approach before writing code. |
-| **Act** | Execution phase. Every action requires explicit approval (unless auto-approve is enabled). Cline presents each file edit or command and waits for approval. |
-
-Cline supports configuring different models for Plan and Act modes, enabling workflows like "plan with a reasoning model, implement with a coding model."
-
-### Roo Code: Multi-Mode System
-
-Roo Code extends the concept with five built-in modes and support for user-defined custom modes:
-
-| Mode | Description | Tool Access |
-|---|---|---|
-| **Code** | Default mode for writing, editing, and refactoring code | Full access |
-| **Architect** | High-level planning; proposes changes without writing them | Read only |
-| **Ask** | Question-answering only; no file system or terminal access | None |
-| **Debug** | Troubleshooting and diagnostics | Read + command |
-| **Act** | Full agentic experience; runs commands and edits files autonomously | Full access |
-
-### Custom Mode Configuration (.roomodes)
+## Custom Mode Configuration (Roo Code)
 
 Custom modes are defined in a `.roomodes` file at the project root (JSON or YAML format):
 
@@ -222,45 +174,6 @@ Custom modes are defined in a `.roomodes` file at the project root (JSON or YAML
 Groups can be simple strings or arrays with file restrictions using `fileRegex` patterns.
 
 ---
-
-## Auto-Approve Settings
-
-### Cline
-
-Cline offers granular per-category auto-approve toggles and a full YOLO mode:
-
-| Category | Description |
-|---|---|
-| **Read files & directories** | Auto-approve file reads within the workspace |
-| **Read all files** | Extend read access outside the workspace |
-| **Edit files** | Auto-approve file modifications |
-| **Edit all files** | Extend edit access outside the workspace |
-| **Execute safe commands** | Auto-approve commands the model marks as safe |
-| **Execute all commands** | Auto-approve all terminal commands including risky ones |
-| **Use the browser** | Auto-approve browser interactions |
-| **Use MCP servers** | Auto-approve MCP tool calls |
-
-**YOLO Mode:** A master toggle that auto-approves everything -- file changes, terminal commands, browser actions, MCP tools, and Plan-to-Act mode transitions. Designed for rapid prototyping, trusted tasks, or CI/CD automation.
-
-<Warning>
-  YOLO mode disables all safety checks. Use it only in isolated environments, throwaway projects, or with version control as a safety net.
-</Warning>
-
-### Roo Code
-
-Roo Code provides similar granular auto-approve options with additional features:
-
-| Category | Description |
-|---|---|
-| **Mode Switching** | Allow automatic mode transitions |
-| **Subtasks** | Allow automatic subtask creation and completion |
-| **File Writing** | Auto-approve file modifications (configurable delay timer) |
-| **Command Execution** | Auto-approve commands matching an allowlist/denylist |
-| **MCP Tools** | Dual-permission: requires both global toggle and per-tool "Always allow" |
-| **Outside-Workspace Access** | Separate flags for reads and writes outside workspace |
-| **Max Requests** | Limit consecutive auto-approved API calls before re-approval |
-
-Roo Code's command auto-approval supports prefix-based allowlists and denylists. Deny rules take precedence when their prefix is equally or more specific than the allow match. Add `*` to allow all commands (use with extreme caution).
 
 ---
 
@@ -357,101 +270,6 @@ Both extensions include a built-in MCP server marketplace accessible from the to
 Both Cline and Roo Code can also create custom MCP servers on demand -- ask the agent to "add a tool" and it will create, build, and register a new MCP server tailored to your workflow.
 
 ---
-
-## Model Configuration
-
-### Supported Providers
-
-| Category | Providers |
-|---|---|
-| **API-based** | Anthropic, OpenAI, Google Gemini, OpenRouter, Mistral, DeepSeek, Groq, Cerebras, xAI |
-| **Cloud Platforms** | AWS Bedrock, Azure OpenAI, GCP Vertex AI |
-| **Local** | Ollama, LM Studio |
-| **Compatible** | Any OpenAI-compatible API endpoint |
-
-### Configuring a Provider
-
-<Steps>
-  <Step title="Open the Extension">
-    Click the Cline or Roo Code icon in the VS Code sidebar to open the extension panel.
-  </Step>
-  <Step title="Select Provider">
-    Click the settings/gear icon and choose your API provider from the dropdown. Enter your API key when prompted.
-  </Step>
-  <Step title="Select Model">
-    Choose a model from the available options for your provider, or enter a custom model name.
-  </Step>
-  <Step title="Configure Per-Mode Models (Optional)">
-    Both extensions support configuring different models for different modes. In Cline, set separate models for Plan and Act modes. In Roo Code, assign models per custom mode.
-  </Step>
-</Steps>
-
-<Info>
-  API keys are stored securely in VS Code's extension global storage on your local machine. Your code never leaves your machine -- both extensions run entirely client-side.
-</Info>
-
----
-
-## Built-in Tools
-
-Both Cline and Roo Code share the same core set of built-in tools:
-
-| Tool | Description |
-|---|---|
-| **read_file** | Read the contents of a file |
-| **write_to_file** | Create a new file or overwrite an existing file |
-| **apply_diff** | Apply targeted edits to existing files using search/replace blocks |
-| **list_files** | List files and directories in a given path |
-| **search_files** | Search for patterns across files using regex |
-| **list_code_definition_names** | List code definitions (classes, functions, etc.) in a file |
-| **execute_command** | Run a terminal command |
-| **browser_action** | Interact with a headless browser (launch, click, type, scroll, screenshot) |
-| **use_mcp_tool** | Execute a tool provided by an MCP server |
-| **access_mcp_resource** | Read a resource from an MCP server |
-| **ask_followup_question** | Ask the user a clarifying question |
-| **attempt_completion** | Signal task completion and present the result |
-| **switch_mode** | (Roo Code only) Switch to a different mode |
-| **new_task** | (Roo Code only) Create a subtask in a different mode |
-
----
-
-## Installation
-
-<Tabs>
-  <Tab title="Cline">
-    **VS Code Marketplace:**
-
-    1. Open VS Code
-    2. Go to Extensions (`Ctrl+Shift+X` / `Cmd+Shift+X`)
-    3. Search for "Cline"
-    4. Click Install (Extension ID: `saoudrizwan.claude-dev`)
-
-    **Command line:**
-    ```bash
-    code --install-extension saoudrizwan.claude-dev
-    ```
-
-    **CLI (Cline CLI):**
-    ```bash
-    npm install -g @anthropic-ai/cline
-    ```
-  </Tab>
-  <Tab title="Roo Code">
-    **VS Code Marketplace:**
-
-    1. Open VS Code
-    2. Go to Extensions (`Ctrl+Shift+X` / `Cmd+Shift+X`)
-    3. Search for "Roo Code"
-    4. Click Install (Extension ID: `RooVeterinaryInc.roo-cline`)
-
-    **Command line:**
-    ```bash
-    code --install-extension RooVeterinaryInc.roo-cline
-    ```
-  </Tab>
-</Tabs>
-
-Both extensions also work in VS Code forks such as Cursor, Windsurf, and other VS Code-compatible editors.
 
 ---
 
