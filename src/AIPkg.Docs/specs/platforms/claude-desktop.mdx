@@ -251,6 +251,83 @@ dxt pack
 
 ---
 
+## Cowork
+
+Cowork is an agentic mode within Claude Desktop, launched in January 2026 as a research preview. It brings Claude Code-like autonomous task execution to knowledge workers through the desktop GUI — no terminal required. Cowork shares the same MCP configuration as Chat mode via `claude_desktop_config.json`.
+
+### Folder Access
+
+Cowork accesses local folders through a UI-based permission flow. Users grant access via the "Work in a Folder" checkbox at the bottom of the Cowork interface. Permissions can be one-time or persistent ("Always Allow"), and can be revoked in **Settings > Folder Permissions**. Cowork runs inside a VM for sandboxed file and network access.
+
+<Warning>
+  Folders must be within the user's home directory. External drives and volumes are not supported.
+</Warning>
+
+### Custom Instructions
+
+| Level | Location | Scope |
+|-------|----------|-------|
+| **Global** | Settings > Cowork > Edit Global Instructions | All Cowork sessions |
+| **Folder-level** | `claude.md` in project root | Specific project folder |
+| **CLAUDE.md** | `CLAUDE.md` in project root | Cross-agent compatibility (Claude Code convention) |
+
+<Note>
+  Claude can update `claude.md` during a session for dynamic context refinement. The `claude.md` / `CLAUDE.md` convention is shared with Claude Code.
+</Note>
+
+### Plugins
+
+Plugins bundle skills, connectors, and sub-agents into a single installable package. They are file-based (Markdown + JSON, no code, no build steps).
+
+```
+plugin-name/
+├── .claude-plugin/
+│   └── plugin.json          # Manifest (name, description, version, author)
+├── .mcp.json                # MCP server connections
+├── .lsp.json                # LSP server configs (optional)
+├── settings.json            # Default settings (optional)
+├── commands/                # Slash commands (.md files)
+├── agents/                  # Custom agent definitions
+├── skills/                  # Domain knowledge (SKILL.md files)
+└── hooks/                   # Event handlers (hooks.json)
+```
+
+**Installation methods:**
+- Cowork UI: Customize sidebar > Browse plugins > Install
+- CLI: `claude plugin install sales@knowledge-work-plugins`
+- Local testing: `claude --plugin-dir ./my-plugin`
+
+Anthropic ships 11 open-source plugins (Apache 2.0) in the [knowledge-work-plugins](https://github.com/anthropics/knowledge-work-plugins) repository: Productivity, Sales, Customer Support, Product Management, Marketing, Legal, Finance, Data, Enterprise Search, Bio-Research, and Cowork Plugin Management.
+
+### Skills
+
+Cowork uses the same `SKILL.md` format as Claude Code. Skills within plugins are stored at `plugin-name/skills/skill-name/SKILL.md`. Standalone skills live in the `.claude/` directory. Skills can be invoked via slash commands or triggered automatically based on task context.
+
+### Sub-Agents
+
+Cowork can spawn independent Claude instances that work on different parts of a task simultaneously. Sub-agents get their own context windows and report back in isolation.
+
+- **Parallel dispatch**: 3+ unrelated tasks with no shared state or file overlap
+- **Sequential dispatch**: Tasks with dependencies or shared files
+
+### Scheduled Tasks
+
+Tasks can be scheduled via the `/schedule` command or the Scheduled sidebar. Options include hourly, daily, weekly, or weekday cadence with per-task model selection.
+
+Task prompts are stored at `~/.claude/scheduled-tasks/<task-name>/SKILL.md` using YAML frontmatter. Tasks only run while the computer is awake and Claude Desktop is open.
+
+### Connectors
+
+Cowork includes pre-built connectors (remote MCP servers) for services like Slack, Notion, HubSpot, Jira, Linear, Figma, Snowflake, and many more. Custom connectors can be added via **Settings > Connectors > Add Custom Connector**.
+
+Each connector tool can be set to Allow, Ask, or Block for per-tool permission control.
+
+<Note>
+  Plugins can bundle their own `.mcp.json` files, effectively adding MCP servers when the plugin is active. This is the closest mechanism to Cowork-specific MCP configuration.
+</Note>
+
+---
+
 ## Installation Provider Notes
 
 This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Claude Desktop platform.
@@ -326,7 +403,17 @@ The `mcpServers` key is the primary integration point for MCP server packages.
 
 ### Custom Instructions
 
-Claude Desktop does not support file-based custom instructions (there is no equivalent of `.goosehints` or `CLAUDE.md`). Custom instructions are set per-project through the UI. An installer cannot programmatically set custom instructions.
+Claude Desktop Chat mode does not support file-based custom instructions — instructions are set per-project through the UI. However, **Cowork mode** reads `claude.md` / `CLAUDE.md` from project folders automatically. An installer can write a `CLAUDE.md` file to the project root for Cowork compatibility.
+
+### Installing Cowork Plugins
+
+Plugins can be installed programmatically via CLI:
+
+```bash
+claude plugin install <plugin-name>@<source>
+```
+
+Or by placing the plugin directory structure (with `.claude-plugin/plugin.json` manifest) where the user can load it via `claude --plugin-dir ./path`.
 
 ### API Key Management
 
