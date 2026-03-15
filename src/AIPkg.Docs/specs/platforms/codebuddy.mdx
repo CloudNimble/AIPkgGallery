@@ -1,0 +1,233 @@
+---
+title: 'CodeBuddy'
+description: 'Platform specification for CodeBuddy, an AI coding agent VS Code extension'
+icon: 'code'
+---
+
+## Overview
+
+CodeBuddy (`fiatinnovations.ola-code-buddy`) is an open-source autonomous AI software engineer VS Code extension that uses a multi-agent architecture to plan, write, debug, test, and deploy code [^1][^2]. It supports MCP for extensibility, markdown-based rules and skills for customization, and persistent agent memory.
+
+---
+
+## Configuration
+
+### File Locations
+
+CodeBuddy stores project-level configuration in a `.codebuddy/` directory at the workspace root. Global settings are managed through the VS Code settings UI.
+
+| File / Directory | Path | Purpose |
+|---|---|---|
+| Rules (single file) | `<project>/.codebuddy/rules.md` | Project-specific AI behavior rules [^1] |
+| Rules (directory) | `<project>/.codebuddy/rules/*.md` | Modular rules, merged together [^1] |
+| Rules (alt file) | `<project>/.codebuddyrules` | Alternative single-file rules location [^1] |
+| Rules (alt file) | `<project>/CODEBUDDY.md` | Alternative rules file [^1] |
+| Skills | `<project>/.codebuddy/skills/*SKILL.md` | Custom skill definitions [^1] |
+| Agent memory | `<project>/.codebuddy/memory.json` | Persistent agent memory across sessions [^1] |
+| Task tracking | `<project>/.codebuddy/tasks.json` | Persistent task tracking with priorities [^1] |
+
+<Note>
+  Settings for models, MCP servers, connectors, and other global preferences are configured through CodeBuddy's built-in Settings panel (gear icon in the sidebar), organized into sections: Account, General, Agents, Models, MCP, Connectors, Context, Rules, CoWorker, Browser, and Privacy [^2].
+</Note>
+
+---
+
+## Custom Instructions
+
+### Rules Files
+
+CodeBuddy automatically loads rules from markdown files and injects them into every AI prompt [^1]. Rules can be defined in several locations:
+
+<CodeGroup>
+
+```text Single File (.codebuddy/rules.md)
+This is a TypeScript project using pnpm.
+
+Coding conventions:
+- Use strict TypeScript with no `any` types
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+```
+
+```text Directory Structure
+your-project/
+├── .codebuddy/
+│   ├── rules.md              # Single-file rules
+│   ├── rules/
+│   │   ├── coding-style.md   # Multiple files merged together
+│   │   └── testing.md
+│   ├── skills/
+│   │   └── deploy-SKILL.md   # Custom skill definitions
+│   └── memory.json           # Persistent agent memory
+```
+
+</CodeGroup>
+
+**Key characteristics:**
+
+- Multiple `.md` files in `.codebuddy/rules/` are automatically merged together [^1]
+- A configurable token budget (default 2000 tokens) with smart truncation prevents rules from consuming too much context [^1]
+- File watchers detect changes and reload rules automatically without restarting [^1]
+- Additional rules and a custom system prompt can be defined directly in the VS Code settings UI [^1]
+- The `Init Rules` command scaffolds a starter template [^1]
+
+### Custom Skills
+
+Skills are markdown files placed in `.codebuddy/skills/` that define reusable behaviors the agent can invoke [^1].
+
+```markdown deploy-SKILL.md
+---
+name: Deploy to Staging
+description: Handles deployment to the staging environment
+---
+
+When asked to deploy to staging:
+1. Run the test suite first
+2. Build the production bundle
+3. Deploy using the staging configuration
+4. Verify the deployment health check
+```
+
+**Key characteristics:**
+
+- Files must match the `*SKILL.md` naming pattern [^1]
+- Each skill uses YAML frontmatter with `name` and `description` fields [^1]
+- Skills are automatically discovered from the directory (including subdirectories) and appended to the agent's system prompt [^1]
+- The agent invokes skill-described behavior when relevant to the current task [^1]
+
+### Agent Memory
+
+CodeBuddy maintains persistent memory across sessions via `.codebuddy/memory.json` [^1]:
+
+- **Knowledge** -- facts and information about the codebase
+- **Rule** -- behavioral guidelines learned over time
+- **Experience** -- lessons learned from past interactions
+
+Memory has two scopes: **User** (global across workspaces) and **Project** (workspace-specific). The agent can add, update, delete, and search memories during execution, and all stored memories are automatically included in agent context [^1].
+
+---
+
+## MCP Servers
+
+CodeBuddy has first-class support for the Model Context Protocol. All MCP tools are surfaced as LangChain-compatible tools, available to every agent and subagent automatically [^1].
+
+### Configuration Modes
+
+<Tabs>
+  <Tab title="Docker Gateway">
+    Run a single unified MCP catalog via Docker, exposing all configured tool servers through one endpoint [^1]:
+
+    ```bash
+    docker mcp gateway run
+    ```
+
+    The gateway automatically terminates after 5 minutes of inactivity [^1].
+  </Tab>
+  <Tab title="Multi-Server">
+    Connect to multiple independent MCP servers simultaneously, each with its own transport (SSE or stdio) [^1]. Servers are configured through the Settings panel under the MCP section.
+  </Tab>
+</Tabs>
+
+**Key capabilities:**
+
+- Enable or disable individual tools per server from the Settings panel [^1]
+- Built-in preset for Playwright browser automation, with support for custom presets [^1]
+- Automatic retry with exponential backoff (3 attempts) for transient failures [^1]
+- 17 pre-configured connectors available with one-click enablement (GitHub, GitLab, Jira, Linear, Slack, Google Drive, Notion, PostgreSQL, MySQL, MongoDB, Redis, AWS, Kubernetes, Sentry, and others) [^2]
+
+<Warning>
+  MCP server configuration is managed through CodeBuddy's built-in Settings panel rather than standalone JSON config files. The specific JSON schema for MCP server entries is not publicly documented in the repository README at this time [^1].
+</Warning>
+
+---
+
+## Custom Agents
+
+CodeBuddy ships with seven specialized subagents, each with role-specific tool access [^1]:
+
+- Code Analyzer, Doc Writer, Debugger, File Organizer, Architect, Reviewer, Tester
+
+Subagent configuration is available through the Rules section of the Settings panel [^2]. Details on custom subagent definition format are not extensively documented in the public repository.
+
+---
+
+## Hooks and Lifecycle Events
+
+CodeBuddy uses an internal event-driven architecture centered on the **Orchestrator**, a singleton event bus [^1]:
+
+- Every subsystem communicates exclusively through publish/subscribe events
+- Agents emit typed events and listeners react independently (agents never call services directly)
+- Full decoupling of agent layer, webview layer, and service layer
+
+<Note>
+  The Orchestrator event system is an internal architectural pattern. There is no publicly documented API for users to register custom hooks or lifecycle event listeners at this time [^1].
+</Note>
+
+---
+
+## Installation Provider Notes
+
+### Skill Installation Paths
+
+Skills are installed as `*SKILL.md` files in the following locations:
+
+| Scope | Path |
+|---|---|
+| **Project** | `.codebuddy/skills/` |
+| **Global** | `~/.codebuddy/skills/` |
+
+<Steps>
+  <Step title="Create the skills directory">
+    Ensure the target directory exists:
+
+    ```bash
+    # Project-level
+    mkdir -p .codebuddy/skills/
+
+    # Global
+    mkdir -p ~/.codebuddy/skills/
+    ```
+  </Step>
+  <Step title="Write the skill file">
+    Write a `*SKILL.md` file with YAML frontmatter containing `name` and `description` fields, followed by markdown content describing the skill behavior [^1].
+  </Step>
+  <Step title="Verify discovery">
+    Skills are automatically discovered from the directory (including subdirectories) and appended to the agent's system prompt. No restart or reload is required [^1].
+  </Step>
+</Steps>
+
+### Installing Rules
+
+To install project-level instructions, write markdown files to one of the supported locations:
+
+- **Preferred**: Create `.codebuddy/rules/` directory and add `.md` files (modular approach, files are merged) [^1]
+- **Alternative**: Write a single `.codebuddy/rules.md` file [^1]
+- If rules files already exist, append new content or add new `.md` files to the directory without removing existing ones
+
+### MCP Server Registration
+
+MCP servers are configured through the Settings panel UI rather than a standalone config file [^1][^2]. Programmatic registration of MCP servers may require modifying VS Code settings or the extension's internal configuration. The specific JSON schema for MCP entries is not publicly documented at this time.
+
+### Extension Detection
+
+To detect whether CodeBuddy is installed:
+
+```bash
+code --list-extensions | grep fiatinnovations.ola-code-buddy
+```
+
+Or check for the extension directory `fiatinnovations.ola-code-buddy` in VS Code's extensions directory [^2].
+
+### Key Considerations
+
+- Rules files support live reload via file watchers -- changes are picked up automatically [^1]
+- Skills follow the `*SKILL.md` naming convention and require YAML frontmatter [^1]
+- The token budget for rules defaults to 2000 tokens; excessively long rules will be truncated [^1]
+- Agent memory (`.codebuddy/memory.json`) persists across sessions and should not be overwritten by an installer [^1]
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/olasunkanmi-SE/codebuddy
+[^2]: https://marketplace.visualstudio.com/items?itemName=fiatinnovations.ola-code-buddy
