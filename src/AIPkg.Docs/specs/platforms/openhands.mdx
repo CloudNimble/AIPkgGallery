@@ -1,0 +1,442 @@
+---
+title: 'OpenHands'
+description: 'Platform specification for OpenHands, the open-source AI software development agent'
+icon: 'hand'
+---
+
+[OpenHands](https://openhands.dev/) (formerly OpenDevin) is an open-source, MIT-licensed AI software development agent developed by **All Hands AI** that can edit code, run commands, and browse the web inside sandboxed runtimes.[^1] It is extensible through skills (markdown-based knowledge packages), MCP server integration, custom agent definitions, and TOML/JSON-based configuration.
+
+---
+
+## Configuration
+
+### File Locations
+
+OpenHands uses a combination of TOML and JSON configuration files. The web UI stores user preferences in `settings.json`, while the CLI uses `agent_settings.json` and `cli_config.json`.[^2] The legacy `config.toml` provides system-level settings for self-hosted deployments.[^3]
+
+| File | Path | Purpose |
+|---|---|---|
+| CLI agent settings | `~/.openhands/agent_settings.json` | Persisted agent settings (condenser config, etc.) |
+| CLI config | `~/.openhands/cli_config.json` | CLI/TUI preferences |
+| MCP config (CLI) | `~/.openhands/mcp.json` | MCP server configuration for CLI |
+| Web settings | `~/.openhands/settings.json` | User-level settings for the web UI |
+| System config | `config.toml` (project root) | System-level configuration for self-hosted deployments |
+
+<Note>
+  The persistence directory defaults to `~/.openhands` and can be overridden with the `OH_PERSISTENCE_DIR` environment variable.[^2]
+</Note>
+
+### Configuration Precedence
+
+Settings are resolved in the following order (highest to lowest):[^3]
+
+1. **CLI arguments** (`--llm-model`, `--agent-cls`, etc.)
+2. **config.toml** (in the project directory)
+3. **Environment variables** (`LLM_API_KEY`, `LLM_MODEL`, `SANDBOX_*`, etc.)
+4. **Built-in defaults**
+
+<Warning>
+  OpenHands currently maintains two separate configuration systems: `config.toml` for CLI/system-level settings and `settings.json` for web UI preferences. There is an open proposal to unify them.[^4]
+</Warning>
+
+### config.toml Structure
+
+The `config.toml` file supports several sections relevant to extensibility:[^5]
+
+<CodeGroup>
+
+```toml Agent Configuration
+[agent]
+# Use a custom agent from a different package
+# This will be automatically registered as a new agent
+# named "CustomAgent"
+# agent_cls = "my_package.CustomAgent"
+
+[agent.RepoExplorerAgent]
+# Assign a specific LLM config to an agent
+llm_config = "gpt3"
+```
+
+```toml MCP Configuration
+[mcp]
+# SSE servers (legacy)
+sse_servers = [
+  "http://localhost:8080/mcp/sse",
+  {url = "https://api.example.com/mcp/sse", api_key = "your-api-key"}
+]
+
+# SHTTP servers (recommended)
+shttp_servers = [
+  "https://api.example.com/mcp/shttp",
+  {url = "https://api.example.com/mcp/shttp", api_key = "your-api-key", timeout = 180}
+]
+
+# Stdio servers (development only)
+stdio_servers = [
+  {name = "fetch", command = "uvx", args = ["mcp-server-fetch"], env = {DEBUG = "true"}}
+]
+```
+
+```toml Named LLM Configurations
+[llm]
+model = "anthropic/claude-sonnet-4-20250514"
+api_key = "your-api-key"
+
+# Named config for cost-optimized tasks
+[llm.gpt3]
+model = "gpt-3.5-turbo"
+api_key = "your-openai-key"
+
+# Draft editor for code editing tasks
+[llm.draft_editor]
+model = "gpt-4o-mini"
+```
+
+</CodeGroup>
+
+### Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `LLM_API_KEY` | LLM provider API key |
+| `LLM_MODEL` | Default LLM model |
+| `LLM_BASE_URL` | Custom LLM endpoint |
+| `OH_PERSISTENCE_DIR` | Override persistence directory (default: `~/.openhands`) |
+| `SANDBOX_VOLUMES` | Mount host directories into the sandbox |
+| `RUNTIME` | Runtime provider selection (`docker`, `process`, `remote`) |
+
+---
+
+## Custom Instructions / Rules
+
+### AGENTS.md
+
+OpenHands supports `AGENTS.md` at the repository root for always-on, repository-wide instructions. Model-specific variants `GEMINI.md` and `CLAUDE.md` are also recognized.[^6] The contents are injected into the system prompt at conversation start.
+
+### Legacy Microagents (`.openhands/microagents/`)
+
+<Warning>
+  The `.openhands/microagents/` directory is deprecated. For repository-wide instructions, prefer a root-level `AGENTS.md` file or the newer skills system.[^6]
+</Warning>
+
+The legacy microagent system used markdown files with YAML frontmatter placed in `.openhands/microagents/`:[^7]
+
+| File | Purpose |
+|---|---|
+| `.openhands/microagents/repo.md` | Repository-wide instructions (always loaded) |
+| `.openhands/microagents/knowledge/*.md` | Domain knowledge triggered by keywords |
+| `.openhands/microagents/tasks/*.md` | Common workflow definitions |
+
+Microagents were also loaded from `~/.openhands/microagents/` for user-level knowledge.[^8]
+
+---
+
+## Skills
+
+Skills are the current extensibility model for injecting domain-specific knowledge and workflows into OpenHands agents. They replace the legacy microagent system.[^6]
+
+### Skill Locations
+
+Skills can be stored in multiple locations, with project-specific skills taking precedence over user skills:[^6]
+
+| Scope | Path | Notes |
+|---|---|---|
+| Project (recommended) | `.agents/skills/` | Repository-level skills |
+| Project (legacy) | `.openhands/skills/` | Deprecated but still supported |
+| User | `~/.agents/skills/` | Available to all conversations |
+| Repository root | `AGENTS.md` | Always-on context (recommended for repo-wide rules) |
+
+### Skill File Format
+
+Skills use markdown files with optional YAML frontmatter following the [AgentSkills standard](https://agentskills.io/specification):[^9]
+
+<CodeGroup>
+
+```markdown Always-Active Skill (no frontmatter needed)
+# Python Conventions
+
+Always use type hints for function signatures.
+Prefer f-strings over .format() or % formatting.
+Run `ruff check` before committing.
+```
+
+```markdown Keyword-Triggered Skill
+---
+name: docker_knowledge
+trigger:
+  type: keyword
+  keywords: ["docker", "container", "dockerfile"]
+---
+
+# Docker Best Practices
+
+Use multi-stage builds to reduce image size.
+Never run containers as root in production.
+```
+
+```markdown Skill with MCP Tools
+---
+name: repo_skill
+mcp_tools:
+  mcpServers:
+    filesystem:
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/path"]
+---
+
+# File Management Skill
+
+Use the filesystem MCP tools for file operations.
+```
+
+</CodeGroup>
+
+### Trigger Types
+
+| Type | Behavior |
+|---|---|
+| **None** (no frontmatter) | Always active -- injected into system prompt at conversation start |
+| **KeywordTrigger** | Activated when trigger keywords appear in user messages |
+| **TaskTrigger** | Like KeywordTrigger but includes structured user input parameters |
+
+### Public Skills Registry
+
+OpenHands maintains a [public skills registry](https://github.com/OpenHands/skills) with curated extensions for tools like GitHub, GitLab, Docker, Vercel, and workflows like PR review and repo onboarding.[^10] Public skills can be loaded programmatically by setting `load_public_skills=True` in the SDK `AgentContext`.[^11]
+
+---
+
+## MCP Servers
+
+OpenHands supports the Model Context Protocol (MCP) to extend agent capabilities with external tools.[^12] Configuration differs between the web UI and the CLI.
+
+### Server Types
+
+| Transport | Status | Configuration |
+|---|---|---|
+| **SHTTP** (Streamable HTTP) | Recommended | `url`, optional `api_key`, optional `timeout` |
+| **SSE** (Server-Sent Events) | Legacy | `url`, optional `api_key` |
+| **Stdio** | Development only | `name`, `command`, `args`, optional `env` |
+
+### Configuration via config.toml
+
+```toml
+[mcp]
+shttp_servers = [
+  "https://api.example.com/mcp/shttp",
+  {url = "https://files.example.com/mcp/shttp", api_key = "your-api-key", timeout = 1800}
+]
+
+sse_servers = [
+  "http://localhost:8080/mcp/sse",
+  {url = "https://api.example.com/mcp/sse", api_key = "your-api-key"}
+]
+
+stdio_servers = [
+  {name = "filesystem", command = "npx", args = ["@modelcontextprotocol/server-filesystem", "/"]},
+  {name = "fetch", command = "uvx", args = ["mcp-server-fetch"]}
+]
+```
+
+### Configuration via CLI (mcp.json)
+
+The CLI stores MCP configuration in `~/.openhands/mcp.json`:[^13]
+
+```json
+{
+  "stdio_servers": [
+    {
+      "name": "fetch",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    }
+  ],
+  "sse_servers": [],
+  "shttp_servers": [
+    {
+      "url": "https://api.example.com/mcp/shttp",
+      "api_key": "your-api-key"
+    }
+  ]
+}
+```
+
+### CLI MCP Commands
+
+```bash
+# List configured servers
+openhands mcp list
+
+# Add a server
+openhands mcp add tavily --transport stdio npx -- -y mcp-remote "https://mcp.tavily.com/mcp"
+
+# Enable/disable servers
+openhands mcp enable <server-name>
+openhands mcp disable <server-name>
+```
+
+### Timeout Configuration
+
+Timeouts can be set per-server to prevent tool calls from hanging:[^12]
+
+| Range | Use Case |
+|---|---|
+| **1--30s** | Lightweight operations (status checks, simple queries) |
+| **30--300s** | Standard processing (data analysis, API calls) |
+| **300--3600s** | Heavy operations (file processing, batch operations) |
+
+### Using Proxies
+
+For production use with stdio servers, the documentation recommends using [SuperGateway](https://github.com/supermachine-art/supergateway) to proxy stdio-based MCP servers to HTTP endpoints:[^12]
+
+```bash
+supergateway --stdio "npx @modelcontextprotocol/server-filesystem /" --port 8080
+```
+
+<Note>
+  OpenHands supports `api_key` for MCP authentication but does not support arbitrary custom headers. For tokens that require custom headers, configure the MCP gateway to read from environment variables instead.[^12]
+</Note>
+
+---
+
+## Custom Agents
+
+OpenHands supports registering custom agents through `config.toml`:[^5]
+
+```toml
+[agent]
+# Register a custom agent class from an external package
+agent_cls = "my_package.CustomAgent"
+
+# Configure a specific agent with a named LLM config
+[agent.RepoExplorerAgent]
+llm_config = "gpt3"
+```
+
+The Software Agent SDK provides a composable framework for building custom agents with features including:[^11]
+
+- **Hierarchical delegation**: Sub-agents operate as independent conversations inheriting workspace context
+- **Custom tools**: Actions validated via Pydantic schemas following an Action-Execution-Observation triad
+- **Model routing**: Per-invocation LLM selection via `RouterLLM` for hybrid workflows (e.g., text tasks to cost-efficient models, multimodal tasks to high-capacity models)
+
+---
+
+## Hooks and Lifecycle Events
+
+OpenHands does not currently have a built-in hooks system equivalent to Claude Code hooks. There is an open feature request (Issue #9482) proposing lifecycle hooks for deterministic control over agent behavior, including automatic formatting, logging, and custom permissions.[^14]
+
+The [public extensions registry](https://github.com/OpenHands/skills) includes a `plugins/` directory structure that supports `hooks/` and `scripts/` subdirectories, suggesting a plugin format with lifecycle hook support is in development.[^10]
+
+OpenHands uses an **event stream architecture** internally where all agent-environment interactions flow as typed events (`CmdRunAction`, `FileWriteAction`, `BrowseURLAction`, etc.) through a central EventStream hub.[^14] This event-sourced design supports replay, recovery, and incremental persistence.
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the OpenHands platform.
+
+### Install Paths
+
+| Scope | Path |
+|---|---|
+| Project skills | `.openhands/skills/` |
+| Global skills | `~/.openhands/skills/` |
+
+### Installing Skills
+
+<Steps>
+  <Step title="Write the skill file">
+    Place a markdown file (with optional YAML frontmatter) in the appropriate skills directory:
+
+    - **Project-level**: `.openhands/skills/<skill-name>.md` or `.openhands/skills/<skill-name>/SKILL.md`
+    - **Global**: `~/.openhands/skills/<skill-name>.md`
+
+    Skills without frontmatter are always-on. Add a `trigger` block for keyword-activated skills.
+  </Step>
+  <Step title="Verify skill format">
+    Ensure the file follows the AgentSkills standard or OpenHands markdown format. If the skill includes MCP tools, add the `mcp_tools` field in the frontmatter.
+  </Step>
+</Steps>
+
+### Installing MCP Servers
+
+MCP servers can be registered in either `config.toml` (for self-hosted deployments) or `mcp.json` (for CLI users).
+
+<Tabs>
+  <Tab title="CLI (mcp.json)">
+    Merge the server definition into `~/.openhands/mcp.json`:
+
+    ```json
+    {
+      "stdio_servers": [
+        {
+          "name": "package-server",
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"]
+        }
+      ]
+    }
+    ```
+
+    **Key considerations:**
+    - The file uses JSON format (changed from TOML in version 1.0.0)[^13]
+    - Arrays are top-level keys: `stdio_servers`, `sse_servers`, `shttp_servers`
+    - Each stdio server requires a unique `name` field
+    - Merge carefully -- do not overwrite existing server entries
+  </Tab>
+  <Tab title="Self-Hosted (config.toml)">
+    Add the server to the `[mcp]` section of `config.toml`:
+
+    ```toml
+    [mcp]
+    shttp_servers = [
+      {url = "https://api.example.com/mcp/shttp", api_key = "your-api-key"}
+    ]
+    ```
+
+    **Key considerations:**
+    - TOML inline array syntax is required for MCP server lists[^5]
+    - SHTTP is the recommended transport for production
+    - Stdio servers should be proxied via SuperGateway for reliability
+  </Tab>
+</Tabs>
+
+### Installing Custom Instructions
+
+To install project-level instructions, the installer can:
+
+1. Write or append to `AGENTS.md` at the project root (preferred)[^6]
+2. Place a skill file in `.openhands/skills/` with no trigger (always-on)
+3. Place a legacy microagent file in `.openhands/microagents/repo.md`
+
+### Config File Formats
+
+| File | Format | Notes |
+|---|---|---|
+| `config.toml` | TOML | System-level; uses inline arrays for MCP |
+| `mcp.json` | JSON | CLI-only; flat arrays per transport type |
+| `settings.json` | JSON | Web UI only; managed through Settings UI |
+| `agent_settings.json` | JSON | CLI; persisted agent/condenser settings |
+| Skill files | Markdown + YAML frontmatter | AgentSkills standard or OpenHands format |
+
+<Note>
+  OpenHands also parses `.cursorrules`, `agents.md`, and model-specific files like `CLAUDE.md` and `GEMINI.md` for compatibility with other tools.[^6]
+</Note>
+
+---
+
+## Footnotes
+
+[^1]: https://openhands.dev/
+[^2]: https://docs.openhands.dev/openhands/usage/run-openhands/cli-settings
+[^3]: https://docs.openhands.dev/openhands/usage/advanced/configuration-options
+[^4]: https://github.com/OpenHands/OpenHands/issues/9531
+[^5]: https://github.com/OpenHands/OpenHands/blob/main/config.template.toml
+[^6]: https://docs.openhands.dev/overview/skills
+[^7]: https://docs.all-hands.dev/fr/modules/usage/prompting/microagents-repo
+[^8]: https://arxiv.org/html/2511.03690v1
+[^9]: https://docs.openhands.dev/sdk/arch/skill
+[^10]: https://github.com/OpenHands/skills
+[^11]: https://docs.openhands.dev/sdk/guides/skill
+[^12]: https://docs.openhands.dev/openhands/usage/settings/mcp-settings
+[^13]: https://github.com/OpenHands/OpenHands-CLI
+[^14]: https://github.com/OpenHands/OpenHands/issues/9482
