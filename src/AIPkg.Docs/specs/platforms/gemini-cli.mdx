@@ -1,0 +1,630 @@
+---
+title: 'Gemini CLI'
+description: 'Platform specification for Gemini CLI, Google's AI coding assistant for the terminal'
+icon: 'terminal'
+---
+
+## Overview
+
+[Gemini CLI](https://github.com/google-gemini/gemini-cli) is an open-source agentic coding tool by **Google** that brings Gemini models directly into the terminal.[^1] Extensibility is via MCP servers, **Agent Skills** (`SKILL.md` workflow definitions), **Extensions** (distributable bundles of tools, commands, and context), **Subagents** (specialist agents with isolated context), **Hooks** (lifecycle event handlers), and **GEMINI.md** project instruction files.
+
+---
+
+## Configuration
+
+### File Locations
+
+Gemini CLI uses a hierarchical configuration system with JSON settings files and Markdown instruction files.[^2]
+
+| File | Path | Purpose |
+|---|---|---|
+| User settings | `~/.gemini/settings.json` | Personal global settings for all projects[^2] |
+| User instructions | `~/.gemini/GEMINI.md` | Global instructions applied to all projects[^3] |
+| User skills | `~/.gemini/skills/<name>/SKILL.md` | Personal skills available across all projects[^4] |
+| User agents | `~/.gemini/agents/<name>.md` | Personal subagent definitions[^5] |
+| Project settings | `<project>/.gemini/settings.json` | Project-specific settings (committed to repo)[^2] |
+| Project instructions | `<project>/GEMINI.md` | Project-level instructions (committed to repo)[^3] |
+| Project skills | `<project>/.gemini/skills/<name>/SKILL.md` | Project-specific skills[^4] |
+| Project agents | `<project>/.gemini/agents/<name>.md` | Project-specific subagent definitions[^5] |
+| System defaults (Linux) | `/etc/gemini-cli/system-defaults.json` | System-wide default settings[^6] |
+| System defaults (macOS) | `/Library/Application Support/GeminiCli/system-defaults.json` | System-wide default settings[^6] |
+| System defaults (Windows) | `C:\ProgramData\gemini-cli\system-defaults.json` | System-wide default settings[^6] |
+| Environment file | `<project>/.env` | Auto-loaded environment variables[^2] |
+| MCP enablement | `~/.gemini/mcp-server-enablement.json` | Per-server enable/disable state[^7] |
+
+### settings.json Structure
+
+The settings file supports a JSON schema for editor autocompletion and validation.[^6]
+
+<CodeGroup>
+
+```json Basic Configuration
+{
+  "$schema": "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/schemas/settings.schema.json",
+  "sandbox": true,
+  "coreTools": ["read_file", "write_file", "run_shell_command"],
+  "context": {
+    "fileName": ["GEMINI.md"]
+  }
+}
+```
+
+```json MCP Server Configuration
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_TOKEN"
+      }
+    }
+  }
+}
+```
+
+```json Hooks Configuration
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".gemini/hooks/block-dangerous.sh"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "write_.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".gemini/hooks/after-write.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+</CodeGroup>
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):[^2]
+
+1. **Command-line arguments** (e.g., `gemini --model`)
+2. **Environment variables** (e.g., `GEMINI_API_KEY`)
+3. **System override settings**
+4. **Project settings** (`.gemini/settings.json`)
+5. **User settings** (`~/.gemini/settings.json`)
+6. **System defaults** (`/etc/gemini-cli/system-defaults.json`)
+
+---
+
+## Custom Instructions (GEMINI.md)
+
+`GEMINI.md` is a Markdown file that provides persistent instructional context to the Gemini model. It serves as memory for coding standards, architecture decisions, common commands, and project-specific instructions.[^3]
+
+### Loading Hierarchy
+
+The CLI loads and concatenates `GEMINI.md` files from multiple locations:[^3]
+
+<Steps>
+  <Step title="Global context">
+    `~/.gemini/GEMINI.md` -- instructions that apply to all projects.
+  </Step>
+  <Step title="Workspace context">
+    `GEMINI.md` files in configured workspace directories and parent directories up to the project root.
+  </Step>
+  <Step title="Just-in-time context">
+    `GEMINI.md` files discovered when tools access files or directories, scanned up to trusted roots.
+  </Step>
+</Steps>
+
+The CLI footer displays a count of loaded context files. Use `/memory show` to inspect the concatenated context being provided to the model.[^3]
+
+### Modular Imports
+
+Large `GEMINI.md` files can be broken into smaller components using the `@file.md` import syntax, supporting both relative and absolute paths:[^3]
+
+```markdown GEMINI.md
+# Project Instructions
+
+@./components/code-style.md
+@./components/architecture.md
+@./components/testing.md
+```
+
+### Customizing the Context Filename
+
+The default filename can be changed in `settings.json` using the `context.fileName` property. This accepts an array, allowing the CLI to recognize multiple filenames:[^3]
+
+```json
+{
+  "context": {
+    "fileName": ["AGENTS.md", "CONTEXT.md", "GEMINI.md"]
+  }
+}
+```
+
+### Custom System Instructions
+
+Setting the `GEMINI_SYSTEM_MD` environment variable to `true` or `1` causes the CLI to load a `system.md` file from `<project>/.gemini/system.md` as a complete replacement for the default system prompt.[^8]
+
+<Warning>
+  When `GEMINI_SYSTEM_MD` is enabled, the content of `system.md` **completely replaces** the default system prompt. Use this only when you need full control over the model's base instructions.
+</Warning>
+
+### Management Commands
+
+| Command | Purpose |
+|---|---|
+| `/init` | Generate a starting `GEMINI.md` file for the project[^3] |
+| `/memory show` | Display the full concatenated context being sent to the model[^3] |
+| `/memory reload` | Re-scan and reload all `GEMINI.md` files from all locations[^3] |
+| `/memory add <text>` | Append text to the global `~/.gemini/GEMINI.md` file[^3] |
+
+---
+
+## MCP Servers
+
+Gemini CLI connects to external tools and data sources through the Model Context Protocol. MCP servers are configured in `settings.json` under the `mcpServers` key.[^7]
+
+### Configuration Scopes
+
+| Scope | Storage | Purpose |
+|---|---|---|
+| **User** | `~/.gemini/settings.json` | Available across all projects[^7] |
+| **Project** | `<project>/.gemini/settings.json` | Shared with the team via source control[^7] |
+
+<Tabs>
+  <Tab title="CLI (gemini mcp add)">
+    ```bash
+    # Add a stdio server
+    gemini mcp add my-server -- /path/to/binary arg1 arg2
+
+    # Add with environment variables
+    gemini mcp add my-server -e API_KEY=secret -- npx -y @scope/mcp-server
+
+    # Add with scope
+    gemini mcp add my-server --scope user -- npx -y @scope/mcp-server
+
+    # Add an SSE server
+    gemini mcp add --transport sse sse-server https://example.com/sse-endpoint
+
+    # Add an HTTP server with auth header
+    gemini mcp add --transport http api-server https://api.example.com/mcp \
+      --header "Authorization: Bearer $TOKEN"
+
+    # List, remove
+    gemini mcp list
+    gemini mcp remove my-server
+    ```
+  </Tab>
+  <Tab title="JSON (settings.json)">
+    ```json
+    {
+      "mcpServers": {
+        "stdio-server": {
+          "command": "/path/to/binary",
+          "args": ["stdio"],
+          "env": {
+            "API_KEY": "$MY_API_KEY"
+          }
+        },
+        "http-server": {
+          "httpUrl": "https://api.example.com/mcp/",
+          "headers": {
+            "Authorization": "Bearer $TOKEN"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Transport Types
+
+At least one of `command`, `url`, or `httpUrl` must be provided. If multiple are specified, precedence is: `httpUrl` > `url` > `command`.[^6]
+
+### Environment Sanitization
+
+Gemini CLI redacts sensitive environment variables when spawning MCP server processes. Variables matching patterns like `*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*KEY*`, `*AUTH*`, and `*CREDENTIAL*` are stripped from the environment, along with core keys like `GEMINI_API_KEY` and `GOOGLE_API_KEY`.[^7]
+
+### In-Session Management
+
+| Command | Purpose |
+|---|---|
+| `/mcp` | Interactive status of all configured servers[^7] |
+| `/mcp desc` | Show detailed descriptions of server tools[^7] |
+| `/mcp schema` | Show schema details for server tools[^7] |
+| `/mcp enable <name>` | Re-enable a disabled server[^7] |
+| `/mcp disable <name>` | Temporarily disable a server without removing config[^7] |
+
+<Note>
+  Avoid using underscores (`_`) in MCP server aliases (e.g., use `my-server` instead of `my_server`). The internal policy engine parses fully qualified names using the first underscore after the `mcp_` prefix, and an underscore in the alias will cause misidentification.[^6]
+</Note>
+
+---
+
+## Agent Skills
+
+Agent Skills extend Gemini CLI with specialized expertise, procedural workflows, and task-specific resources. Skills follow an open format (originally proposed by Anthropic) and are portable across multiple coding agents.[^4]
+
+### Skill Locations
+
+| Scope | Path | Precedence |
+|---|---|---|
+| Workspace | `.gemini/skills/` or `.agents/skills/` | Highest[^4] |
+| User | `~/.gemini/skills/` or `~/.agents/skills/` | Middle[^4] |
+| Extension | Bundled inside installed extensions | Lowest[^4] |
+
+If multiple skills share the same name, higher-precedence locations override lower ones.[^4]
+
+### Skill Structure
+
+Each skill is a directory containing a `SKILL.md` file with YAML-style metadata and markdown instructions:[^4]
+
+```markdown SKILL.md
+---
+name: security-audit
+description: Perform a security audit on the current project
+---
+
+Audit the project for security vulnerabilities:
+
+1. Scan dependencies for known CVEs
+2. Check for hardcoded secrets
+3. Review authentication and authorization patterns
+4. Provide a summary with severity ratings
+```
+
+A skill directory can optionally contain `./scripts`, `./resources`, and other `./assets` alongside the `SKILL.md` file.[^4]
+
+### Discovery and Activation
+
+<Steps>
+  <Step title="Discovery">
+    At session start, Gemini CLI scans all skill tiers and injects each skill's name and description into the system prompt.[^4]
+  </Step>
+  <Step title="Matching">
+    When the model identifies a task matching a skill's description, it calls the `activate_skill` tool.[^4]
+  </Step>
+  <Step title="Consent">
+    A confirmation prompt is displayed showing the skill's name, purpose, and the directory path it will gain access to.[^4]
+  </Step>
+  <Step title="Injection">
+    Upon approval, the SKILL.md body and folder structure are added to the conversation history.[^4]
+  </Step>
+</Steps>
+
+<Note>
+  Unlike `GEMINI.md` files which provide persistent context, skills represent on-demand expertise. This allows Gemini to maintain a large library of specialized capabilities without consuming context tokens until activated.[^4]
+</Note>
+
+---
+
+## Subagents
+
+Subagents are specialist agents that the main Gemini agent can delegate tasks to. Each subagent runs in a separate context window with its own system prompt and optionally restricted tool set.[^5]
+
+### Agent Definition
+
+Custom agents are defined as Markdown files with YAML frontmatter:[^5]
+
+```markdown code-reviewer.md
+---
+name: code-reviewer
+description: Reviews code for quality, security, and best practices
+tools:
+  - read_file
+  - list_directory
+  - run_shell_command
+model: gemini-2.5-pro
+max_turns: 20
+timeout_mins: 5
+---
+
+You are a code reviewer. Analyze the provided code for:
+- Code quality and maintainability
+- Security vulnerabilities
+- Performance issues
+- Adherence to project conventions
+```
+
+### Frontmatter Fields
+
+| Field | Type | Required | Purpose |
+|---|---|------|---------|
+| `name` | string | Yes | Unique identifier (lowercase, hyphens, underscores only)[^5] |
+| `description` | string | Yes | Helps the main agent decide when to delegate[^5] |
+| `kind` | string | No | `local` (default) or `remote`[^5] |
+| `tools` | array | No | Allowed tools; supports wildcards (`*`, `mcp_*`, `mcp_server_*`)[^5] |
+| `model` | string | No | Specific model override; defaults to session model[^5] |
+| `temperature` | number | No | Model temperature (0.0--2.0); defaults to 1[^5] |
+| `max_turns` | number | No | Maximum conversation turns before returning; defaults to 30[^5] |
+| `timeout_mins` | number | No | Maximum execution time in minutes; defaults to 10[^5] |
+
+### Agent Locations
+
+| Scope | Path |
+|---|---|
+| Project | `.gemini/agents/*.md`[^5] |
+| User | `~/.gemini/agents/*.md`[^5] |
+
+Invoke a subagent explicitly by prefixing your prompt with `@agent-name`.[^5]
+
+<Warning>
+  Subagents currently operate in "YOLO mode" -- they may execute tools without individual user confirmation for each step. Use caution when defining agents with tools like `run_shell_command` or `write_file`.[^5]
+</Warning>
+
+---
+
+## Hooks System
+
+Hooks are scripts that Gemini CLI executes at specific points in the agentic loop, allowing interception and customization of behavior without modifying source code. Hooks run synchronously -- when a hook fires, the CLI waits for all matching hooks to complete before continuing.[^9]
+
+### Hook Events
+
+| Event | Matcher Type | Purpose |
+|---|---|---|
+| `BeforeTool` | Regex (tool name) | Validate arguments, block dangerous operations[^10] |
+| `AfterTool` | Regex (tool name) | Audit results, inject context, trigger follow-up tools[^10] |
+| `BeforeAgent` | Exact string | Validate prompts, inject dynamic context[^10] |
+| `AfterAgent` | Exact string | Response validation, automatic retries[^10] |
+| `BeforeModel` | Exact string | Modify LLM request, override model/config[^10] |
+| `AfterModel` | Exact string | Real-time redaction, PII filtering[^10] |
+| `BeforeToolSelection` | Exact string | Filter available tools, force tool modes[^10] |
+| `SessionStart` | Exact string | Load initial context on startup/resume/clear[^10] |
+| `SessionEnd` | Exact string | Cleanup, final telemetry[^10] |
+| `Notification` | Exact string | Log system alerts externally[^10] |
+| `PreCompress` | Exact string | Log before token compression[^10] |
+
+### Hook Configuration
+
+Hooks are configured in `settings.json` at user (`~/.gemini/settings.json`) or project (`.gemini/settings.json`) scope. Project-level hooks take precedence over user-level hooks.[^9]
+
+```json
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "run_shell_command",
+        "sequential": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".gemini/hooks/validate-command.sh",
+            "name": "validate-shell-commands",
+            "timeout": 60000
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "SessionStart",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".gemini/hooks/load-context.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Communication Protocol
+
+Hooks communicate via stdin (JSON input) and stdout (JSON output). All logging and debugging must go to stderr -- any non-JSON output on stdout will break parsing.[^11]
+
+**Base input fields (all hooks):**[^10]
+
+```json
+{
+  "session_id": "string",
+  "transcript_path": "string",
+  "cwd": "string",
+  "hook_event_name": "string",
+  "timestamp": "ISO 8601 string"
+}
+```
+
+### Exit Codes
+
+| Exit Code | Effect |
+|---|---|
+| `0` | Hook succeeded; CLI parses stdout for JSON decisions[^10] |
+| `2` | System block -- the tool call or action is blocked (stderr used as reason)[^10] |
+| Other | Warning logged; action proceeds[^10] |
+
+---
+
+## Extensions
+
+Extensions are self-contained, distributable packages that bundle MCP servers, custom commands, context files, agent skills, and subagents into a single installable unit.[^12]
+
+### Extension Manifest
+
+Each extension requires a `gemini-extension.json` manifest file:[^13]
+
+```json
+{
+  "name": "my-extension",
+  "version": "1.0.0",
+  "settings": [],
+  "contextFileName": "GEMINI.md",
+  "mcpServers": {
+    "my-tool": {
+      "command": "node",
+      "args": ["${extensionPath}${/}server.js"],
+      "cwd": "${extensionPath}"
+    }
+  }
+}
+```
+
+### Extension Components
+
+An extension can bundle any combination of:[^12][^13]
+
+| Component | Purpose |
+|---|---|
+| MCP servers | Connect Gemini to external tools and APIs |
+| Custom commands | Slash-command shortcuts for complex prompts (`.toml` files) |
+| `GEMINI.md` | Persistent context instructions for the model |
+| Agent skills | On-demand specialized expertise (`skills/` directory) |
+| Subagents | Specialist agents (`agents/` directory) |
+
+### Extension Management
+
+```bash
+# Install from GitHub
+gemini extensions install https://github.com/org/gemini-ext-name
+
+# Install from local path
+gemini extensions install /path/to/extension
+
+# Link for local development (symlink, changes reflected immediately)
+gemini extensions link .
+
+# Update an installed extension
+gemini extensions update extension-name
+
+# Disable/enable at user or workspace level
+gemini extensions disable extension-name
+gemini extensions disable extension-name --scope=workspace
+gemini extensions enable extension-name
+```
+
+Extension settings that require sensitive values (like API keys) are stored securely in the system keychain and injected as environment variables at runtime.[^13]
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Gemini CLI platform.
+
+### Configuration File Paths
+
+- **User settings**: `~/.gemini/settings.json`
+- **User instructions**: `~/.gemini/GEMINI.md`
+- **User skills**: `~/.gemini/skills/<name>/SKILL.md`
+- **User agents**: `~/.gemini/agents/<name>.md`
+- **Project settings**: `<project>/.gemini/settings.json`
+- **Project instructions**: `<project>/GEMINI.md`
+- **Project skills**: `<project>/.gemini/skills/<name>/SKILL.md` (or `<project>/.agents/skills/<name>/SKILL.md`)
+- **Project agents**: `<project>/.gemini/agents/<name>.md`
+- **MCP enablement state**: `~/.gemini/mcp-server-enablement.json`
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, an installer has two approaches:
+
+<Tabs>
+  <Tab title="CLI Command">
+    The safest approach is to use `gemini mcp add`:[^14]
+
+    ```bash
+    # Add a stdio server to user scope
+    gemini mcp add --scope user \
+      -e API_KEY=value \
+      package-server -- npx -y @scope/mcp-server-package
+
+    # Add an HTTP server
+    gemini mcp add --transport http --scope user \
+      package-server https://api.example.com/mcp \
+      --header "Authorization: Bearer $TOKEN"
+    ```
+  </Tab>
+  <Tab title="JSON (settings.json)">
+    Write or merge into `~/.gemini/settings.json` or `<project>/.gemini/settings.json`:[^7]
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "$API_KEY"
+          }
+        }
+      }
+    }
+    ```
+
+    Environment variables in the `env` block are automatically expanded from the shell environment.[^7]
+  </Tab>
+</Tabs>
+
+**Key considerations:**
+
+- Use `gemini mcp add` when possible -- it handles validation and scope correctly[^14]
+- For JSON edits, merge carefully; do not overwrite existing `mcpServers` entries
+- Environment variables in `env` blocks use the `$VAR` syntax (not `${VAR}`)[^7]
+- Gemini CLI sanitizes sensitive environment variables from MCP server processes by default[^7]
+- Avoid underscores in server alias names due to internal name parsing[^6]
+
+### Installing Skills
+
+To install a skill, create a directory with a `SKILL.md` file:
+
+- **Project scope**: `<project>/.gemini/skills/<skill-name>/SKILL.md` or `<project>/.agents/skills/<skill-name>/SKILL.md`
+- **User scope**: `~/.gemini/skills/<skill-name>/SKILL.md` or `~/.agents/skills/<skill-name>/SKILL.md`
+
+Skills are auto-discovered at session start. No additional registration is needed.[^4]
+
+### Installing Project Instructions
+
+To install project-level instructions, write or append to `<project>/GEMINI.md`. If the file already exists, append to it. The CLI concatenates all discovered `GEMINI.md` files, so appending is safe.[^3]
+
+### Installing Extensions
+
+Extensions can be installed programmatically via the CLI:[^12]
+
+```bash
+# Install from a Git repository URL
+gemini extensions install https://github.com/org/extension-name
+
+# Install from a local directory
+gemini extensions install /path/to/extension
+```
+
+### Config File Format
+
+Gemini CLI uses standard JSON for `settings.json`. The installer must:
+
+1. Parse the existing JSON file (if it exists)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back, preserving existing entries
+
+The `mcpServers` object and `hooks` object are the primary integration points for programmatic configuration.
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/google-gemini/gemini-cli
+[^2]: https://geminicli.com/docs/reference/configuration/
+[^3]: https://geminicli.com/docs/cli/gemini-md/
+[^4]: https://geminicli.com/docs/cli/skills/
+[^5]: https://geminicli.com/docs/core/subagents/
+[^6]: https://fossies.org/linux/gemini-cli/schemas/settings.schema.json
+[^7]: https://geminicli.com/docs/tools/mcp-server/
+[^8]: https://medium.com/google-cloud/practical-gemini-cli-bring-your-own-system-instruction-19ea7f07faa2
+[^9]: https://geminicli.com/docs/hooks/
+[^10]: https://geminicli.com/docs/hooks/reference/
+[^11]: https://geminicli.com/docs/hooks/writing-hooks/
+[^12]: https://geminicli.com/docs/extensions/
+[^13]: https://geminicli.com/docs/extensions/writing-extensions/
+[^14]: https://developers.googleblog.com/gemini-cli-fastmcp-simplifying-mcp-server-development/
