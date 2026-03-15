@@ -1,0 +1,421 @@
+---
+title: 'Qwen Code'
+description: 'Platform specification for Qwen Code, Alibaba''s AI coding assistant'
+icon: 'code'
+---
+
+[Qwen Code](https://github.com/QwenLM/qwen-code) is an open-source, terminal-native AI coding agent developed by **Alibaba Cloud (Qwen team)**, optimized for the Qwen3-Coder model family. [^1] It supports extensibility through custom commands, sub-agents, MCP servers, QWEN.md instruction files, and JSON-based configuration. [^2]
+
+---
+
+## Configuration
+
+### File Locations
+
+Qwen Code uses JSON configuration files with a layered merge system. Settings are validated against an internal schema and support environment variable substitution using `$VAR_NAME` or `${VAR_NAME}` syntax. [^2]
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User settings | `~/.qwen/settings.json` | Global settings for the current user |
+    | Project settings | `<project>/.qwen/settings.json` | Project-specific overrides |
+    | System defaults | `/etc/qwen-code/system-defaults.json` | System-wide defaults (lowest file precedence) |
+    | System settings | `/etc/qwen-code/settings.json` | System-wide overrides (highest file precedence) |
+    | Global context | `~/.qwen/QWEN.md` | User-wide custom instructions |
+    | Project context | `<project>/QWEN.md` | Project-specific instructions |
+    | Global commands | `~/.qwen/commands/` | User-wide custom slash commands |
+    | Project commands | `<project>/.qwen/commands/` | Project-specific slash commands |
+    | Global agents | `~/.qwen/agents/` | User-wide sub-agent definitions |
+    | Project agents | `<project>/.qwen/agents/` | Project-specific sub-agent definitions |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User settings | `~/.qwen/settings.json` | Global settings for the current user |
+    | Project settings | `<project>\.qwen\settings.json` | Project-specific overrides |
+    | System defaults | `C:\ProgramData\qwen-code\system-defaults.json` | System-wide defaults |
+    | System settings | `C:\ProgramData\qwen-code\settings.json` | System-wide overrides |
+  </Tab>
+</Tabs>
+
+### Configuration Precedence
+
+Settings are resolved in the following order (later sources override earlier ones): [^2]
+
+1. **Default values** -- hardcoded application defaults
+2. **System defaults file** -- system-wide defaults that can be overridden
+3. **User settings** -- `~/.qwen/settings.json`
+4. **Project settings** -- `<project>/.qwen/settings.json`
+5. **System settings file** -- system-wide overrides (highest file precedence)
+6. **Environment variables** -- session or system-level variables
+7. **Command-line arguments** -- highest overall precedence
+
+### settings.json Structure
+
+The settings file includes a `$version` field for format tracking. When the format changes, Qwen Code automatically migrates older settings. [^3]
+
+<CodeGroup>
+
+```json MCP Servers
+{
+  "mcpServers": {
+    "pythonTools": {
+      "command": "python",
+      "args": ["-m", "my_mcp_server"],
+      "env": {
+        "API_KEY": "$MY_TOKEN"
+      },
+      "timeout": 15000
+    },
+    "remoteServer": {
+      "url": "http://localhost:8080/sse"
+    }
+  }
+}
+```
+
+```json Global MCP Settings
+{
+  "mcp": {
+    "allowed": ["pythonTools"],
+    "excluded": ["untrustedServer"]
+  }
+}
+```
+
+```json Context Configuration
+{
+  "context": {
+    "fileName": "QWEN.md",
+    "loadFromAllDirectories": true
+  }
+}
+```
+
+</CodeGroup>
+
+---
+
+## Custom Instructions (QWEN.md)
+
+Qwen Code uses Markdown-based context files (defaulting to `QWEN.md`) for project-specific instructions, coding style guides, and background information that gets included in the LLM system prompt. [^2]
+
+### Context File Hierarchy
+
+<Steps>
+  <Step title="Global context">
+    `~/.qwen/QWEN.md` provides default instructions across all projects. [^2]
+  </Step>
+  <Step title="Project hierarchy search">
+    The CLI searches from the current working directory upward through each parent directory to either the project root (identified by a `.git` folder) or the home directory. [^2]
+  </Step>
+  <Step title="Concatenation">
+    All discovered context files are concatenated with separators indicating their origin path and included in the system prompt. The CLI footer displays the count of loaded context files. [^2]
+  </Step>
+</Steps>
+
+### Modular Imports
+
+Context files support importing other Markdown files using `@path/to/file.md` syntax, allowing you to break large instruction sets into reusable modules. [^2]
+
+### Managing Context
+
+| Command | Purpose |
+|---|---|
+| `/memory init` | Analyze the project directory and auto-generate a `QWEN.md` file [^4] |
+| `/memory refresh` | Force a re-scan and reload of all context files [^2] |
+| `/memory show` | Display the combined instructional context currently loaded [^2] |
+
+<Note>
+  The context file name is configurable via the `context.fileName` setting in `settings.json`. If you set it to a different name, Qwen Code will look for that file instead of `QWEN.md`. [^2]
+</Note>
+
+---
+
+## MCP Servers
+
+Qwen Code implements the Model Context Protocol (MCP) to extend its capabilities through external tool servers. MCP servers are configured in `settings.json` and their tools automatically become available to the AI. [^5]
+
+### Transport Types
+
+| Transport | Configuration Key | Description |
+|---|---|---|
+| **Stdio** | `command` | Spawns a subprocess communicating via stdin/stdout [^5] |
+| **SSE** | `url` | Connects to a Server-Sent Events endpoint [^5] |
+| **HTTP Streaming** | `httpUrl` | Uses HTTP for bidirectional communication [^5] |
+
+### Server Configuration Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `command` | string | Executable path (Stdio transport, required for Stdio) [^5] |
+| `url` | string | SSE endpoint URL (required for SSE) [^5] |
+| `httpUrl` | string | HTTP streaming endpoint (required for HTTP) [^5] |
+| `args` | array | Command-line arguments for Stdio servers [^5] |
+| `headers` | object | Custom HTTP headers for remote servers [^5] |
+| `env` | object | Environment variables (supports `$VAR_NAME` substitution) [^5] |
+| `cwd` | string | Working directory for the server process [^5] |
+| `timeout` | number | Connection/request timeout in milliseconds (default: 600,000) [^5] |
+| `trust` | boolean | Bypass tool confirmation dialogs [^5] |
+| `includeTools` | array | Allowlist of tool names from this server [^5] |
+| `excludeTools` | array | Blocklist of tool names from this server [^5] |
+
+### Adding MCP Servers
+
+<Tabs>
+  <Tab title="CLI">
+    ```bash
+    # Add a new MCP server
+    qwen mcp add <name> <command>
+
+    # List all configured servers
+    qwen mcp list
+
+    # Remove a server
+    qwen mcp remove <name>
+    ```
+  </Tab>
+  <Tab title="settings.json (Manual)">
+    ```json
+    {
+      "mcpServers": {
+        "github": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-github"],
+          "env": {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_TOKEN"
+          }
+        },
+        "httpServerWithAuth": {
+          "httpUrl": "http://localhost:3000/mcp",
+          "headers": {
+            "Authorization": "Bearer token"
+          },
+          "timeout": 5000
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Tool Discovery and Conflict Resolution
+
+Qwen Code discovers tools from MCP servers at startup by iterating through configured servers, establishing connections via the appropriate transport, and fetching tool definitions. If multiple MCP servers expose a tool with the same name, tool names are prefixed with the server alias (e.g., `mcp__serverName__toolName`). [^5]
+
+<Warning>
+  The `trust` option bypasses all confirmation dialogs. Only use it for servers you completely control. Be cautious when configuring environment variables containing API keys or tokens. [^5]
+</Warning>
+
+---
+
+## Custom Slash Commands
+
+Custom commands allow you to save and reuse frequently used prompts as slash command shortcuts. [^6]
+
+### Command Locations
+
+| Scope | Path |
+|---|---|
+| **Global** | `~/.qwen/commands/` |
+| **Project** | `<project>/.qwen/commands/` |
+
+When identically named commands exist in both locations, the project-level command takes precedence. File-based commands also take precedence over MCP-provided prompt commands. [^6]
+
+### Command File Format (Markdown)
+
+Commands are defined as Markdown files with optional YAML frontmatter. The recommended format is: [^6]
+
+```markdown
+---
+description: Refactor the selected code into a pure function
+---
+
+Refactor the following code into a pure function with no side effects.
+Ensure all dependencies are passed as parameters.
+
+{{args}}
+```
+
+<Note>
+  TOML command files (`.toml`) are deprecated and will be removed in a future version. Use Markdown (`.md`) files instead. [^6]
+</Note>
+
+### Namespacing with Subdirectories
+
+Subdirectories inside the `commands` directory create namespaced commands. For example: [^6]
+
+| File Path | Slash Command |
+|---|---|
+| `~/.qwen/commands/test.md` | `/test` |
+| `<project>/.qwen/commands/git/commit.md` | `/git:commit` |
+| `~/.qwen/commands/refactor/pure.md` | `/refactor:pure` |
+
+### Parameter Injection
+
+| Syntax | Description |
+|---|---|
+| `{{args}}` | Injects user-provided arguments with automatic shell escaping [^6] |
+| `!{command}` | Executes a shell command inline (requires user confirmation) [^6] |
+| `@{filepath}` | Injects file content (respects `.gitignore` rules) [^6] |
+
+---
+
+## Sub-Agents
+
+Sub-agents are specialized AI assistants that handle specific types of tasks within Qwen Code. Each sub-agent maintains its own conversation history, has a focused system prompt, and can be restricted to a specific set of tools. [^7]
+
+### Agent Locations
+
+| Scope | Path |
+|---|---|
+| **Global** | `~/.qwen/agents/` |
+| **Project** | `<project>/.qwen/agents/` |
+
+Project-level agents take precedence over global agents with the same name. Extensions can also provide agents via their `agents/` directory. [^7]
+
+### Agent File Format
+
+Sub-agents are configured as Markdown files with YAML frontmatter: [^7]
+
+```markdown
+---
+name: security-reviewer
+description: Reviews code for security vulnerabilities and suggests fixes
+tools:
+  - read_file
+  - read_many_files
+  - web_search
+---
+
+You are a security-focused code reviewer. Analyze code for common
+vulnerability patterns including injection attacks, authentication
+flaws, and data exposure risks.
+
+Current directory: ${current_directory}
+Timestamp: ${timestamp}
+```
+
+### Frontmatter Fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Agent identifier [^7] |
+| `description` | Yes | When and how to use this agent [^7] |
+| `tools` | No | Array of tools this agent can access [^7] |
+
+### Template Variables
+
+Agent prompts support dynamic variable substitution: `${project_name}`, `${task_description}`, `${current_directory}`, and `${timestamp}`. [^7]
+
+### Managing Sub-Agents
+
+| Command | Purpose |
+|---|---|
+| `/agents create` | Launch a guided wizard to create a new sub-agent [^7] |
+| `/agents manage` | View and modify existing agent configurations [^7] |
+
+---
+
+## Hooks (Lifecycle Events)
+
+<Warning>
+  Qwen Code does not currently have a built-in hooks system. Lifecycle hooks (similar to Claude Code's `PreToolUse`, `PostToolUse`, and `Stop` events) are an actively requested feature. Development work on core event hooks for session lifecycle and tool execution has been observed in the project's CI pipelines, but no stable release is available yet. [^8] [^9]
+</Warning>
+
+Track progress on this feature via [GitHub Issue #268](https://github.com/QwenLM/qwen-code/issues/268).
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Qwen Code platform.
+
+### Skill Install Paths
+
+| Scope | Path |
+|---|---|
+| **Project** | `.qwen/skills/` |
+| **Global** | `~/.qwen/skills/` |
+
+### Configuration File Paths
+
+| Resource | Global Path | Project Path |
+|---|---|---|
+| Settings | `~/.qwen/settings.json` | `<project>/.qwen/settings.json` |
+| Context file | `~/.qwen/QWEN.md` | `<project>/QWEN.md` |
+| Commands | `~/.qwen/commands/` | `<project>/.qwen/commands/` |
+| Agents | `~/.qwen/agents/` | `<project>/.qwen/agents/` |
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into the `mcpServers` key of `settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "$SOME_API_KEY"
+      },
+      "timeout": 15000
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `mcpServers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing MCP server entries
+- Environment variables use `$VAR_NAME` or `${VAR_NAME}` substitution syntax
+- The `command` field is a string (not an array); arguments go in the `args` array
+- Configuration can be placed in either the global or project settings file
+- Use `includeTools` / `excludeTools` arrays to filter which tools are exposed
+
+### Installing Custom Instructions
+
+To install project-level instructions, write or append to `QWEN.md` in the project root. If a `QWEN.md` already exists, the installer should append content rather than overwrite.
+
+Alternatively, use the modular import syntax inside an existing `QWEN.md` to reference additional instruction files:
+
+```markdown
+@docs/package-guidelines.md
+```
+
+### Installing Custom Commands
+
+Place Markdown command files in `.qwen/commands/` at either the project or global level. Use subdirectories for namespacing (e.g., `.qwen/commands/mypackage/lint.md`).
+
+### Installing Sub-Agents
+
+Place Markdown agent files with YAML frontmatter in `.qwen/agents/` at either the project or global level.
+
+### Config File Format
+
+Qwen Code uses JSON for configuration. The installer must:
+
+1. Parse the existing `settings.json` file (if present)
+2. Deep-merge new configuration (particularly the `mcpServers` map) into the existing structure
+3. Write the result back, preserving existing entries and the `$version` field
+
+<Note>
+  Settings files include a `$version` field for format tracking. Qwen Code automatically migrates older settings formats on load, so installers should not need to handle version migration. [^3]
+</Note>
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/QwenLM/qwen-code
+[^2]: https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/
+[^3]: https://deepwiki.com/QwenLM/qwen-code/3.2-settings-reference
+[^4]: https://www.zdoc.app/en/QwenLM/qwen-code/blob/main/docs/cli/configuration.md
+[^5]: https://qwenlm.github.io/qwen-code-docs/en/developers/tools/mcp-server/
+[^6]: https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/
+[^7]: https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/
+[^8]: https://github.com/QwenLM/qwen-code/issues/268
+[^9]: https://github.com/QwenLM/qwen-code/issues/781
