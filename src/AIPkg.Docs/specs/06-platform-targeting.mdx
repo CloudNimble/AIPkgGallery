@@ -43,6 +43,13 @@ ai-{platform}-{variant}
 | `aider` | Aider | `ai` | `.aider/` | Stable |
 | `cline` | Cline | `ai` | `.cline/` | Stable |
 | `zed` | Zed AI | `ai` | `.zed/` | Stable |
+| `gemini` | Gemini (all) | `ai` | _(parent group only)_ | Stable |
+| `gemini-cli` | Gemini CLI | `gemini` | `.gemini/` | Stable |
+| `gemini-code-assist` | Gemini Code Assist | `gemini` | `.gemini/` | Stable |
+| `tabnine` | Tabnine | `ai` | `.tabnine/` | Stable |
+| `qodo` | Qodo | `ai` | `.qodo/` | Stable |
+| `codegpt` | CodeGPT | `ai` | _(IDE extension settings)_ | Stable |
+| `devin` | Devin | `ai` | `.devin/` | Stable |
 
 ### Claude Desktop Install Paths
 
@@ -72,6 +79,12 @@ opencode        →  lib/shared
 aider           →  lib/shared
 cline           →  lib/shared
 zed             →  lib/shared
+gemini-cli      →  gemini  →  lib/shared
+gemini-code-assist → gemini → lib/shared
+tabnine         →  lib/shared
+qodo            →  lib/shared
+codegpt         →  lib/shared
+devin           →  lib/shared
 ```
 
 Each step in the chain maps to a directory inside `lib/`. For example, `claude-code` maps to `lib/claude-code/`, `claude` maps to `lib/claude/`, and the terminal step always maps to `lib/shared/`.
@@ -166,6 +179,8 @@ The server expands `claude-code` to `[claude-code, claude]` using the fallback g
 | `copilot`, `copilot-vscode`, `copilot-github` | Stable |
 | `cursor`, `windsurf`, `continue` | Stable |
 | `opencode`, `aider`, `cline`, `zed` | Stable |
+| `gemini`, `gemini-cli`, `gemini-code-assist` | Stable |
+| `tabnine`, `qodo`, `codegpt`, `devin` | Stable |
 | Any other moniker | Provisional until canonical registration |
 
 <Note>
