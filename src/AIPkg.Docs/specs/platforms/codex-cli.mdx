@@ -6,29 +6,7 @@ icon: terminal
 
 ## Overview
 
-[Codex CLI](https://github.com/openai/codex) is an open-source coding agent developed by **OpenAI** that runs directly in your terminal. Released in April 2025 under the Apache 2.0 license and built in Rust, Codex CLI brings the power of OpenAI's frontier models into local development workflows. It can read, modify, and execute code on your machine, plan multi-step changes across multiple files, run commands, and verify results -- all within a full-screen terminal UI.
-
-Codex CLI supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) for connecting to external tool servers, and can itself run as an MCP server for use inside other agents.
-
-<Info>
-  Codex CLI is model-flexible. It defaults to `gpt-5.4` but supports any provider compatible with the OpenAI Responses API, including Azure OpenAI, Ollama, LM Studio, and Mistral. OpenAI also provides open-source models (`gpt-oss:20b` and `gpt-oss:120b`) that can run locally via Ollama.
-</Info>
-
-### Key Features
-
-| Feature | Description |
-|---|---|
-| **Agentic Execution** | Plans multi-step changes across files, runs shell commands, and verifies results autonomously |
-| **Approval Modes** | Three levels of autonomy: `suggest`, `auto-edit`, and `full-auto` |
-| **Sandboxing** | Platform-native process isolation restricts filesystem and network access for model-generated commands |
-| **AGENTS.md** | Hierarchical project instruction files with global and directory-level scoping |
-| **MCP Integration** | Connect external tool servers via STDIO or streaming HTTP; also runs as an MCP server |
-| **Multi-Agent** | Experimental support for parallel agents working in isolated Git worktrees |
-| **Web Search** | Built-in web search tool with cached and live modes |
-| **Image Input** | Attach PNG/JPEG images to prompts via CLI flags or interactive pasting |
-| **Code Review** | `/review` command for analyzing diffs, commits, and working tree changes |
-| **Non-Interactive Mode** | `codex exec` subcommand for scripting and CI/CD automation |
-| **Session Management** | Local transcript storage with resume, fork, and conversation compaction |
+[Codex CLI](https://github.com/openai/codex) is an open-source terminal coding agent developed by **OpenAI**, built in Rust under the Apache 2.0 license. It is extensible through AGENTS.md instruction files, MCP server integration (both as client and server), TOML-based layered configuration with named profiles, and support for custom model providers.
 
 ---
 
@@ -225,84 +203,7 @@ Run the `/init` slash command inside Codex to generate an `AGENTS.md` scaffold i
 
 ---
 
-## Approval Modes
-
-Approval modes control how much autonomy Codex has when modifying files and executing commands. Set them via CLI flags, the `/mode` slash command mid-session, or in `config.toml`.
-
-### Mode Comparison
-
-| Mode | File Edits | Shell Commands | Best For |
-|---|---|---|---|
-| **Suggest** (default) | Requires approval | Requires approval | Production code, unfamiliar repositories |
-| **Auto-Edit** | Applied automatically | Requires approval | Active development with trusted edits |
-| **Full-Auto** | Applied automatically | Executed automatically | Isolated environments, disposable containers |
-
-### Setting Approval Modes
-
-<CodeGroup>
-
-```bash CLI Flags
-# Most restrictive -- every action needs approval
-codex --suggest "refactor the auth module"
-
-# Balanced -- auto-apply edits, approve commands
-codex --auto-edit "add unit tests for the parser"
-
-# Least restrictive -- full autonomy
-codex --full-auto "set up the CI pipeline"
-```
-
-```toml config.toml
-# Approval policy controls command execution
-# "untrusted" = always ask (suggest mode)
-# "on-request" = auto-edit with command approval
-# "never" = full-auto
-approval_policy = "on-request"
-```
-
-```text Mid-Session Slash Commands
-/mode suggest
-/mode auto-edit
-/mode full-auto
-```
-
-</CodeGroup>
-
-### Sandbox Modes
-
-Sandboxing defines the technical boundaries for model-generated commands, using platform-native enforcement on each OS.
-
-| Sandbox Mode | Filesystem | Network | Use Case |
-|---|---|---|---|
-| `read-only` | Read only | Blocked | Safe exploration and analysis |
-| `workspace-write` | Read + write within workspace and `/tmp` | Blocked | Default for local development |
-| `danger-full-access` | Unrestricted | Unrestricted | Only in fully isolated environments |
-
-<Warning>
-  The `--dangerously-bypass-approvals-and-sandbox` flag (alias `--yolo`) disables both approvals and sandboxing entirely. Only use this inside dedicated sandbox VMs or disposable containers.
-</Warning>
-
-### How Sandbox and Approvals Work Together
-
-Sandboxing and approvals are independent controls. The sandbox defines technical boundaries (what Codex *can* do), while the approval policy decides when Codex must pause and ask (what Codex *may* do without confirmation). The `--full-auto` flag is a convenience preset that sets `sandbox_mode = "workspace-write"` and `approval_policy = "on-request"`.
-
----
-
-## Tools & Capabilities
-
-### Built-in Tools
-
-Codex CLI includes several built-in tools that the model can invoke during a session:
-
-| Tool | Description |
-|---|---|
-| **File Read** | Read file contents from the workspace |
-| **File Write/Edit** | Create, modify, or delete files within sandbox boundaries |
-| **Shell Execution** | Run shell commands subject to sandbox and approval policies |
-| **Web Search** | Search the web using OpenAI-maintained indexes (cached by default, live with `--search`) |
-| **Code Review** | Analyze diffs against base branches, uncommitted changes, or specific commits |
-
-### MCP Integration
+## MCP Integration
 
 Codex connects to external tools through Model Context Protocol servers. Servers are launched automatically when a session starts.
 
@@ -339,144 +240,11 @@ codex mcp login my-server
 
 Codex can also run as an MCP server itself, allowing other agents to use Codex as a tool.
 
-### Multimodal Support
-
-Codex accepts image inputs (PNG, JPEG) through two methods:
-
-```bash
-# Attach images via CLI flag
-codex -i screenshot.png "What's wrong with this UI?"
-
-# Multiple images
-codex --image img1.png,img2.jpg "Compare these designs"
-```
-
-Images can also be pasted directly into the interactive composer during a session.
-
-### Slash Commands
-
-| Command | Description |
-|---|---|
-| `/model` | Choose the active model and reasoning effort |
-| `/mode` | Switch approval mode (suggest, auto-edit, full-auto) |
-| `/permissions` | Set what Codex can do without asking |
-| `/plan` | Switch to plan mode |
-| `/review` | Review working tree, branch diffs, or specific commits |
-| `/diff` | Show Git diff including untracked files |
-| `/mention` | Attach a file to the conversation |
-| `/compact` | Summarize conversation to free tokens |
-| `/clear` | Clear terminal and start fresh |
-| `/new` | Start a new conversation in the same session |
-| `/resume` | Continue from a previous session |
-| `/fork` | Clone conversation into a new thread |
-| `/agent` | Switch the active agent thread |
-| `/init` | Generate AGENTS.md scaffold |
-| `/status` | Display session config and token usage |
-| `/mcp` | List configured MCP tools |
-| `/ps` | Show background terminals and recent output |
-| `/copy` | Copy the latest completed output |
-| `/quit` | Exit the CLI |
-
-### CLI Commands Reference
-
-| Command | Description |
-|---|---|
-| `codex [PROMPT]` | Launch interactive TUI, optionally with an initial prompt |
-| `codex exec [PROMPT]` | Run non-interactively without user prompts |
-| `codex exec resume` | Resume a non-interactive session |
-| `codex resume` | Continue an interactive session |
-| `codex fork` | Fork a previous session into a new thread |
-| `codex cloud [QUERY]` | Interact with cloud tasks |
-| `codex cloud list` | List recent cloud tasks |
-| `codex apply [TASK_ID]` | Apply diff from a cloud task to local repo |
-| `codex mcp add\|list\|remove` | Manage MCP servers |
-| `codex login` | Authenticate the CLI |
-| `codex logout` | Remove stored credentials |
-| `codex sandbox [COMMAND]` | Run a command under Codex sandbox policies |
-| `codex completion [SHELL]` | Generate shell completions (bash, zsh, fish, powershell, elvish) |
-| `codex features list\|enable\|disable` | Manage feature flags |
-| `codex app` | Launch Codex Desktop (macOS only) |
-
-### Key CLI Flags
-
-| Flag | Description |
-|---|---|
-| `--model, -m` | Override the configured model |
-| `--image, -i` | Attach image file(s) to the initial prompt |
-| `--sandbox, -s` | Select sandbox policy (`read-only`, `workspace-write`, `danger-full-access`) |
-| `--full-auto` | Shortcut for low-friction local automation |
-| `--oss` | Use local open-source model via Ollama |
-| `--profile, -p` | Load a named configuration profile |
-| `--config, -c` | Override config values (`key=value`, parsed as JSON when possible) |
-| `--cd, -C` | Set working directory |
-| `--add-dir` | Grant additional directories write access |
-| `--search` | Enable live web search instead of cached |
-| `--no-alt-screen` | Disable alternate screen mode |
-
----
-
-## Model Configuration
-
-### Recommended Models
-
-| Model | Description |
-|---|---|
-| `gpt-5.4` | Default. Frontier model with strong coding, reasoning, and tool use |
-| `gpt-5.3-codex` | Industry-leading coding model for complex software engineering |
-| `gpt-5.3-codex-spark` | Near-instant real-time coding iteration (Pro users) |
-| `gpt-5.2-codex` | Powers Codex cloud and CLI; strong agentic coding |
-| `gpt-5-codex-mini` | Smaller, cost-effective alternative |
-
-### Local / Open-Source Models
-
-OpenAI provides two open-source models that run locally via Ollama:
-
-```bash
-# Use the --oss flag (requires Ollama running locally)
-codex --oss "refactor the database layer"
-
-# Or specify a model directly
-codex -m gpt-oss:120b "optimize the query parser"
-```
-
-Available open-source models: `gpt-oss:20b` (default for `--oss`) and `gpt-oss:120b`.
-
-### Custom Providers
-
-Point Codex at any provider compatible with the OpenAI Responses API:
-
-```toml
-[model_providers.my-provider]
-base_url = "https://api.my-provider.com/v1"
-
-# Then use it
-# codex -c model_provider="my-provider" -m "my-model" "do something"
-```
-
-Supported provider types include Azure OpenAI, Ollama, LM Studio, and Mistral.
-
 ---
 
 ## Installation Provider Notes
 
 This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Codex CLI platform.
-
-### Platform Installation
-
-<Tabs>
-  <Tab title="npm">
-    ```bash
-    npm install -g @openai/codex
-    ```
-  </Tab>
-  <Tab title="macOS (Homebrew)">
-    ```bash
-    brew install --cask codex
-    ```
-  </Tab>
-</Tabs>
-
-Codex CLI is supported on macOS, Linux, and Windows.
 
 ### Configuration File Paths
 
@@ -566,13 +334,3 @@ codex exec --json "analyze dependencies"
 # Skip Git repository check
 codex exec --skip-git-repo-check "process these files"
 ```
-
-### Approval Mode Defaults
-
-An installer should be aware of Codex's approval modes for documentation and user guidance:
-
-| CLI Flag | `approval_policy` | `sandbox_mode` | Behavior |
-|---|---|---|---|
-| `--suggest` | `untrusted` | `read-only` | Every action requires approval |
-| `--auto-edit` | `on-request` | `workspace-write` | Edits auto-applied, commands need approval |
-| `--full-auto` | `on-request` | `workspace-write` | Commands also auto-executed within sandbox |

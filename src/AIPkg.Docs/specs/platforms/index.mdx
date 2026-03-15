@@ -1,0 +1,90 @@
+---
+title: "Platform Specs"
+sidebarTitle: "Platform Specs"
+description: "Extensibility reference for AI coding platforms — configuration file locations, MCP server setup, custom instructions, agent/skill systems, and programmatic installation."
+icon: "grid-2"
+---
+
+This section documents the extensibility surface of each AI coding platform that AIPkg targets. Each spec focuses on what an installer needs to know: config file locations, MCP server configuration, custom instructions/rules, agent/skill systems, hooks, and programmatic installation.
+
+---
+
+## Platforms with Full Specs
+
+These platforms have detailed spec files documenting their extensibility surface and installation provider requirements.
+
+| Moniker | Platform | Spec | MCP Support | Custom Instructions | Custom Agents/Skills |
+|---------|----------|------|:-----------:|:-------------------:|:--------------------:|
+| `claude-code` | Claude Code | [Spec](platforms/claude-code) | Native | CLAUDE.md | Skills (SKILL.md) |
+| `claude-desktop` | Claude Desktop | [Spec](platforms/claude-desktop) | Native | — | — |
+| `copilot` | GitHub Copilot | [Spec](platforms/github-copilot) | Native | copilot-instructions.md | Agents, Skills |
+| `cursor` | Cursor | [Spec](platforms/cursor) | Native | .cursor/rules/*.mdc | Custom Modes |
+| `windsurf` | Windsurf | [Spec](platforms/windsurf) | Native | .windsurf/rules/*.md | — |
+| `continue` | Continue | [Spec](platforms/continue) | Native | .continue/rules/*.md, .continuerules | Prompts |
+| `cline` | Cline | [Spec](platforms/cline) | Native | .clinerules | — |
+| `roo` | Roo Code | [Spec](platforms/cline) | Native | .roo/rules/*.md | Custom Modes |
+| `opencode` | OpenCode | [Spec](platforms/opencode) | Native | AGENTS.md | — |
+| `aider` | Aider | [Spec](platforms/aider) | Third-party | CONVENTIONS.md | — |
+| `zed` | Zed | [Spec](platforms/zed) | Native | .zed/rules/*.md | — |
+| `goose` | Goose | [Spec](platforms/goose) | Native (Extensions) | .goosehints | Recipes |
+| `amp` | Amp | [Spec](platforms/amp) | Native | AGENT.md | Skills, Toolboxes |
+| `augment` | Augment Code | [Spec](platforms/augment-code) | Native | Rules (settings.json) | — |
+| `codex` | Codex CLI | [Spec](platforms/codex-cli) | — | AGENTS.md | — |
+| `amazon-q` | Amazon Q Developer | [Spec](platforms/amazon-q) | — | — | — |
+| `jetbrains-ai` | JetBrains AI | [Spec](platforms/jetbrains-ai) | Native | .junie/guidelines/*.md | — |
+| `sourcegraph-cody` | Sourcegraph Cody | [Spec](platforms/sourcegraph-cody) | — | — | — |
+| `chatgpt` | ChatGPT | [Spec](platforms/chatgpt) | Native | Custom GPTs | Actions |
+
+---
+
+## Vercel Skills Supported Agents
+
+The [Vercel Skills](https://github.com/vercel-labs/skills) project maintains a list of AI coding agents that support the `AGENTS.md` convention. These are platforms that may benefit from AIPkg support. Platforms already covered by full specs above are marked accordingly.
+
+| Moniker | Platform | Has Spec |
+|---------|----------|:--------:|
+| `amp` | Amp | Yes |
+| `augment` | Augment | Yes |
+| `claude-code` | Claude Code | Yes |
+| `cline` | Cline | Yes |
+| `codex` | Codex | Yes |
+| `continue` | Continue | Yes |
+| `cursor` | Cursor | Yes |
+| `github-copilot` | GitHub Copilot | Yes |
+| `goose` | Goose | Yes |
+| `opencode` | OpenCode | Yes |
+| `roo` | Roo Code | Yes |
+| `windsurf` | Windsurf | Yes |
+| `adal` | AdaL | — |
+| `antigravity` | Antigravity | — |
+| `codebuddy` | CodeBuddy | — |
+| `command-code` | Command Code | — |
+| `cortex` | Cortex Code | — |
+| `crush` | Crush | — |
+| `droid` | Droid | — |
+| `gemini-cli` | Gemini CLI | — |
+| `iflow-cli` | iFlow CLI | — |
+| `junie` | Junie | — |
+| `kilo` | Kilo Code | — |
+| `kimi-cli` | Kimi Code CLI | — |
+| `kiro-cli` | Kiro CLI | — |
+| `kode` | Kode | — |
+| `mcpjam` | MCPJam | — |
+| `mistral-vibe` | Mistral Vibe | — |
+| `mux` | Mux | — |
+| `neovate` | Neovate | — |
+| `openclaw` | OpenClaw | — |
+| `openhands` | OpenHands | — |
+| `pi` | Pi | — |
+| `pochi` | Pochi | — |
+| `qoder` | Qoder | — |
+| `qwen-code` | Qwen Code | — |
+| `replit` | Replit | — |
+| `trae` | Trae | — |
+| `trae-cn` | Trae CN | — |
+| `warp` | Warp | — |
+| `zencoder` | Zencoder | — |
+
+<Note>
+  Platforms without full specs may still work with AIPkg packages that target the `ai` root moniker or use the `AGENTS.md` convention. The Vercel Skills list is maintained externally and may change independently of AIPkg's canonical moniker table.
+</Note>
