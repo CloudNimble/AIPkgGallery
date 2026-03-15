@@ -1,0 +1,636 @@
+---
+title: 'Cortex Code'
+description: 'Platform specification for Cortex Code, Snowflake''s AI coding agent'
+icon: 'snowflake'
+---
+
+## Overview
+
+[Cortex Code](https://www.snowflake.com/en/product/features/cortex-code/) is an AI coding agent by **Snowflake**, delivered as both a Snowsight UI and a CLI, purpose-built for data engineering, analytics, and ML workflows with native understanding of Snowflake environments.[^1] Extensibility is via MCP servers, **Skills** (`SKILL.md` workflow definitions), **Hooks** (lifecycle event handlers), **Subagents** (autonomous specialist agents), and **AGENTS.md** project instruction files.[^2]
+
+---
+
+## Configuration
+
+### File Locations
+
+Cortex Code uses a hierarchical configuration system rooted in `~/.snowflake/cortex/`.[^3]
+
+<Tabs>
+  <Tab title="User / Global">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Main settings | `~/.snowflake/cortex/settings.json` | Personal global settings |
+    | Permissions | `~/.snowflake/cortex/permissions.json` | Tool access permissions |
+    | MCP config | `~/.snowflake/cortex/mcp.json` | MCP server definitions |
+    | Hooks config | `~/.snowflake/cortex/hooks.json` | Global lifecycle hooks |
+    | Snowflake connections | `~/.snowflake/config.toml` | Shared with Snowflake CLI |
+    | User skills | `~/.snowflake/cortex/skills/<name>/SKILL.md` | Personal skills |
+    | User agents | `~/.snowflake/cortex/agents/<name>.md` | Custom subagent definitions |
+    | User commands | `~/.snowflake/cortex/commands/` | Custom slash commands |
+    | User hooks | `~/.snowflake/cortex/hooks/` | Hook script files |
+  </Tab>
+  <Tab title="Project">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Project instructions | `<project>/AGENTS.md` | Project-level instructions for the agent |
+    | Project settings | `<project>/.cortex/settings.json` | Shared project settings (committed) |
+    | Local settings | `<project>/.cortex/settings.local.json` | Personal project settings (gitignored) |
+    | Project skills | `<project>/.cortex/skills/<name>/SKILL.md` | Project-specific skills |
+    | Project agents | `<project>/.cortex/agents/<name>.md` | Project-specific subagents |
+  </Tab>
+  <Tab title="Managed (Enterprise)">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Managed settings (macOS) | `/Library/Application Support/Cortex/managed-settings.json` | Organization-wide policy |
+    | Managed settings (Linux/WSL) | `/etc/cortex/managed-settings.json` | Organization-wide policy |
+  </Tab>
+</Tabs>
+
+### Directory Structure
+
+The full `~/.snowflake/cortex/` directory layout:[^3]
+
+```
+~/.snowflake/cortex/
+├── settings.json
+├── mcp.json
+├── permissions.json
+├── hooks.json
+├── history
+├── conversations/
+├── cache/
+├── logs/
+├── memory/
+├── agents/
+├── skills/
+├── commands/
+├── hooks/
+└── remote_cache/
+```
+
+### settings.json Structure
+
+<CodeGroup>
+
+```json Basic Configuration
+{
+  "compactMode": false,
+  "autoUpdate": true,
+  "theme": "dark"
+}
+```
+
+```json permissions.json
+{
+  "onlyAllow": ["Bash", "Read", "Edit"],
+  "defaultMode": "ask",
+  "dangerouslyAllowAll": false
+}
+```
+
+```json Enterprise / Managed Configuration
+{
+  "version": "1.0",
+  "permissions": {
+    "onlyAllow": [],
+    "deny": ["Bash(rm -rf *)"],
+    "defaultMode": "deny",
+    "dangerouslyAllowAll": false
+  },
+  "settings": {
+    "forceNoHistoryMode": false,
+    "forceSandboxEnabled": true,
+    "forceSandboxMode": "regular"
+  },
+  "required": {
+    "minimumVersion": "1.0.0"
+  },
+  "defaults": {
+    "connectionName": "prod",
+    "profileName": "default",
+    "theme": "dark"
+  },
+  "ui": {
+    "showManagedBanner": true,
+    "bannerText": "Managed by your organization",
+    "hideDangerousOptions": true
+  }
+}
+```
+
+</CodeGroup>
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):[^3]
+
+1. **Managed settings** (cannot be overridden)
+2. **In-session commands** (e.g., `/plan`)
+3. **Command-line arguments**
+4. **Environment variables**
+5. **Local project settings** (`.cortex/settings.local.json`)
+6. **Shared project settings** (`.cortex/settings.json`)
+7. **User settings** (`~/.snowflake/cortex/settings.json`)
+8. **Embedded defaults**
+
+### Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `SNOWFLAKE_HOME` | Overrides the `~/.snowflake` directory location |
+| `CORTEX_AGENT_MODEL` | Overrides model selection |
+| `CORTEX_ENABLE_MEMORY` | Enables the memory tool |
+| `CORTEX_PROJECT_DIR` | Available in hooks; points to project root |
+
+---
+
+## Custom Instructions (AGENTS.md)
+
+`AGENTS.md` is a Markdown file placed at the root of your workspace that provides persistent instructions automatically included in every Cortex Code conversation.[^1][^4] It follows the open [Agent Skills](https://agentskills.io) format for guiding coding agents.[^4]
+
+```markdown AGENTS.md
+# Project: My Data Pipeline
+
+## Build & Test
+- Build: `snow build`
+- Test: `snow test`
+
+## Code Style
+- Use Snowpark Python for all transformations
+- Follow dbt best practices for models
+
+## Architecture
+- models/staging: Raw source transformations
+- models/marts: Business-level aggregations
+```
+
+**Placement:** Place `AGENTS.md` in the root directory of your workspace. Cortex Code automatically discovers and loads it at session start.[^4]
+
+<Note>
+  Cortex Code also supports `.claude/` directory conventions (e.g., `.claude/settings.json`, `.claude/skills/`) in addition to `.cortex/` paths, allowing teams to bring existing rules from other coding agents without rewriting instructions.[^2]
+</Note>
+
+---
+
+## MCP Servers
+
+Cortex Code connects to external tools and data sources through the Model Context Protocol. MCP servers are configured in `~/.snowflake/cortex/mcp.json`.[^2][^3]
+
+### Transport Types
+
+| Type | Description | Use Case |
+|---|---|---|
+| **stdio** | Local process over stdin/stdout | CLI wrappers, local tools |
+| **http** | Web services and APIs | Cloud-based MCP servers |
+| **sse** | Server-Sent Events | Real-time streaming services |
+
+### MCP Configuration
+
+<CodeGroup>
+
+```json mcp.json
+{
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      }
+    },
+    "remote-api": {
+      "type": "http",
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${API_TOKEN}"
+      },
+      "timeout": 30000
+    },
+    "snowflake-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@snowflake-labs/mcp"],
+      "env": {
+        "SNOWFLAKE_ACCOUNT": "${SNOWFLAKE_ACCOUNT}"
+      }
+    }
+  }
+}
+```
+
+```json OAuth Configuration
+{
+  "mcpServers": {
+    "secure-service": {
+      "type": "http",
+      "url": "https://api.example.com/mcp",
+      "oauth": {
+        "client_id": "pre-registered-id",
+        "client_name": "My Client",
+        "redirect_port": 8585,
+        "scope": "openid mcp read write",
+        "authorization_server_url": "https://auth.example.com"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+Environment variables use `${VAR}` syntax (with braces) for expansion in configuration files. OAuth tokens are cached in `~/.snowflake/cortex/mcp_oauth/` with automatic refresh.[^2]
+
+### MCP Tool Naming
+
+MCP tools use the namespace format `mcp__<server-name>__<tool-name>`. For example, a tool `read_file` from the `github` server becomes `mcp__github__read_file`.[^2]
+
+### MCP Permissions
+
+Configure allowed/denied MCP tools in `permissions.json`:[^2]
+
+```json
+{
+  "onlyAllow": ["mcp__github__read_file"],
+  "deny": ["mcp__github__delete_repo"]
+}
+```
+
+### Management Commands
+
+```bash
+cortex mcp list                    # List configured servers
+cortex mcp add <name> <command>   # Add a server
+cortex mcp get <server>           # Get server details
+cortex mcp remove <server>        # Remove a server
+cortex mcp start <server>         # Test connectivity
+/mcp                              # Interactive viewer (in-session)
+```
+
+---
+
+## Skills System
+
+Skills extend Cortex Code with domain-specific knowledge and capabilities by injecting specialized instructions and enabling additional tools.[^2]
+
+### Skill Locations
+
+Skills are resolved in priority order:[^2]
+
+| Scope | Path | Priority |
+|---|---|---|
+| Project | `.cortex/skills/<name>/SKILL.md` | Highest |
+| User | `~/.snowflake/cortex/skills/<name>/SKILL.md` | High |
+| Session | Temporary additions | Medium |
+| Remote | Git-cloned repositories | Low |
+| Bundled | Built-in system skills | Lowest |
+
+### Skill Structure
+
+Each skill is a directory containing a `SKILL.md` file with YAML frontmatter:[^2]
+
+```yaml SKILL.md
+---
+name: my-skill
+description: Brief description of what this skill does
+tools:
+  - Bash
+  - Read
+  - Grep
+---
+
+# When to Use
+- Describe use cases here
+
+# Instructions
+Step-by-step guidance for the agent
+```
+
+**Frontmatter fields:**
+- `name` (required): Unique identifier for the skill
+- `description` (required): Appears in skill listings
+- `tools` (optional): List of tools enabled when this skill is active
+
+### Skill Management
+
+```bash
+/skill list              # List available skills
+/skill add <git-url>    # Add a remote skill from Git
+/skill sync <name>      # Update a remote skill / resolve conflicts
+cortex skill list       # CLI equivalent
+```
+
+<Note>
+  Skills can be composed with file context using the syntax `$skill-name` in prompts. For example: `$code-review Review @src/auth.py following $security-guidelines`.[^2]
+</Note>
+
+---
+
+## Subagents
+
+Subagents are autonomous, specialized AI agents that handle specific tasks independently, enabling parallel execution and focused expertise.[^2]
+
+### Built-in Agent Types
+
+| Type | Purpose |
+|---|---|
+| `general-purpose` | All-purpose agent with full tool access |
+| `explore` | Fast codebase exploration (supports `quick`, `medium`, `very thorough` intensity) |
+| `plan` | Designs implementation strategies and architectural trade-offs |
+| `feedback` | Structured feedback collection |
+
+### Custom Subagent Definition
+
+Create Markdown files in `.cortex/agents/` or `~/.snowflake/cortex/agents/`:[^2]
+
+```yaml test-runner.md
+---
+name: test-runner
+description: Runs tests and reports results
+tools:
+  - Bash
+  - Read
+  - Grep
+model: claude-sonnet-4-5
+---
+
+# System Prompt
+You are a specialized agent for running and analyzing test suites.
+
+## Your Responsibilities
+1. Execute test commands
+2. Parse and summarize results
+3. Identify flaky tests
+```
+
+**Configuration options:**
+- `model`: Specific model (e.g., `claude-sonnet-4-5`) or `auto` for cost-optimized selection
+- `tools`: `"*"` for all tools, specific names, or regex patterns like `Edit|Write`
+
+### Agent Execution
+
+- Up to 50 concurrent background agents[^2]
+- Worktree isolation creates `agent/<agentId>` git branches for safe parallel execution[^2]
+- Agent swarms enable launching multiple agents in parallel with aggregated results[^2]
+
+### Agent Management
+
+```bash
+/agents                    # Interactive agent viewer (Ctrl-B)
+kill agent <id>           # Stop a specific agent
+Resume agent <id> ...     # Resume a killed agent
+```
+
+---
+
+## Hooks System
+
+Hooks are scripts that intercept and customize Cortex Code's behavior at key lifecycle points.[^2]
+
+### Hook Events
+
+| Event | When It Fires | Can Block? |
+|---|---|---|
+| `SessionStart` | Session begins | No |
+| `SessionEnd` | Session terminates | No |
+| `UserPromptSubmit` | User submits a prompt | No |
+| `PreToolUse` | Before tool execution | Yes (exit 2) |
+| `PostToolUse` | After tool execution | No |
+| `PostToolUseFailure` | After tool call fails | No |
+| `PermissionRequest` | Permission dialog appears | Yes (exit 2) |
+| `PreCompact` | Before context compaction | No |
+| `SubagentStart` | Subagent is spawned | No |
+| `SubagentStop` | Subagent finishes | No |
+| `Stop` | Agent finishes responding | No |
+| `Notification` | System notification | No |
+| `TaskCompleted` | Task marked completed | No |
+| `ConfigChange` | Config file changes during session | No |
+| `InstructionsLoaded` | AGENTS.md or rules file loaded | No |
+| `WorktreeCreate` | Git worktree created | No |
+| `WorktreeRemove` | Git worktree removed | No |
+| `TeammateIdle` | Teammate becomes idle | No |
+
+### Hook Configuration
+
+Hooks are defined in settings files at any scope, or globally in `~/.snowflake/cortex/hooks.json`:[^2]
+
+<CodeGroup>
+
+```json Command Hook
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .cortex/hooks/validate-bash.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+```json Prompt Hook
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Is this edit safe? $ARGUMENTS",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+```json Remote Hook
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "source": {
+              "source": "github:org/hooks-repo/scripts/validate.sh",
+              "ref": "main"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+</CodeGroup>
+
+### Hook Types
+
+- **Command hooks**: Run shell commands or scripts
+- **Prompt hooks**: Evaluated as natural language prompts by the LLM
+
+### Tool Matchers
+
+| Pattern | Matches |
+|---|---|
+| `*` | All tools |
+| `Bash` | Exact tool name |
+| `Edit\|Write` | Multiple tools (OR logic) |
+| `mcp__.*` | All MCP tools (regex) |
+| `Notebook.*` | Pattern matching |
+
+### Exit Codes
+
+| Exit Code | Effect |
+|---|---|
+| `0` | Action proceeds normally |
+| `2` | Action is **blocked** (stderr sent to model as feedback) |
+| `1` | Non-blocking error; action still proceeds |
+
+### Hook Script I/O
+
+Hooks receive JSON on stdin containing `session_id`, `tool_name`, `tool_input`, `permission_mode`, and `hook_event_name`. They can return structured JSON on stdout:[^2]
+
+```json
+{
+  "decision": "allow",
+  "systemMessage": "Validated successfully",
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "updatedInput": { "command": "modified-command" },
+    "additionalContext": "Post-execution note",
+    "permissionDecision": "allow"
+  }
+}
+```
+
+### Environment Variables in Hooks
+
+| Variable | Purpose |
+|---|---|
+| `CORTEX_PROJECT_DIR` | Project root directory |
+| `CORTEX_CODE_REMOTE` | `true` for web/remote sessions |
+| `CORTEX_ENV_FILE` | Path for persisting variables in SessionStart hooks |
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for Cortex Code.
+
+### Install Paths
+
+<Tabs>
+  <Tab title="Project Scope">
+    - **Skills**: `.cortex/skills/<name>/SKILL.md`
+    - **Agents**: `.cortex/agents/<name>.md`
+    - **Settings**: `.cortex/settings.json`
+    - **Local settings**: `.cortex/settings.local.json`
+    - **Instructions**: `AGENTS.md` (project root)
+  </Tab>
+  <Tab title="Global Scope">
+    - **Skills**: `~/.snowflake/cortex/skills/<name>/SKILL.md`
+    - **Agents**: `~/.snowflake/cortex/agents/<name>.md`
+    - **Settings**: `~/.snowflake/cortex/settings.json`
+    - **Permissions**: `~/.snowflake/cortex/permissions.json`
+    - **MCP config**: `~/.snowflake/cortex/mcp.json`
+    - **Hooks config**: `~/.snowflake/cortex/hooks.json`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+<Tabs>
+  <Tab title="CLI Command">
+    ```bash
+    # Add a stdio server
+    cortex mcp add my-server npx -y @scope/mcp-server-package
+
+    # Add with environment variables
+    cortex mcp add my-server --env API_KEY=value npx -y @scope/mcp-server-package
+    ```
+  </Tab>
+  <Tab title="Direct JSON (mcp.json)">
+    Merge into `~/.snowflake/cortex/mcp.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "type": "stdio",
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "${API_KEY}"
+          }
+        }
+      }
+    }
+    ```
+
+    Environment variables use `${VAR}` syntax.
+  </Tab>
+</Tabs>
+
+### Installing Skills
+
+To install a skill, create a directory under the appropriate skills path and write a `SKILL.md` file:
+
+<Steps>
+  <Step title="Create the skill directory">
+    Create `.cortex/skills/<skill-name>/` (project) or `~/.snowflake/cortex/skills/<skill-name>/` (global).
+  </Step>
+  <Step title="Write the SKILL.md file">
+    Write a `SKILL.md` with YAML frontmatter containing `name`, `description`, and optionally `tools`.
+  </Step>
+  <Step title="Add supporting files (optional)">
+    Include examples, templates, or reference files alongside `SKILL.md` in the skill directory.
+  </Step>
+</Steps>
+
+### Installing Hooks
+
+Merge hook definitions into the appropriate settings file (`.cortex/settings.json` for project scope, `~/.snowflake/cortex/hooks.json` for global scope). Hook scripts should be placed in `.cortex/hooks/` or `~/.snowflake/cortex/hooks/`.
+
+### Config File Format
+
+Cortex Code uses standard JSON for all configuration files. The installer must:
+
+1. Parse the existing JSON file (if it exists)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back, preserving existing entries
+
+<Warning>
+  The `permissions.json` `deny` list takes precedence over all other permission settings. If a tool is denied at any level, no other level can override that denial.[^3]
+</Warning>
+
+### Non-Interactive Execution
+
+```bash
+# Run a one-shot task with the Cortex Code CLI
+cortex -p "Run the test suite and report results"
+```
+
+---
+
+## Footnotes
+
+[^1]: https://www.snowflake.com/en/product/features/cortex-code/
+[^2]: https://docs.snowflake.com/en/user-guide/cortex-code/extensibility
+[^3]: https://docs.snowflake.com/en/user-guide/cortex-code/settings
+[^4]: https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code-snowsight
