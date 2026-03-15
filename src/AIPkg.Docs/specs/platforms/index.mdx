@@ -16,8 +16,9 @@ These platforms have detailed spec files documenting their extensibility surface
 | Moniker | Platform | Spec | MCP Support | Custom Instructions | Custom Agents/Skills |
 |---------|----------|------|:-----------:|:-------------------:|:--------------------:|
 | `claude-code` | Claude Code | [Spec](platforms/claude-code) | Native | CLAUDE.md | Skills (SKILL.md) |
-| `claude-desktop` | Claude Desktop | [Spec](platforms/claude-desktop) | Native | — | — |
+| `claude-desktop` | Claude Desktop + Cowork | [Spec](platforms/claude-desktop) | Native | claude.md (Cowork) | Plugins, Skills (Cowork) |
 | `copilot` | GitHub Copilot | [Spec](platforms/github-copilot) | Native | copilot-instructions.md | Agents, Skills |
+| `copilot-cli` | GitHub Copilot CLI | [Spec](platforms/copilot-cli) | Native | AGENTS.md, copilot-instructions.md | Skills, Agents, Plugins |
 | `cursor` | Cursor | [Spec](platforms/cursor) | Native | .cursor/rules/*.mdc | Custom Modes |
 | `windsurf` | Windsurf | [Spec](platforms/windsurf) | Native | .windsurf/rules/*.md | — |
 | `continue` | Continue | [Spec](platforms/continue) | Native | .continue/rules/*.md, .continuerules | Prompts |
@@ -32,6 +33,7 @@ These platforms have detailed spec files documenting their extensibility surface
 | `codex` | Codex CLI | [Spec](platforms/codex-cli) | — | AGENTS.md | — |
 | `amazon-q` | Amazon Q Developer | [Spec](platforms/amazon-q) | — | — | — |
 | `jetbrains-ai` | JetBrains AI | [Spec](platforms/jetbrains-ai) | Native | .junie/guidelines/*.md | — |
+| `jetbrains-air` | JetBrains Air | [Spec](platforms/jetbrains-air) | Native | Agent-specific (CLAUDE.md, etc.) | Multi-agent (ACP) |
 | `sourcegraph-cody` | Sourcegraph Cody | [Spec](platforms/sourcegraph-cody) | — | — | — |
 | `chatgpt` | ChatGPT | [Spec](platforms/chatgpt) | Native | Custom GPTs | Actions |
 | `gemini-cli` | Gemini CLI | [Spec](platforms/gemini-cli) | Native | GEMINI.md | Skills, Subagents, Extensions |
@@ -143,13 +145,11 @@ The [Metadata Schema](../08-metadata-schema) defines nine package capabilities t
 
 ## Platforms Needing Specs
 
-The following platforms have been identified but do not yet have spec files:
+All previously identified platforms now have spec files or have been documented within existing specs:
 
-| Platform | Type | Notes |
-|----------|------|-------|
-| GitHub Copilot CLI | Terminal agent | Standalone `copilot` command (GA Feb 2026), distinct from VS Code Copilot. Has MCP, AGENTS.md, SKILL.md, hooks, plugins. |
-| JetBrains Air | Agentic IDE | New IDE (preview March 2026), built on Fleet codebase. Supports multiple agents, MCP, custom slash commands. |
-| Claude Cowork | Claude Desktop mode | Agentic mode within Claude Desktop (launched Jan 2026). Shares MCP config with Claude Desktop but adds plugins, sub-agents, scheduled tasks, folder-level instructions, and SKILL.md support. Should be documented within the `claude-desktop` spec. |
+- **GitHub Copilot CLI** — Now has its own spec at [copilot-cli](platforms/copilot-cli)
+- **JetBrains Air** — Now has its own spec at [jetbrains-air](platforms/jetbrains-air)
+- **Claude Cowork** — Documented within the [Claude Desktop](platforms/claude-desktop) spec (Cowork is a mode within Claude Desktop, not a separate product)
 
 ---
 
