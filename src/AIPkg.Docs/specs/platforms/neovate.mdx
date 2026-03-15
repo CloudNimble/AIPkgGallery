@@ -1,0 +1,290 @@
+---
+title: 'Neovate'
+description: 'Platform specification for Neovate Code, an open-source AI coding agent'
+icon: 'code'
+---
+
+[Neovate Code](https://neovateai.dev/en) is an open-source terminal-based AI coding agent by **NeovateAI**, designed for multi-model collaboration with built-in AI programming best practices[^1]. It supports extensibility through AGENTS.md instruction files, MCP server integration (stdio, SSE, and HTTP transports), a plugin system with lifecycle hooks, skills (`SKILL.md` workflow definitions), custom slash commands, subagents, and layered JSON configuration[^2].
+
+---
+
+## Configuration
+
+### File Locations
+
+Neovate uses a layered configuration system with global and project-level JSON settings files[^3].
+
+| File | Path | Purpose |
+|---|---|---|
+| Project config | `<project>/.neovate/config.json` | Project-specific settings |
+| Project config (local) | `<project>/.neovate/config.local.json` | Personal overrides (not committed) |
+| Global config | `~/.neovate/config.json` | User-wide settings |
+| Project instructions | `<project>/AGENTS.md` | Project-level custom instructions |
+| Global instructions | `~/.neovate/AGENTS.md` | User-wide custom instructions |
+| MCP config | `<project>/.mcp.json` | MCP server definitions (project root) |
+| Project commands | `<project>/.neovate/commands/` | Project-specific slash commands |
+| Global commands | `~/.neovate/commands/` | User-wide slash commands |
+| Project skills | `<project>/.neovate/skills/` | Project-specific skills |
+| Global skills | `~/.neovate/skills/` | User-wide skills |
+| Project output styles | `<project>/.neovate/output-styles/` | Project-specific output styles |
+| Global output styles | `~/.neovate/output-styles/` | User-wide output styles |
+
+<Note>
+  Neovate maintains backward compatibility with the `.claude` directory layout. Legacy `.claude/commands/` and `~/.claude/commands/` are recognized for slash commands, and `CLAUDE.md` is supported as an alias for `AGENTS.md`[^4][^5].
+</Note>
+
+### Settings Schema
+
+Configuration files reference the schema at `https://neovateai.dev/config.json`[^3]. Key settings include:
+
+| Key | Description |
+|---|---|
+| `model` | Primary AI model (format: `provider_id/model_id`) |
+| `planModel` | Model used for planning tasks |
+| `smallModel` | Lightweight model for simple tasks |
+| `approvalMode` | Tool approval policy: `default`, `autoEdit`, or `yolo` |
+| `autoCompact` | Automatic conversation history compression |
+| `mcpServers` | MCP server configurations (stdio, SSE, or HTTP) |
+| `skills` | Additional skill file paths |
+| `tools` | Enable/disable specific tools |
+| `plugins` | Third-party plugin list |
+| `systemPrompt` | Custom system instructions |
+| `outputStyle` | Response presentation style |
+
+### CLI Configuration Management
+
+```bash
+neovate config ls                    # List all settings
+neovate config get <key>             # Get a specific setting
+neovate config set <key> <value>     # Set a setting (project scope)
+neovate config set -g <key> <value>  # Set a setting (global scope)
+neovate config rm <key>              # Remove a setting
+```
+
+---
+
+## Custom Instructions
+
+### AGENTS.md
+
+Neovate supports `AGENTS.md` for providing project-level guidance to the agent[^4]. For compatibility, `CLAUDE.md` is also supported as an alias[^4].
+
+| Scope | Path |
+|---|---|
+| Project | `<project>/AGENTS.md` |
+| Global | `~/.neovate/AGENTS.md` |
+
+Both files are merged before sending instructions to the language model[^4].
+
+### Memory Mode
+
+Prefixing a message with `#` activates memory mode, which persists information directly to the project's `AGENTS.md` file[^2][^4]:
+
+```
+# Always use pnpm instead of npm
+# Tests must pass before committing
+```
+
+### Project Initialization
+
+The `/init` command generates a structured `AGENTS.md` using progressive disclosure principles[^4]:
+
+- Root file stays minimal (under 60 lines) with high-level guidance
+- Detailed content goes into separate `docs/agent/*.md` files (e.g., `development_commands.md`, `architecture.md`, `testing.md`, `conventions.md`)
+
+<Note>
+  The project `AGENTS.md` file should be committed to the repository for team consistency[^4].
+</Note>
+
+---
+
+## MCP Integration
+
+Neovate connects to external tools through Model Context Protocol servers, supporting stdio, SSE, and HTTP transports[^6].
+
+### CLI Management
+
+```bash
+# Add servers
+neovate mcp add <name> -- <command> [args...]               # stdio
+neovate mcp add --transport sse <name> <url>                 # SSE
+neovate mcp add --transport http <name> <url>                # HTTP
+
+# Add with environment variables
+neovate mcp add myserver --env FOO=bar -- npx -y foo
+
+# Add with authentication headers
+neovate mcp add --transport sse myserver https://a.com/mcp --header "Authorization: Bearer 123"
+
+# Manage servers
+neovate mcp ls                    # List configured servers
+neovate mcp get <name>            # Inspect a server
+neovate mcp rm <name>             # Remove a server
+neovate mcp enable <name>         # Enable a server
+neovate mcp disable <name>        # Disable a server
+```
+
+By default, all MCP operations apply to project scope. Use the `-g` flag for global scope[^6].
+
+The `/mcp` slash command provides an interactive management interface within a session[^6].
+
+---
+
+## Skills
+
+Neovate supports skills as on-demand instruction files for specialized tasks. Skills are automatically registered as slash commands[^5][^7].
+
+### Skill Locations
+
+| Scope | Path |
+|---|---|
+| Project | `<project>/.neovate/skills/<skill-name>/SKILL.md` |
+| Global | `~/.neovate/skills/<skill-name>/SKILL.md` |
+| Plugin | Provided via the plugin `skill()` hook |
+
+Plugin-provided skills have the lowest priority and can be overridden by project-level skills[^7].
+
+### Installing Skills
+
+```bash
+# Install skills via the add-skill CLI
+npx add-skill vercel-labs/agent-skills -a neovate
+
+# Install to global scope
+npx add-skill vercel-labs/agent-skills -a neovate -g
+
+# Install specific skills only
+npx add-skill vercel-labs/agent-skills -a neovate -s pdf -s xlsx
+```
+
+---
+
+## Plugin System
+
+Neovate provides a TypeScript plugin system for building custom code agents with lifecycle hooks[^7].
+
+### Available Plugin Hooks
+
+| Hook | Purpose |
+|---|---|
+| `config` | Set default models and configuration |
+| `provider` | Register custom model providers with API endpoints |
+| `systemPrompt` | Customize the system prompt |
+| `tool` | Add custom tools |
+| `slashCommand` | Add custom slash commands |
+| `context` | Inject dynamic context into conversations |
+| `skill` | Provide `SKILL.md` file paths |
+| `agent` | Define autonomous agent configurations |
+
+### Example Plugin
+
+```typescript
+import type { Plugin } from '@neovate/code';
+
+const myPlugin: Plugin = {
+  name: 'my-plugin',
+  config({ config, argvConfig }) {
+    return {
+      model: argvConfig.model || config.model || 'myProvider/claude-opus-4-5',
+    };
+  },
+  context({ userPrompt }) {
+    const ctx: Record<string, string> = {};
+    if (userPrompt?.toLowerCase().includes('api')) {
+      ctx['API Guidelines'] = 'Follow REST conventions...';
+    }
+    return ctx;
+  },
+  skill() {
+    return [
+      path.join(__dirname, 'skills/code-review/SKILL.md'),
+    ];
+  },
+};
+```
+
+Plugins are loaded via the `runNeovate()` SDK function, which returns a promise with an optional `shutdown` callback for graceful termination in server mode[^7].
+
+<Note>
+  Companies including Kuaishou and Ant Group have used the plugin system to build internal code agents with customized models and compliance rules[^7].
+</Note>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Neovate platform.
+
+### Configuration File Paths
+
+| Purpose | Path |
+|---|---|
+| Project config | `<project>/.neovate/config.json` |
+| Local overrides | `<project>/.neovate/config.local.json` |
+| Global config | `~/.neovate/config.json` |
+| Project instructions | `<project>/AGENTS.md` |
+| Global instructions | `~/.neovate/AGENTS.md` |
+| MCP config | `<project>/.mcp.json` |
+| Project skills | `<project>/.neovate/skills/` |
+| Global skills | `~/.neovate/skills/` |
+| Project commands | `<project>/.neovate/commands/` |
+| Global commands | `~/.neovate/commands/` |
+
+### Installing MCP Server Extensions
+
+Use the CLI to register an MCP server:
+
+```bash
+neovate mcp add package-server -- npx -y @scope/mcp-server-package
+```
+
+MCP servers can also be configured via the `mcpServers` key in `config.json`[^3].
+
+**Key considerations:**
+
+- Use `-g` flag for global scope; project scope is the default
+- Neovate supports stdio, SSE (`--transport sse`), and HTTP (`--transport http`) transports
+- The CLI is the recommended approach for adding servers; direct JSON editing of `config.json` also works
+
+### Installing Skills
+
+To install a skill, write a `SKILL.md` file into the appropriate scope directory:
+
+- **Project scope:** `<project>/.neovate/skills/<skill-name>/SKILL.md`
+- **User scope:** `~/.neovate/skills/<skill-name>/SKILL.md`
+
+Use `npx add-skill` for automated installation from skill repositories[^8].
+
+### Installing Custom Instructions
+
+Write an `AGENTS.md` file to the project root. If one already exists, the installer should append to it. Neovate also reads `CLAUDE.md` as a fallback alias[^4].
+
+### Installing Slash Commands
+
+Write a Markdown file to the commands directory:
+
+- **Project scope:** `<project>/.neovate/commands/<command-name>.md`
+- **Global scope:** `~/.neovate/commands/<command-name>.md`
+
+Command files support optional YAML frontmatter with `name`, `description`, and `model` fields. Subdirectories are supported for organization[^5].
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows, use headless mode[^1]:
+
+```bash
+neovate -q "Run the test suite and report results"
+```
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/neovateai/neovate-code
+[^2]: https://neovateai.dev/en/docs/features
+[^3]: https://neovateai.dev/en/docs/settings
+[^4]: https://neovateai.dev/en/docs/rules
+[^5]: https://neovateai.dev/en/docs/slash-commands
+[^6]: https://neovateai.dev/en/docs/mcp
+[^7]: https://neovateai.dev/en/docs/create-your-own-code-agent
+[^8]: https://github.com/vercel-labs/skills
