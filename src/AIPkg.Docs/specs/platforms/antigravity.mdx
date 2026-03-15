@@ -1,0 +1,331 @@
+---
+title: 'Antigravity'
+description: 'Platform specification for Antigravity, an AI coding agent'
+icon: 'rocket'
+---
+
+## Overview
+
+[Antigravity](https://antigravity.google/) is an agent-first IDE by **Google**, built on a modified VS Code fork and powered by Gemini models.[^1] Extensibility is via MCP servers, **Skills** (`SKILL.md` on-demand capability packages), **Rules** (`GEMINI.md` and `.md` rule files), **Workflows** (saved prompt templates), and a **Browser Sub-Agent** for web interaction.
+
+---
+
+## Configuration
+
+### File Locations
+
+Antigravity uses a hierarchical configuration system with JSON settings files, Markdown instruction files, and a shared configuration directory at `~/.gemini/`.[^2][^3]
+
+| File | Path | Purpose |
+|---|---|---|
+| Global instructions | `~/.gemini/GEMINI.md` | Global rules applied to all projects[^3][^4] |
+| Global skills | `~/.gemini/antigravity/skills/<name>/SKILL.md` | Personal skills available across all projects[^5][^6] |
+| Global workflows | `~/.gemini/antigravity/global_workflows/<name>.md` | Saved prompts available across all projects[^4] |
+| MCP config | `~/.gemini/antigravity/mcp_config.json` | MCP server definitions[^7][^8] |
+| Browser allowlist | `~/.gemini/antigravity/browserAllowlist.txt` | Allowed domains for the browser sub-agent[^3] |
+| Workspace rules | `<project>/.agent/rules/*.md` | Project-specific agent rules[^4][^5] |
+| Workspace workflows | `<project>/.agent/workflows/*.md` | Project-specific saved prompts[^4][^5] |
+| Workspace skills | `<project>/.agent/skills/<name>/SKILL.md` | Project-specific skills[^5][^6] |
+
+<Note>
+  Antigravity and Gemini CLI share the same global instructions file at `~/.gemini/GEMINI.md`. When using both tools on the same system, global rules written for one will also affect the other.[^3]
+</Note>
+
+### Terminal Execution Policies
+
+Antigravity controls agent autonomy through terminal command execution policies configured in the IDE settings:[^9]
+
+| Policy | Behavior |
+|---|---|
+| **Off** | Never auto-execute commands (except those on the Allow list) |
+| **Auto** | Agent decides whether to auto-execute or ask for permission |
+| **Turbo** | Most permissive; relies on a Deny list as a safeguard |
+
+Allow lists and Deny lists provide fine-grained control over which commands the agent may run without user approval.[^9]
+
+---
+
+## Custom Instructions (Rules)
+
+Rules are Markdown files that provide persistent behavioral guidance to the Antigravity agent. They function as system-level instructions that shape agent behavior throughout task execution.[^4][^5]
+
+### Rule Scopes
+
+<Tabs>
+  <Tab title="Global Rules">
+    Global rules are stored in `~/.gemini/GEMINI.md` and apply to all projects. Create or edit this file via the `...` menu > Customizations > Rules > "+ Global" in the Antigravity UI.[^4]
+
+    ```markdown GEMINI.md
+    # Global Rules
+
+    - Always use TypeScript strict mode
+    - Prefer functional patterns over classes
+    - Include JSDoc comments on all public APIs
+    ```
+  </Tab>
+  <Tab title="Workspace Rules">
+    Workspace rules are stored as `.md` files in `<project>/.agent/rules/` and apply only to the current project. These are ideal for enforcing team standards or project-specific architectural patterns.[^4][^5]
+
+    ```markdown .agent/rules/code-style.md
+    - Follow PEP 8 style guide
+    - All methods must have docstrings
+    - Use type hints for all function signatures
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  Rules are always loaded into the agent context. For specialized knowledge that should only appear when relevant, use Skills instead of Rules to avoid context bloat.[^6]
+</Warning>
+
+---
+
+## MCP Servers
+
+Antigravity connects to external tools and data sources through the Model Context Protocol. MCP server configuration is stored in a JSON file at `~/.gemini/antigravity/mcp_config.json`.[^7][^8]
+
+### Configuration Format
+
+The configuration uses a top-level `mcpServers` object where each key is a server name:[^7][^8][^10]
+
+<CodeGroup>
+
+```json Stdio Transport
+{
+  "mcpServers": {
+    "firebase": {
+      "command": "npx",
+      "args": ["-y", "firebase-tools@latest", "mcp"]
+    }
+  }
+}
+```
+
+```json Stdio with Environment Variables
+{
+  "mcpServers": {
+    "vercel-cli": {
+      "command": "npx",
+      "args": ["-y", "vercel-mcp-server"],
+      "env": {
+        "VERCEL_TOKEN": "your_api_token_here"
+      }
+    }
+  }
+}
+```
+
+```json Remote Server (Streamable HTTP)
+{
+  "mcpServers": {
+    "google-developer-knowledge": {
+      "serverUrl": "https://developerknowledge.googleapis.com/mcp"
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Configuration Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `command` | string | Executable to run for stdio transport (e.g., `npx`, `node`, `uvx`)[^8][^10] |
+| `args` | string[] | Arguments passed to the command[^8][^10] |
+| `env` | object | Environment variables injected into the server process[^8][^10] |
+| `serverUrl` | string | URL for remote/streamable HTTP MCP servers[^10] |
+
+### Managing MCP Servers
+
+<Steps>
+  <Step title="Open MCP store">
+    Click the `...` menu in the Agent Panel and select "MCP Servers".[^8]
+  </Step>
+  <Step title="Edit configuration">
+    Click "Manage MCP Servers" then "View raw config" to open `mcp_config.json` for editing.[^8]
+  </Step>
+  <Step title="Save and refresh">
+    After saving the file, return to "Manage MCP Servers" and click refresh. The server will appear with its available tools.[^8]
+  </Step>
+</Steps>
+
+---
+
+## Skills
+
+Skills are modular, on-demand capability extensions that use Progressive Disclosure -- they remain dormant until the agent determines they are semantically relevant to the user's current request.[^6][^5] Unlike Rules (which are always loaded), a Skill is only injected into context when activated.
+
+### Skill Locations
+
+| Scope | Path |
+|---|---|
+| Global | `~/.gemini/antigravity/skills/<skill-name>/SKILL.md`[^5][^6] |
+| Workspace | `<project>/.agent/skills/<skill-name>/SKILL.md`[^5][^6] |
+
+### Skill Structure
+
+Each skill is a directory containing a `SKILL.md` file with YAML frontmatter and Markdown instructions:[^6]
+
+```markdown SKILL.md
+---
+name: conventional-commits
+description: Enforce conventional commit message format for all git commits
+---
+
+When committing code changes:
+
+1. Use the format: `<type>(<scope>): <description>`
+2. Valid types: feat, fix, docs, style, refactor, test, chore
+3. Keep the subject line under 72 characters
+4. Include a body for non-trivial changes
+```
+
+A skill directory can optionally contain supporting assets:[^6]
+
+```
+skill-name/
+├── SKILL.md          # Required: definition and instructions
+├── scripts/          # Optional: Python, Bash, or Node scripts
+├── references/       # Optional: documentation or templates
+└── assets/           # Optional: static files
+```
+
+### Skills vs. Rules vs. Workflows
+
+| Mechanism | Loaded | Triggered by | Use case |
+|---|---|---|---|
+| **Rules** | Always | Automatic | Coding standards, architectural constraints[^5] |
+| **Skills** | On demand | Agent (semantic matching)[^6] | Specialized expertise, procedural tasks |
+| **Workflows** | On demand | User (`/` command)[^5] | Saved prompts, optional or one-off tasks |
+
+---
+
+## Workflows
+
+Workflows are saved prompt templates stored as Markdown files, triggered on demand via the `/` prefix in the chat interface.[^4][^5]
+
+### Workflow Locations
+
+| Scope | Path |
+|---|---|
+| Global | `~/.gemini/antigravity/global_workflows/<name>.md`[^4] |
+| Workspace | `<project>/.agent/workflows/<name>.md`[^4][^5] |
+
+Workflows are invoked by typing `/` followed by the workflow name in the Agent chat. They are suited for repeatable tasks like generating unit tests, creating documentation, or running specific code generation patterns.[^4]
+
+---
+
+## Agents and Sub-Agents
+
+Antigravity uses a multi-agent architecture where the main agent can delegate to specialized sub-agents.[^11]
+
+### Browser Sub-Agent
+
+When the agent needs to interact with a web browser, it invokes a dedicated Browser Sub-Agent. This sub-agent runs a model specialized for page interaction (separate from the main agent model) and has access to tools for clicking, scrolling, typing, reading console logs, DOM capture, screenshots, and video recording.[^11]
+
+The Browser Sub-Agent's allowed domains can be configured via `~/.gemini/antigravity/browserAllowlist.txt`.[^3]
+
+<Note>
+  Antigravity supports spawning multiple Agent conversations in parallel, and users can define multi-agent architectures with specialized sub-agents for tasks like research (browser access) and implementation (code editor access).[^11][^12]
+</Note>
+
+---
+
+## Hooks / Lifecycle Events
+
+<Warning>
+  Antigravity does not currently support native lifecycle hooks. This is a frequently requested feature in the community, with active discussion on the Google AI Developers Forum.[^13][^14] Users looking for hook-like behavior should consider using Rules or Workflows as workarounds, or integrating with external tooling.
+</Warning>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Antigravity platform.
+
+### Configuration File Paths
+
+- **Global instructions**: `~/.gemini/GEMINI.md`
+- **Global skills**: `~/.gemini/antigravity/skills/<name>/SKILL.md`
+- **Global workflows**: `~/.gemini/antigravity/global_workflows/<name>.md`
+- **MCP config**: `~/.gemini/antigravity/mcp_config.json`
+- **Workspace rules**: `<project>/.agent/rules/<name>.md`
+- **Workspace workflows**: `<project>/.agent/workflows/<name>.md`
+- **Workspace skills**: `<project>/.agent/skills/<name>/SKILL.md`
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge an entry into `~/.gemini/antigravity/mcp_config.json` under the `mcpServers` key:
+
+```json
+{
+  "mcpServers": {
+    "package-server": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The config file uses standard JSON with a top-level `mcpServers` object[^8][^10]
+- Merge carefully; do not overwrite existing server entries
+- After modifying the file, the user must refresh MCP servers in the Antigravity UI for changes to take effect[^8]
+- For remote servers, use `serverUrl` instead of `command`/`args`[^10]
+
+### Installing Skills
+
+To install a skill, create a directory with a `SKILL.md` file at one of:
+
+- **Global scope**: `~/.gemini/antigravity/skills/<skill-name>/SKILL.md`
+- **Workspace scope**: `<project>/.agent/skills/<skill-name>/SKILL.md`
+
+Skills are auto-discovered by the agent at runtime. No additional registration is needed.[^6]
+
+### Installing Project Instructions
+
+To install project-level rules, write `.md` files to `<project>/.agent/rules/`. Each rule file should contain Markdown-formatted instructions.
+
+To install global instructions, append to `~/.gemini/GEMINI.md`. If the file already exists, the installer should append rather than overwrite, as Antigravity concatenates all discovered rule content.[^4]
+
+### Skill Install Paths (Vercel Skills)
+
+The Vercel Skills project uses the following install paths for Antigravity:
+
+- **Project path**: `.agent/skills/`
+- **Global path**: `~/.gemini/antigravity/skills/`
+
+### Config File Format
+
+Antigravity uses standard JSON for `mcp_config.json` and Markdown for all instruction/rule/workflow/skill files. The installer must:
+
+1. Parse the existing JSON file (if it exists)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back, preserving existing entries
+
+For Markdown-based files (rules, skills, workflows), the installer should create new files rather than modifying existing ones, as each file represents a discrete unit of configuration.
+
+---
+
+## Footnotes
+
+[^1]: https://developers.googleblog.com/build-with-google-antigravity-our-new-agentic-development-platform/
+[^2]: https://github.com/google-gemini/gemini-cli/issues/16058
+[^3]: https://codelabs.developers.google.com/getting-started-google-antigravity
+[^4]: https://atamel.dev/posts/2025/11-25_customize_antigravity_rules_workflows/
+[^5]: https://codelabs.developers.google.com/getting-started-with-antigravity-skills
+[^6]: https://medium.com/google-cloud/tutorial-getting-started-with-antigravity-skills-864041811e0d
+[^7]: https://cloud.google.com/blog/products/data-analytics/connect-google-antigravity-ide-to-googles-data-cloud-services
+[^8]: https://antigravity.codes/blog/antigravity-mcp-tutorial
+[^9]: https://www.codecademy.com/article/how-to-set-up-and-use-google-antigravity
+[^10]: https://firebase.google.com/docs/ai-assistance/mcp-server
+[^11]: https://antigravity.google/docs/browser-subagent
+[^12]: https://discuss.ai.google.dev/t/antigravity-sub-agents/114381
+[^13]: https://discuss.ai.google.dev/t/hooks-in-antigravity/120458
+[^14]: https://discuss.ai.google.dev/t/hook-support-for-context-mode/129626
