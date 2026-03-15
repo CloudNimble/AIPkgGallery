@@ -1,0 +1,549 @@
+---
+title: Tabnine
+description: Platform specification for Tabnine, the AI code assistant by Tabnine (formerly Codota)
+icon: code
+---
+
+## Overview
+
+[Tabnine](https://www.tabnine.com/) is a privacy-focused AI code assistant developed by Tabnine (formerly Codota). It provides code completions, AI chat, and autonomous coding agents across VS Code, JetBrains IDEs, Eclipse, and Visual Studio 2022/2026 [^1]. Tabnine supports extensibility through MCP servers, custom guidelines, custom commands, and a standalone CLI agent. It was named a Visionary in the September 2025 Gartner Magic Quadrant for AI Code Assistants [^2].
+
+Key extensibility points:
+
+| Feature | Support |
+|---|---|
+| MCP Servers | Yes, via `.tabnine/mcp_servers.json` [^3] |
+| Custom Instructions (Guidelines) | Yes, via `.tabnine/guidelines/*.md` [^4] |
+| Custom Commands | Yes, via `.tabnine/agent/commands/` [^5] |
+| CLI Agent | Yes, `tabnine` CLI [^6] |
+| Model Flexibility | Yes, switchable LLMs including GPT-4o, Claude, Gemini, Llama, and private endpoints [^2] |
+
+---
+
+## Configuration
+
+### File Locations
+
+<Tabs>
+  <Tab title="VS Code">
+    | File / Location | Purpose |
+    |---|---|
+    | VS Code Settings (`settings.json`) | Extension settings such as `tabnine.disableLineRegex`, `tabnine.disableFileRegex`, log level, proxy [^7] |
+    | `<project>/.tabnine/guidelines/*.md` | Project-level custom guidelines for the AI agent [^4] |
+    | `<project>/.tabnine/mcp_servers.json` | Project-level MCP server configuration [^3] |
+    | `<project>/.tabnine/agent/commands/` | Project-level custom commands [^5] |
+    | `<project>/TABNINE.md` | Persistent hierarchical context file for the AI model [^5] |
+    | `~/.tabnine/guidelines/*.md` | Global custom guidelines [^4] |
+    | `~/.tabnine/mcp_servers.json` | Global MCP server configuration [^3] |
+    | `~/.tabnine/agent/commands/` | Global custom commands [^5] |
+    | `~/.tabnine/agent/system.md` | Override the built-in system prompt [^5] |
+
+    **Extension IDs:**
+    - `TabNine.tabnine-vscode` (legacy, not onboarding new users) [^8]
+    - `TabNine.tabnine-vscode-self-hosted-updater` (Enterprise) [^9]
+  </Tab>
+  <Tab title="JetBrains">
+    | File / Location | Purpose |
+    |---|---|
+    | `<project>/.tabnine/guidelines/*.md` | Project-level custom guidelines [^4] |
+    | `<project>/.tabnine/mcp_servers.json` | Project-level MCP server configuration [^3] |
+    | `<project>/.tabnine/agent/commands/` | Project-level custom commands [^5] |
+    | `<project>/TABNINE.md` | Persistent context file for the AI model [^5] |
+    | `~/.tabnine/guidelines/*.md` | Global custom guidelines [^4] |
+    | `~/.tabnine/mcp_servers.json` | Global MCP server configuration [^3] |
+    | `~/.tabnine/agent/commands/` | Global custom commands [^5] |
+    | `~/.tabnine/agent/system.md` | Override the built-in system prompt [^5] |
+
+    **Plugin IDs:**
+    - Plugin ID `12798` (main plugin) [^10]
+    - Plugin ID `21531` (Enterprise self-hosted) [^11]
+  </Tab>
+  <Tab title="CLI">
+    | File / Location | Purpose |
+    |---|---|
+    | `~/.local/bin/tabnine` | CLI binary location (Linux/macOS) [^6] |
+    | `~/.tabnine/agent/system.md` | Override the built-in system prompt [^5] |
+    | `~/.tabnine/agent/commands/` | Global custom commands [^5] |
+    | `~/.tabnine/mcp_servers.json` | Global MCP server configuration [^3] |
+    | `~/.tabnine/guidelines/*.md` | Global custom guidelines [^4] |
+    | `<project>/.tabnine/guidelines/*.md` | Project-level guidelines [^4] |
+    | `<project>/.tabnine/mcp_servers.json` | Project-level MCP servers [^3] |
+    | `<project>/.tabnine/agent/commands/` | Project-level custom commands [^5] |
+    | `<project>/TABNINE.md` | Persistent context file [^5] |
+  </Tab>
+  <Tab title="Legacy Config">
+    The legacy Tabnine engine uses a separate configuration directory:
+
+    | OS | Path |
+    |---|---|
+    | Linux | `~/.config/TabNine/tabnine_config.json` [^12] |
+    | macOS | `~/Library/Preferences/TabNine/tabnine_config.json` [^12] |
+    | Windows | `%APPDATA%\TabNine\tabnine_config.json` [^12] |
+
+    <Note>
+      The legacy `tabnine_config.json` is for the older Tabnine completion engine. The newer Tabnine Agent and CLI use the `.tabnine/` directory structure described in other tabs. You can find your legacy config path by typing `TabNine::config_dir` in your editor [^12].
+    </Note>
+  </Tab>
+</Tabs>
+
+### Supported IDE Versions
+
+| IDE | Supported Versions | Platforms |
+|---|---|---|
+| VS Code | 1.86 -- 1.111 | Windows, macOS, Linux |
+| JetBrains IDEs | 2023.3 -- 2025.3 | Windows, macOS, Linux |
+| Eclipse | 4.28 (2023-06) -- 4.38 (2025-12) | Windows, macOS, Linux |
+| Visual Studio 2022 | 17.10 -- 17.14 | Windows |
+| Visual Studio 2026 | 18.1 -- 18.3 | Windows |
+
+Source: Tabnine Supported IDEs documentation [^1].
+
+### Settings Structure
+
+<CodeGroup>
+```json MCP Servers (.tabnine/mcp_servers.json)
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "your-key-here"
+      }
+    },
+    "remote-server": {
+      "url": "https://api.example.com/mcp",
+      "requestInit": {
+        "headers": {
+          "Authorization": "Bearer your-token"
+        }
+      }
+    }
+  }
+}
+```
+
+```markdown Guidelines (.tabnine/guidelines/coding-standards.md)
+# Coding Standards
+
+## Code Style
+- Use TypeScript strict mode
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+
+## Testing
+- Write unit tests for all new functions
+- Use Jest for testing
+
+## Architecture
+- Follow the repository pattern for data access
+- Use dependency injection
+```
+
+```json VS Code Settings (settings.json)
+{
+  "tabnine.disableLineRegex": ["require"],
+  "tabnine.disableFileRegex": ["\\.test\\."],
+  "tabnine.logLevel": "info"
+}
+```
+</CodeGroup>
+
+---
+
+## MCP Server Integration
+
+Tabnine supports the Model Context Protocol (MCP), allowing agents to connect to external tools and data sources through a standardized interface [^3]. MCP servers are configured via JSON files in the `.tabnine/` directory.
+
+### Configuration File
+
+MCP servers are defined in `mcp_servers.json`, which can be placed at two levels:
+
+| Scope | Path |
+|---|---|
+| Project-level | `<project>/.tabnine/mcp_servers.json` |
+| Global (user-level) | `~/.tabnine/mcp_servers.json` |
+
+### Transport Types
+
+Tabnine auto-detects the transport type based on the configuration fields [^3] [^13]:
+
+| Transport | Detection | Use Case |
+|---|---|---|
+| STDIO | `command` field present | Local servers, CLI tools |
+| Streamable HTTP | `url` field present | Modern remote APIs |
+| SSE (Legacy) | `transport: "sse"` explicitly set | Legacy remote servers |
+
+### Configuration Fields
+
+| Field | Required | Description |
+|---|---|---|
+| `command` | For STDIO | Executable to launch the server |
+| `args` | No | Command-line arguments array |
+| `env` | No | Environment variables object |
+| `cwd` | No | Working directory for the process |
+| `url` | For HTTP/SSE | Remote server endpoint URL |
+| `requestInit` | No | Fetch API RequestInit object (headers, auth) |
+| `transport` | For SSE only | Must be `"sse"` for legacy servers |
+| `sessionId` | No | Session identifier for remote connections |
+| `eventSourceInit` | No | EventSource-specific options |
+
+<CodeGroup>
+```json Local STDIO Server
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"],
+      "env": {},
+      "cwd": "/path/to/project"
+    }
+  }
+}
+```
+
+```json Remote Server with JWT
+{
+  "mcpServers": {
+    "remote-api": {
+      "url": "https://api.example.com/mcp",
+      "requestInit": {
+        "headers": {
+          "Authorization": "Bearer eyJhbGciOi..."
+        }
+      }
+    }
+  }
+}
+```
+
+```json Legacy SSE Server
+{
+  "mcpServers": {
+    "legacy-sse": {
+      "transport": "sse",
+      "url": "https://legacy.example.com/sse",
+      "requestInit": {
+        "headers": {
+          "Authorization": "Bearer token"
+        }
+      },
+      "eventSourceInit": {}
+    }
+  }
+}
+```
+</CodeGroup>
+
+<Note>
+  OAuth credential caches are stored in the `~/.mcp_auth` directory. If tokens are revoked externally, you may need to manually delete this folder to clear cached credentials [^3].
+</Note>
+
+<Warning>
+  MCP features require the Tabnine Agentic Platform tier ($59/user/month). The Code Assistant tier does not include MCP support [^14].
+</Warning>
+
+---
+
+## Custom Instructions (Guidelines)
+
+Tabnine uses Markdown-based guidelines to customize AI agent behavior [^4]. Guidelines are natural-language instructions placed in `.tabnine/guidelines/` directories.
+
+### File Format
+
+Guidelines are plain Markdown files (`.md`) with no required frontmatter. Tabnine recommends organizing content hierarchically and keeping files to 500 lines or less [^4].
+
+### Guideline Scopes
+
+| Scope | Path |
+|---|---|
+| Project-level | `<project>/.tabnine/guidelines/*.md` |
+| Global (user-level) | `~/.tabnine/guidelines/*.md` |
+
+### Supported Guideline Types
+
+Guidelines can define [^4]:
+
+- **Custom System Prompts** -- How the agent should behave
+- **Workflow Rules** -- Procedures and processes to follow
+- **Tool Instructions** -- When and how to use specific tools
+- **Team Standards** -- Coding practices and conventions
+
+### Enterprise Team Designation
+
+Enterprise administrators can assign guidelines to all teams or to specific teams. Organization-wide guidelines set in the Admin UI take precedence over local files [^4].
+
+```markdown .tabnine/guidelines/api-standards.md
+# API Standards
+
+## Naming Conventions
+- Use camelCase for function and variable names
+- Use PascalCase for class and interface names
+- Prefix interfaces with "I" (e.g., IUserService)
+
+## Error Handling
+- Always use custom error classes extending BaseError
+- Log errors with structured metadata
+- Return appropriate HTTP status codes
+
+## Examples
+
+### Good
+- `getUserById(id: string): Promise<User>`
+- `class UserNotFoundError extends BaseError {}`
+
+### Bad
+- `get_user(id)` (wrong casing, no types)
+- `throw new Error("not found")` (generic error)
+```
+
+---
+
+## Custom Commands
+
+Custom commands allow you to create reusable prompts for the Tabnine CLI agent [^5].
+
+| Scope | Path |
+|---|---|
+| Global commands | `~/.tabnine/agent/commands/` |
+| Project-specific commands | `<project>/.tabnine/agent/commands/` |
+
+---
+
+## Context Files
+
+Tabnine supports `TABNINE.md` files as persistent, hierarchical context files that provide ongoing project awareness to the AI model [^5]. Place a `TABNINE.md` file in your project root or any subdirectory to supply relevant context.
+
+You can also use `@<file/folder>` syntax in chat to direct the AI's attention to specific files or folders [^5].
+
+---
+
+## CLI Agent
+
+Tabnine provides a CLI agent (`tabnine`) that runs natively in the terminal as a fully autonomous or semi-autonomous AI coding agent [^6].
+
+### Installation
+
+<Tabs>
+  <Tab title="Linux / macOS">
+    ```bash
+    export TABNINE_HOST="https://console.tabnine.com"
+    curl $TABNINE_HOST/update/cli/installer.mjs | node --input-type=module - $TABNINE_HOST
+    ```
+    The binary is installed to `~/.local/bin/tabnine`. Ensure this directory is in your `PATH` [^6].
+  </Tab>
+  <Tab title="Windows (PowerShell)">
+    ```powershell
+    $env:TABNINE_HOST = "https://console.tabnine.com"
+    irm $env:TABNINE_HOST/update/cli/installer.mjs | node --input-type=module - $env:TABNINE_HOST
+    ```
+  </Tab>
+</Tabs>
+
+### Key CLI Commands
+
+| Command | Purpose |
+|---|---|
+| `tabnine -p "prompt"` | Non-interactive single prompt execution [^6] |
+| `tabnine -p "prompt" --output-format json` | JSON-formatted output [^6] |
+| `cat file.js \| tabnine -p "Review this"` | Pipe input to the agent [^6] |
+| `/model` | Switch between AI models [^5] |
+| `/settings` | Adjust CLI behavior [^5] |
+| `/directory add/show` | Manage project workspace folders [^5] |
+| `/help` | Show all available commands [^6] |
+| `/bug` | Report issues [^5] |
+| `Ctrl+Y` | Toggle YOLO mode (auto-execution without confirmation) [^5] |
+| `!command` | Run shell commands directly (e.g., `!npm run start`) [^5] |
+
+### Agent Tool Permissions
+
+The Tabnine agent provides nine built-in tools with configurable permission levels (auto-approve, ask first, or disable) [^15]:
+
+| Tool | Function |
+|---|---|
+| Read Project Files | Access code and documentation for context |
+| Create Project Files | Generate new files and directories |
+| Apply Code | Modify or write to existing files |
+| Read Terminal | Review command outputs |
+| Run Command | Execute terminal commands |
+| List Directory | Display folder contents |
+| Get Diagnostics | Gather environment and dependency info |
+| Local Workspace Search | Find patterns in workspace |
+| Search File Content | Code-aware search |
+
+---
+
+## Pricing
+
+| Plan | Price | Key Features |
+|---|---|---|
+| Dev Preview | Free 14-day trial | Code completions, AI chat, foundational agents [^14] |
+| Code Assistant | $39/user/month (annual) | Completions, chat, Jira integration, flexible deployment, SSO, compliance [^14] |
+| Agentic Platform | $59/user/month (annual) | Everything in Code Assistant plus autonomous agents, guidelines, MCP, CLI, unlimited codebase connections [^14] |
+
+<Note>
+  Both paid tiers include unlimited usage when using your own LLM. Tabnine-provided LLM access incurs additional fees based on provider pricing plus a 5% handling fee [^14].
+</Note>
+
+---
+
+## Enterprise Features
+
+### Deployment Options
+
+Tabnine Enterprise supports multiple deployment models [^16]:
+
+| Deployment | Description |
+|---|---|
+| SaaS | Cloud-hosted by Tabnine |
+| VPC (Single-Tenant) | Deployed in your AWS, GCP, or Azure VPC |
+| On-Premises | Kubernetes cluster on your own servers |
+| Air-Gapped | Fully offline with no external network access |
+
+### Enterprise Context Engine
+
+The Enterprise Context Engine builds and maintains a continuously updated representation of an organization's software environment, enabling AI agents to work with current understanding of systems rather than static snapshots [^17]. It connects to repositories on Bitbucket, GitHub, GitLab, and Perforce P4 [^14].
+
+### Model Flexibility
+
+Enterprise administrators can [^2] [^18]:
+
+- Switch between built-in models (GPT-4o, Claude, Gemini, Llama, Mistral, and others)
+- Register private LLM endpoints and make them available per project
+- Connect to models hosted in AWS VPC, Azure, OCI, or on-premises infrastructure
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for Tabnine.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="VS Code">
+    - **MCP servers**: `<project>/.tabnine/mcp_servers.json` or `~/.tabnine/mcp_servers.json`
+    - **Project guidelines**: `<project>/.tabnine/guidelines/*.md`
+    - **Global guidelines**: `~/.tabnine/guidelines/*.md`
+    - **Context file**: `<project>/TABNINE.md`
+    - **Extension settings**: `.vscode/settings.json` (keys prefixed with `tabnine.`)
+  </Tab>
+  <Tab title="JetBrains">
+    - **MCP servers**: `<project>/.tabnine/mcp_servers.json` or `~/.tabnine/mcp_servers.json`
+    - **Project guidelines**: `<project>/.tabnine/guidelines/*.md`
+    - **Global guidelines**: `~/.tabnine/guidelines/*.md`
+    - **Context file**: `<project>/TABNINE.md`
+  </Tab>
+  <Tab title="CLI">
+    - **MCP servers**: `<project>/.tabnine/mcp_servers.json` or `~/.tabnine/mcp_servers.json`
+    - **Guidelines**: `<project>/.tabnine/guidelines/` or `~/.tabnine/guidelines/`
+    - **Custom commands**: `<project>/.tabnine/agent/commands/` or `~/.tabnine/agent/commands/`
+    - **System prompt override**: `~/.tabnine/agent/system.md`
+    - **Context file**: `<project>/TABNINE.md`
+    - **Binary location**: `~/.local/bin/tabnine`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge a server entry into the `mcp_servers.json` file at either the project or global level:
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+- The `mcpServers` field is an **object map** keyed by server name [^3]
+- When merging, preserve all existing server entries
+- The same JSON format is used across VS Code, JetBrains, and CLI -- the file is always `.tabnine/mcp_servers.json` [^3]
+- The file can be placed at project level or in the user's home directory
+
+<Note>
+  Unlike some other platforms, Tabnine uses a single, consistent MCP configuration format (`mcp_servers.json`) across all IDEs and the CLI. The installer does not need to handle different formats per IDE.
+</Note>
+
+### Installing Custom Instructions
+
+To install project-level custom instructions, create a Markdown file in the `.tabnine/guidelines/` directory:
+
+```bash
+mkdir -p .tabnine/guidelines
+cat > .tabnine/guidelines/my-package-guidelines.md << 'EOF'
+# My Package Guidelines
+
+These instructions guide the AI agent when working with this codebase.
+
+## Coding Standards
+- Follow the established patterns in this repository
+- Write tests for all new functions
+EOF
+```
+
+**Key considerations:**
+- Guidelines are plain Markdown files with no required frontmatter [^4]
+- Multiple guideline files can coexist in the directory
+- Keep files to 500 lines or less for optimal performance [^4]
+- Guidelines use natural language -- no special syntax required
+
+### Config File Format
+
+Tabnine uses JSON for MCP server configuration and Markdown for guidelines:
+
+- **MCP servers**: `mcp_servers.json` is standard JSON. Parse existing content, deep-merge new server entries into the `mcpServers` object, and write back preserving existing entries.
+- **Guidelines**: Plain Markdown files. Create new files rather than modifying existing ones to avoid conflicts.
+- **VS Code settings**: Standard VS Code `settings.json` for extension-specific settings (e.g., `tabnine.disableLineRegex`).
+
+### Non-Interactive Considerations
+
+For CI/CD or automated workflows:
+
+```bash
+# Non-interactive single prompt
+tabnine -p "Run the test suite and report results"
+
+# JSON output for parsing
+tabnine -p "List all TODO comments" --output-format json
+
+# Pipe file content for review
+cat src/main.ts | tabnine -p "Review this code for security issues"
+```
+
+The Tabnine CLI also provides a GitHub Actions integration for automating code review on pull requests [^19].
+
+<Warning>
+  The Tabnine CLI requires Node.js to be installed for the initial setup. It also requires Tabnine Agents to be enabled for your team. Authentication is handled via the CLI login flow -- there are no user-provided API keys for model access [^6].
+</Warning>
+
+---
+
+## Footnotes
+
+[^1]: [Tabnine Supported IDEs](https://docs.tabnine.com/main/welcome/readme/supported-ides)
+[^2]: [Tabnine Homepage](https://www.tabnine.com/)
+[^3]: [Tabnine MCP Server Setup](https://docs.tabnine.com/main/getting-started/tabnine-agent/mcp-intro-and-setup)
+[^4]: [Tabnine Guidelines](https://docs.tabnine.com/main/getting-started/tabnine-agent/guidelines)
+[^5]: [Tabnine CLI Commands](https://docs.tabnine.com/main/getting-started/tabnine-cli/features/cli-commands)
+[^6]: [Tabnine CLI Installation](https://docs.tabnine.com/main/getting-started/tabnine-cli/getting-started/installation)
+[^7]: [Tabnine VS Code Extension (GitHub)](https://github.com/codota/tabnine-vscode/blob/master/package.json)
+[^8]: [Tabnine Legacy VS Code Extension](https://marketplace.visualstudio.com/items?itemName=TabNine.tabnine-vscode)
+[^9]: [Tabnine Enterprise VS Code Extension](https://marketplace.visualstudio.com/items?itemName=TabNine.tabnine-vscode-self-hosted-updater)
+[^10]: [Tabnine JetBrains Plugin](https://plugins.jetbrains.com/plugin/12798--legacy-tabnine)
+[^11]: [Tabnine Enterprise JetBrains Plugin](https://plugins.jetbrains.com/plugin/21531-tabnine-for-enterprise)
+[^12]: [Tabnine Config Path Issue (GitHub)](https://github.com/codota/TabNine/issues/582)
+[^13]: [Tabnine MCP Examples and Advanced Usage](https://docs.tabnine.com/main/getting-started/tabnine-agent/mcp-examples-and-advanced-usage)
+[^14]: [Tabnine Pricing](https://www.tabnine.com/pricing/)
+[^15]: [Tabnine In-IDE Agent Settings](https://docs.tabnine.com/main/getting-started/tabnine-agent/agent-settings)
+[^16]: [Tabnine Deployment Options](https://docs.tabnine.com/main/welcome/readme/architecture/deployment-options)
+[^17]: [Tabnine Enterprise Context Engine](https://www.tabnine.com/blog/introducing-the-tabnine-enterprise-context-engine/)
+[^18]: [Tabnine Switchable LLMs](https://www.tabnine.com/blog/increase-flexibility-while-maintaining-control-switchable-llms-for-privately-deployed-tabnine/)
+[^19]: [Tabnine GitHub Actions](https://docs.tabnine.com/main/getting-started/tabnine-cli/git-integrations/github-actions)
