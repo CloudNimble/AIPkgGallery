@@ -1,0 +1,426 @@
+---
+title: 'Pi'
+description: 'Platform specification for Pi, an AI coding agent'
+icon: 'circle'
+---
+
+## Overview
+
+[Pi](https://github.com/badlogic/pi-mono) is a minimal, extensible terminal coding agent by **Mario Zechner**, published as `@mariozechner/pi-coding-agent` on npm.[^1] Extensibility is achieved through **Skills** (`SKILL.md` capability packages), **Extensions** (TypeScript modules), **Prompt Templates**, **Themes**, and **Pi Packages** that bundle all of the above for distribution via npm or git.[^2]
+
+---
+
+## Configuration
+
+### File Locations
+
+Pi uses JSON settings files and Markdown instruction files with a layered resolution system spanning global, parent directory, and project-level scopes.[^2][^3]
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User settings | `~/.pi/agent/settings.json` | Global settings for all projects |
+    | Custom models | `~/.pi/agent/models.json` | Custom provider and model definitions |
+    | Keybindings | `~/.pi/agent/keybindings.json` | Keyboard shortcut customization |
+    | Global instructions | `~/.pi/agent/AGENTS.md` | Global instructions applied to all projects |
+    | Global skills | `~/.pi/agent/skills/` | User-level skill definitions |
+    | Global extensions | `~/.pi/agent/extensions/` | User-level TypeScript extensions |
+    | Global prompts | `~/.pi/agent/prompts/` | User-level prompt templates |
+    | Global themes | `~/.pi/agent/themes/` | User-level custom themes |
+    | MCP adapter cache | `~/.pi/agent/mcp-cache.json` | Cached MCP tool metadata (third-party adapter) |
+    | Project settings | `<project>/.pi/settings.json` | Project-specific setting overrides |
+    | Project system prompt | `<project>/.pi/SYSTEM.md` | Replaces the default system prompt entirely |
+    | Append system prompt | `<project>/.pi/APPEND_SYSTEM.md` | Appends to the default system prompt |
+    | Project skills | `<project>/.pi/skills/` | Project-scoped skill definitions |
+    | Project extensions | `<project>/.pi/extensions/` | Project-scoped TypeScript extensions |
+    | Project prompts | `<project>/.pi/prompts/` | Project-scoped prompt templates |
+    | Project instructions | `<project>/AGENTS.md` | Project-level agent instructions |
+  </Tab>
+</Tabs>
+
+<Note>
+  Pi also recognizes `CLAUDE.md` as an alias for `AGENTS.md`. All matching instruction files found in `~/.pi/agent/`, parent directories, and the current directory are concatenated at startup.[^2]
+</Note>
+
+### Settings
+
+Settings can be modified via the `/settings` slash command or by editing the JSON files directly. Key options include `thinkingLevel`, `messageDelivery`, `transport` (SSE, WebSocket, or auto), `steeringMode`, `followUpMode`, and compaction settings.[^2]
+
+---
+
+## Custom Instructions
+
+### AGENTS.md
+
+Pi loads `AGENTS.md` (or `CLAUDE.md`) files at startup from multiple locations. All matching files are concatenated to form the instruction context.[^2]
+
+<Steps>
+  <Step title="Global Scope">
+    Pi reads `~/.pi/agent/AGENTS.md` for instructions that apply across all projects.
+  </Step>
+  <Step title="Directory Walk">
+    Starting from parent directories down to the current working directory, Pi concatenates all `AGENTS.md` or `CLAUDE.md` files found along the path.
+  </Step>
+  <Step title="Project Scope">
+    The `AGENTS.md` in the current directory provides project-specific conventions, build commands, and code style guidance.
+  </Step>
+</Steps>
+
+### System Prompt Customization
+
+Pi supports replacing or extending the default system prompt at the project level:[^2]
+
+- **`.pi/SYSTEM.md`** -- Completely replaces the default system prompt.
+- **`.pi/APPEND_SYSTEM.md`** -- Appends additional instructions to the default system prompt without replacing it.
+
+---
+
+## MCP Integration
+
+<Warning>
+  Pi does not support MCP natively. The project maintainer considers MCP servers to be context-heavy (often consuming 7--9% of the context window with tool descriptions) and recommends building CLI tools with README files as an alternative, leveraging the skills system for progressive disclosure.[^4]
+</Warning>
+
+### Third-Party MCP Adapter
+
+The community-built **pi-mcp-adapter** (`pi install npm:pi-mcp-adapter`) provides MCP server support without the context overhead.[^5] It uses a single proxy tool (~200 tokens) with on-demand server discovery instead of registering all tools upfront.
+
+<CodeGroup>
+
+```json ~/.pi/agent/mcp.json
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"]
+    }
+  }
+}
+```
+
+```json Advanced Server Options
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server"],
+      "lifecycle": "lazy",
+      "idleTimeout": 10,
+      "env": {
+        "API_KEY": "$MY_API_KEY"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+The adapter supports `lifecycle` values of `"lazy"`, `"eager"`, or `"keep-alive"`, and `directTools` configuration to expose individual tools directly rather than through the proxy. Tool metadata caches locally in `~/.pi/agent/mcp-cache.json`, enabling search and discovery without active server connections.[^5]
+
+---
+
+## Skills
+
+Skills are capability packages with instructions and tools, loaded on-demand to provide progressive disclosure without consuming the prompt cache.[^6]
+
+### SKILL.md Format
+
+A skill is a directory containing a `SKILL.md` file with YAML frontmatter and freeform Markdown instructions:[^6]
+
+```markdown my-skill/SKILL.md
+---
+name: my-skill
+description: What this skill does and when to use it. Be specific.
+---
+
+# My Skill
+
+## Steps
+1. Do this first
+2. Then do that
+
+Use `./scripts/helper.sh` for the heavy lifting.
+```
+
+### Frontmatter Fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | 1--64 characters, lowercase letters/numbers/hyphens, must match parent directory name |
+| `description` | Yes | Max 1024 characters describing what the skill does and when to use it |
+| `license` | No | License reference |
+| `compatibility` | No | Environment requirements (max 500 chars) |
+| `metadata` | No | Arbitrary key-value mappings |
+| `allowed-tools` | No | Pre-approved tools list |
+| `disable-model-invocation` | No | Hides skill from system prompt when `true` |
+
+### Skill Discovery Paths
+
+Pi discovers skills from multiple locations:[^6]
+
+- **Global**: `~/.pi/agent/skills/` and `~/.agents/skills/`
+- **Project**: `.pi/skills/` and `.agents/skills/` (searched in cwd and ancestor directories)
+- **Packages**: `skills/` directories or `pi.skills` entries within installed Pi packages
+- **CLI flag**: `--skill <path>` (repeatable)
+
+### Skill Invocation
+
+Skills are invoked via slash commands. Arguments after the command are passed as user input:[^2]
+
+```
+/skill:brave-search
+/skill:pdf-tools extract page 3
+```
+
+<Note>
+  Skill slash commands must be enabled via `/settings` with `"enableSkillCommands": true`.[^6]
+</Note>
+
+### Skill Collections
+
+Community skill collections include **badlogic/pi-skills** (brave-search, browser-tools, and more) and **PSPDFKit-labs/pi-skills** (GitHub integration, multi-agent security review, tmux).[^7][^8]
+
+---
+
+## Extensions
+
+Extensions are TypeScript modules that deeply customize Pi's behavior. They can register custom tools, commands, keyboard shortcuts, event handlers, and UI components.[^9]
+
+### Extension Structure
+
+```typescript my-extension.ts
+export default function (pi: ExtensionAPI) {
+  // Register a tool the LLM can call
+  pi.registerTool({ name: "deploy", ... });
+
+  // Register a slash command
+  pi.registerCommand("stats", { ... });
+
+  // Subscribe to lifecycle events
+  pi.on("tool_call", async (event, ctx) => { ... });
+}
+```
+
+### Extension API
+
+The `ExtensionAPI` provides the following registration methods:[^9]
+
+- **`pi.registerTool()`** -- Register tools callable by the LLM
+- **`pi.registerCommand()`** -- Register slash commands (e.g., `/mycommand`)
+- **`pi.registerShortcut()`** -- Register keyboard shortcuts
+- **`pi.registerFlag()`** -- Register custom CLI flags
+- **`pi.registerMessageRenderer()`** -- Register custom TUI rendering
+- **`pi.on()`** -- Subscribe to lifecycle events
+
+### Extension Capabilities
+
+Extensions enable building features that other tools ship as built-ins:[^2][^9]
+
+- Custom tools or replacing built-in tools
+- Sub-agents and planning workflows
+- Custom compaction and summarization logic
+- Permission gates and path protection
+- Custom editors and UI components
+- Status lines, headers, footers, and overlays
+- Git checkpointing and auto-commit
+- SSH and sandbox execution
+- MCP server integration
+
+### Extension Locations
+
+- **Global**: `~/.pi/agent/extensions/`
+- **Project**: `.pi/extensions/`
+- **Packages**: Distributed via Pi packages (npm or git)
+
+Extensions hot-reload with the `/reload` command.[^9]
+
+<Warning>
+  Extensions execute arbitrary code with full system access. Review source code before installing third-party extensions or packages.[^2]
+</Warning>
+
+---
+
+## Lifecycle Events
+
+Extensions subscribe to lifecycle events via `pi.on()`. Key events include:[^9][^10]
+
+| Event | Description |
+|---|---|
+| `tool_execution_start` | Fired when a tool execution begins (includes `toolCallId`, `toolName`, `args`) |
+| `tool_execution_update` | Fired during tool execution progress |
+| `tool_execution_end` | Fired when a tool execution completes (includes `result`) |
+| `message_start` | Fired when an LLM message begins |
+| `message_update` | Fired during LLM message streaming |
+| `message_end` | Fired when an LLM message completes |
+| `context` | Fired before each LLM call; provides a mutable deep copy of messages |
+| `terminal_input` | Fired on raw terminal input; can intercept, consume, or transform input |
+
+The `context` event is particularly useful for modifying the message history before it reaches the LLM. Handlers run in extension load order, and returning a value from a handler replaces the payload for subsequent handlers.[^9]
+
+<Note>
+  The hooks system was the predecessor to extensions. Hooks located in `hooks/` and `tools/` directories are still loaded with deprecation warnings, but new development should use the unified extensions system.[^10]
+</Note>
+
+---
+
+## Prompt Templates
+
+Templates are reusable Markdown files that expand via slash commands (e.g., `/review`). They support `{{variable}}` interpolation.[^2]
+
+```markdown ~/.pi/agent/prompts/review.md
+Review this code for bugs, security issues, and performance problems.
+Focus on: {{focus}}
+```
+
+**Template locations:**
+- `~/.pi/agent/prompts/` (global)
+- `.pi/prompts/` (project)
+- Within installed Pi packages
+
+---
+
+## Pi Packages
+
+Pi packages bundle extensions, skills, prompts, and themes for distribution via npm or git.[^2]
+
+### Package Manifest
+
+```json package.json
+{
+  "name": "my-pi-package",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"],
+    "themes": ["./themes"]
+  }
+}
+```
+
+Without a `pi` manifest key, Pi auto-discovers from conventional directories (`extensions/`, `skills/`, `prompts/`, `themes/`).[^2]
+
+### Package Management
+
+```bash
+# Install from npm
+pi install npm:@foo/pi-tools
+
+# Install with pinned version
+pi install npm:@foo/pi-tools@1.2.3
+
+# Install from git
+pi install git:github.com/user/repo
+
+# Install from git with tag
+pi install git:github.com/user/repo@v1
+
+# Project-local install (uses .pi/git/ or .pi/npm/)
+pi install -l npm:@foo/pi-tools
+
+# List installed packages
+pi list
+
+# Update all (skips pinned packages)
+pi update
+
+# Remove a package
+pi remove npm:@foo/pi-tools
+
+# Enable/disable package components
+pi config
+```
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for Pi.
+
+### Configuration File Paths
+
+| Scope | Settings | Instructions | Skills | Extensions |
+|---|---|---|---|---|
+| Global | `~/.pi/agent/settings.json` | `~/.pi/agent/AGENTS.md` | `~/.pi/agent/skills/` | `~/.pi/agent/extensions/` |
+| Project | `<project>/.pi/settings.json` | `<project>/AGENTS.md` | `<project>/.pi/skills/` | `<project>/.pi/extensions/` |
+
+### Installing Skills
+
+To install a skill, create a directory under `.pi/skills/` (project) or `~/.pi/agent/skills/` (global) containing a `SKILL.md` file. The directory name must match the `name` field in the SKILL.md frontmatter.
+
+```
+.pi/skills/my-skill/
+├── SKILL.md
+├── scripts/
+└── assets/
+```
+
+### Installing MCP Servers (via Third-Party Adapter)
+
+Pi has no built-in MCP support. If the `pi-mcp-adapter` package is installed, MCP servers are configured in `~/.pi/agent/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"]
+    }
+  }
+}
+```
+
+### Installing Pi Packages Programmatically
+
+Use the `pi install` CLI command:
+
+```bash
+# npm packages
+pi install npm:@scope/package-name
+
+# git repositories
+pi install git:github.com/user/repo
+
+# Project-local install
+pi install -l npm:@scope/package-name
+```
+
+Packages install globally to `~/.pi/agent/git/` (git sources) or global npm. The `-l` flag installs to `.pi/git/` or `.pi/npm/` within the project.
+
+### Installing Project Instructions
+
+Write an `AGENTS.md` file to the project root. If one already exists, append to it. Pi concatenates all `AGENTS.md` and `CLAUDE.md` files found from parent directories through to the current directory.
+
+### Config File Format
+
+Pi uses **JSON** for settings files (`settings.json`, `models.json`). The installer must:
+
+1. Parse the existing JSON file (if present)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back, preserving existing entries
+
+### Key Considerations
+
+- Pi is a **terminal-only** agent with no IDE integration; it runs via `npx @mariozechner/pi-coding-agent` or as `pi` if installed globally
+- Settings are JSON, not TOML or YAML
+- No built-in MCP support; MCP requires the third-party `pi-mcp-adapter` package
+- Pi packages run with **full system access** -- extensions execute arbitrary code
+- The `/reload` command hot-reloads extensions without restarting the session
+- Pi also supports the cross-compatible `.agents/skills/` path for skill discovery
+
+---
+
+## Footnotes
+
+[^1]: https://www.npmjs.com/package/@mariozechner/pi-coding-agent
+[^2]: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/README.md
+[^3]: https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent
+[^4]: https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
+[^5]: https://github.com/nicobailon/pi-mcp-adapter
+[^6]: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md
+[^7]: https://github.com/badlogic/pi-skills
+[^8]: https://github.com/PSPDFKit-labs/pi-skills
+[^9]: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md
+[^10]: https://github.com/badlogic/pi-mono/issues/454
