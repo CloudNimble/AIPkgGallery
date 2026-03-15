@@ -1,0 +1,405 @@
+---
+title: 'Mux'
+description: 'Platform specification for Mux, an AI coding agent'
+icon: 'code'
+---
+
+## Overview
+
+[Mux](https://mux.coder.com/) is a desktop and browser application for parallel agentic development by **Coder Technologies, Inc.** [^1] Extensibility is via custom **Agent Definitions** (Markdown files with YAML frontmatter), **Skills** (`SKILL.md` workflow definitions), **Hooks** (init and tool lifecycle scripts), **AGENTS.md** instruction files, and **MCP servers**. [^2]
+
+---
+
+## Configuration
+
+### File Locations
+
+Mux uses a hierarchical configuration system with JSONC settings files and Markdown instruction/agent files.
+
+| File | Path | Purpose |
+|---|---|---|
+| Global instructions | `~/.mux/AGENTS.md` | Personal instructions applied to all projects [^3] |
+| Global instructions (local) | `~/.mux/AGENTS.local.md` | Personal overrides, gitignored [^3] |
+| Global MCP config | `~/.mux/mcp.jsonc` | MCP server definitions for all projects [^4] |
+| Global agents | `~/.mux/agents/*.md` | Custom agent definitions available globally [^2] |
+| Global skills | `~/.mux/skills/<name>/SKILL.md` | Personal skills available across all projects [^5] |
+| Project instructions | `<project>/AGENTS.md` | Project-level instructions (committed to repo) [^3] |
+| Project instructions (local) | `<project>/AGENTS.local.md` | Personal project overrides, gitignored [^3] |
+| Project MCP config | `<project>/.mux/mcp.jsonc` | Repo-level MCP server overrides [^4] |
+| Project agents | `<project>/.mux/agents/*.md` | Project-specific agent definitions [^2] |
+| Project skills | `<project>/.mux/skills/<name>/SKILL.md` | Project-specific skills [^5] |
+| Workspace MCP overrides | `<project>/.mux/mcp.local.jsonc` | Per-workspace MCP overrides, gitignored [^4] |
+| Init hook | `<project>/.mux/init` | Workspace initialization script [^7] |
+| Tool pre-hook | `<project>/.mux/tool_pre` | Runs before tool invocations [^8] |
+| Tool post-hook | `<project>/.mux/tool_post` | Runs after tool invocations [^8] |
+| Tool env | `<project>/.mux/tool_env` | Sourced bash environment for bash tools [^8] |
+| Persistent data | `~/.mux/config.json` | Application settings and state [^6] |
+
+---
+
+## Custom Instructions (AGENTS.md)
+
+Mux loads instruction files hierarchically. Within each scope, it checks for files in this order: `AGENTS.md`, then `AGENT.md`, then `CLAUDE.md`. If a base file is found, Mux also appends the corresponding `.local.md` variant from the same directory. [^3]
+
+### Discovery Order
+
+<Steps>
+  <Step title="Workspace Level">
+    `<workspace>/AGENTS.md` (or `AGENT.md` / `CLAUDE.md`) plus `AGENTS.local.md` if present. [^3]
+  </Step>
+  <Step title="Global Level">
+    `~/.mux/AGENTS.md` (or `AGENT.md` / `CLAUDE.md`) plus `AGENTS.local.md` if present. [^3]
+  </Step>
+</Steps>
+
+### Scoped Instruction Sections
+
+Mux supports scoped instructions using special headings within `AGENTS.md` files: [^3]
+
+- **`Model: <regex>`** -- activates only for specific AI models
+- **`Tool: <tool_name>`** -- appends instructions to the description of a specific tool
+
+These sections are stripped from general instruction blocks and injected only where relevant. Workspace instructions take precedence over global; the first matching section wins. [^3]
+
+<Note>
+  HTML-style comments (`<!-- ... -->`) are automatically removed before sending instructions to the model, enabling editor-only metadata within instruction files. [^3]
+</Note>
+
+When the agent is asked to remember something about the codebase, it encodes that lesson into the project's `AGENTS.md` file. File-specific insights are added as code comments instead. [^6]
+
+---
+
+## MCP Servers
+
+MCP (Model Context Protocol) servers provide additional tools to agents. They are configured in JSONC files and communicate over stdio in NDJSON format. [^4]
+
+### Configuration Locations
+
+| Scope | Path | Purpose |
+|---|---|---|
+| Global | `~/.mux/mcp.jsonc` | Available to all projects [^4] |
+| Project | `.mux/mcp.jsonc` | Repo-level overrides [^4] |
+| Workspace | `.mux/mcp.local.jsonc` | Per-workspace overrides, auto-gitignored [^4] |
+
+### Configuration Format
+
+<CodeGroup>
+
+```jsonc Global or Project (~/.mux/mcp.jsonc)
+{
+  "servers": {
+    "memory": "npx -y @modelcontextprotocol/server-memory",
+    "chrome": "npx -y chrome-devtools-mcp@latest --headless"
+  }
+}
+```
+
+</CodeGroup>
+
+### Server Behavior
+
+- Config changes apply on the next message with no restart needed (hot reload). [^4]
+- Server processes run in the workspace directory with the workspace's environment. [^4]
+- Servers start on first workspace message and idle-timeout after 10 minutes. [^4]
+- Each workspace runs isolated server processes with independent state. [^4]
+- Per-workspace overrides can enable/disable servers and restrict tool allowlists without modifying shared config files. [^4]
+- Mux automatically adds `.mux/mcp.local.jsonc` to git excludes. [^4]
+
+MCP servers can also be managed via **Settings > MCP** in the UI. [^4]
+
+---
+
+## Custom Agents
+
+Agents control the model's system prompt and tool access policy. An agent definition is a Markdown file where the YAML frontmatter defines metadata and policy, and the body provides instructions. [^2]
+
+### Agent Discovery
+
+Agent definitions are discovered from three scopes (non-recursive), where higher-priority definitions override lower-priority ones with the same agent ID: [^2]
+
+| Location | Scope | Priority |
+|---|---|---|
+| `.mux/agents/*.md` | Project | Highest |
+| `~/.mux/agents/*.md` | User (global) | Medium |
+| Built-in system | System | Lowest |
+
+The agent ID derives from the filename (e.g., `review.md` becomes agent ID `review`). Valid characters are lowercase letters, numbers, hyphens, and underscores. [^2]
+
+### Agent Frontmatter Schema
+
+<CodeGroup>
+
+```yaml Agent Definition Frontmatter
+---
+name: Review                    # Required: display name in UI
+description: Code reviewer      # Optional: tooltip text
+base: exec                      # Optional: inherit from exec, plan, or custom agent ID
+
+ui:
+  hidden: false                 # Hide from agent selector
+  disabled: false               # Completely disable this agent
+  color: "#4A90D9"              # UI accent color
+
+prompt:
+  append: true                  # true (default): append to base instructions
+                                # false: replace base instructions entirely
+
+subagent:
+  runnable: true                # Allow spawning via task({ agentId: ... })
+  skip_init_hook: false         # Skip the project .mux/init hook for this subagent
+
+ai:
+  model: claude-sonnet-4-6      # Override model selection
+  thinkingLevel: medium         # Set thinking budget
+
+tools:
+  add:                          # Regex patterns of tools to enable
+    - bash
+    - file_read_.*
+  remove:                       # Regex patterns of tools to disable (applied after add)
+    - file_edit_.*
+    - task
+    - task_.*
+  require:                      # Patterns that must be available
+    - bash
+---
+```
+
+</CodeGroup>
+
+### Inheritance
+
+When an agent specifies `base`, its Markdown body is appended to the base agent's instructions by default. Set `prompt.append: false` to replace the base body entirely. Multi-level inheritance is supported: agents can inherit from custom agents, which themselves inherit from built-ins. [^2]
+
+### Example: Read-Only Reviewer
+
+<CodeGroup>
+
+```markdown .mux/agents/review.md
+---
+name: Review
+description: Terse reviewer-style feedback
+base: exec
+tools:
+  remove:
+    - file_edit_.*
+    - task
+    - task_.*
+---
+
+You are a code reviewer.
+
+- Focus on correctness, risks, and test coverage.
+- Prefer short, actionable comments.
+```
+
+</CodeGroup>
+
+This agent inherits the `exec` agent's tools but removes editing capabilities, making it read-only for review workflows. [^2]
+
+---
+
+## Skills
+
+Skills are reusable, file-based playbooks that enable progressive disclosure -- the LLM is shown only the skill index in the system prompt, and full skill content is loaded on demand via a tool call when a skill is invoked (e.g., `/skill-name`). [^5]
+
+### Skill Directory Structure
+
+```
+.mux/skills/my-skill/
+  SKILL.md
+  references/
+```
+
+### Discovery Precedence
+
+Skills are located in five tiers, searched in this order: [^5]
+
+1. **Workspace-local (Mux)**: `.mux/skills/<skill-name>/SKILL.md`
+2. **Workspace-local (universal)**: `.agents/skills/<skill-name>/SKILL.md`
+3. **Global (Mux)**: `~/.mux/skills/<skill-name>/SKILL.md`
+4. **Global (universal)**: `~/.agents/skills/<skill-name>/SKILL.md`
+5. **Built-in** (shipped with Mux)
+
+### SKILL.md Format
+
+<CodeGroup>
+
+```yaml SKILL.md
+---
+name: my-skill                 # Required: must match directory name
+description: Does something    # Required: shown in skill index
+license: MIT                   # Optional
+compatibility: []              # Optional
+metadata: {}                   # Optional
+advertise: true                # Optional: set false to hide from system prompt index
+---
+
+Skill instructions go here in Markdown.
+```
+
+</CodeGroup>
+
+Skill names must match the pattern `^[a-z0-9]+(?:-[a-z0-9]+)*$` (1-64 characters). Maximum file size is 1MB. [^5]
+
+### Unadvertised Skills
+
+Setting `advertise: false` excludes a skill from the system prompt index, but it remains callable via slash commands or agent tools. This is useful for sub-agents, advanced users, or internal workflows. [^5]
+
+Community skills can be discovered at [skills.sh](https://skills.sh/). [^5]
+
+---
+
+## Hooks
+
+Mux supports two categories of hooks: **init hooks** for workspace setup and **tool hooks** for intercepting tool invocations. [^7] [^8]
+
+### Init Hook
+
+The init hook is an executable script at `.mux/init` that runs once per workspace on creation. [^7]
+
+- Runs in the workspace directory with the workspace's environment. [^7]
+- Non-blocking: the workspace is immediately usable while the hook runs. [^7]
+- Output streams to the workspace UI in real-time. [^7]
+- Exit codes are preserved; failures are logged but do not prevent workspace usage. [^7]
+- Receives environment variables including `MUX_PROJECT_PATH`, `MUX_RUNTIME`, and `MUX_WORKSPACE_NAME`. [^7]
+
+<Warning>
+  Scripts execute repeatedly when recreating workspaces with the same name. Implement idempotent logic if modifying shared state. [^7]
+</Warning>
+
+Common use cases include installing dependencies, running builds, generating configurations, setting up databases, and warming caches. [^7]
+
+### Tool Hooks
+
+Tool hooks are scripts that execute before and after Mux tool invocations. [^8]
+
+<Note>
+  Tool hooks are marked as experimental with potential breaking changes. [^8]
+</Note>
+
+| Hook File | Timing | Behavior |
+|---|---|---|
+| `.mux/tool_pre` | Before tool runs | Non-zero exit **blocks** execution [^8] |
+| `.mux/tool_post` | After tool completes | Non-zero exit reports failure [^8] |
+| `.mux/tool_env` | Sourced environment | Bash environment file (not executable), affects only bash tools [^8] |
+
+**Search order** (first match wins): [^8]
+1. Project-level: `.mux/<hook>`
+2. User-level: `~/.mux/<hook>`
+
+**Execution constraints:** [^8]
+- 10-second timeout per hook
+- Exit code 0 = success; non-zero = failure
+
+**Environment variables available to all hooks:** [^8]
+- `MUX_TOOL` -- tool name (e.g., `bash`, `file_edit_replace_string`)
+- `MUX_WORKSPACE_ID` -- current workspace identifier
+- `MUX_TOOL_INPUT_PATH` -- file path containing full tool input
+
+Post-hooks additionally receive `MUX_TOOL_RESULT_PATH` (file path with tool result). Fields exceeding 8KB are omitted from tool input/result files; use the PATH variables for complete data. [^8]
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Mux platform.
+
+### Configuration File Paths
+
+- **Global instructions**: `~/.mux/AGENTS.md`
+- **Global MCP config**: `~/.mux/mcp.jsonc`
+- **Global agents**: `~/.mux/agents/<name>.md`
+- **Global skills**: `~/.mux/skills/<name>/SKILL.md`
+- **Global tool hooks**: `~/.mux/tool_pre`, `~/.mux/tool_post`, `~/.mux/tool_env`
+- **Project instructions**: `<project>/AGENTS.md`
+- **Project MCP config**: `<project>/.mux/mcp.jsonc`
+- **Project agents**: `<project>/.mux/agents/<name>.md`
+- **Project skills**: `<project>/.mux/skills/<name>/SKILL.md`
+- **Project init hook**: `<project>/.mux/init`
+- **Project tool hooks**: `<project>/.mux/tool_pre`, `<project>/.mux/tool_post`, `<project>/.mux/tool_env`
+
+### Installing Skills
+
+To install a skill, write a `SKILL.md` file to the appropriate skills directory:
+
+<Tabs>
+  <Tab title="Project Scope">
+    ```
+    .mux/skills/<skill-name>/SKILL.md
+    ```
+  </Tab>
+  <Tab title="Global Scope">
+    ```
+    ~/.mux/skills/<skill-name>/SKILL.md
+    ```
+  </Tab>
+</Tabs>
+
+Skill names must match `^[a-z0-9]+(?:-[a-z0-9]+)*$` (1-64 characters). The `name` field in SKILL.md frontmatter must match the directory name. [^5]
+
+### Installing MCP Servers
+
+To programmatically register an MCP server, merge the server definition into the appropriate `mcp.jsonc` file:
+
+<CodeGroup>
+
+```jsonc Global (~/.mux/mcp.jsonc)
+{
+  "servers": {
+    "package-server": "npx -y @scope/mcp-server-package"
+  }
+}
+```
+
+```jsonc Project (.mux/mcp.jsonc)
+{
+  "servers": {
+    "package-server": "npx -y @scope/mcp-server-package"
+  }
+}
+```
+
+</CodeGroup>
+
+MCP config files use JSONC format (JSON with comments). The installer must parse the existing file (if present), merge the new server entry, and write the result back without overwriting existing entries. [^4]
+
+### Installing Custom Agents
+
+Write a Markdown file with YAML frontmatter to the agents directory:
+
+<Tabs>
+  <Tab title="Project Scope">
+    ```
+    .mux/agents/<agent-name>.md
+    ```
+  </Tab>
+  <Tab title="Global Scope">
+    ```
+    ~/.mux/agents/<agent-name>.md
+    ```
+  </Tab>
+</Tabs>
+
+The agent ID is derived from the filename. Project-level agents take priority over global agents with the same ID. [^2]
+
+### Installing Project Instructions
+
+To install project-level instructions, write or append to `<project>/AGENTS.md`. Mux also checks for `AGENT.md` and `CLAUDE.md` as fallback filenames, but `AGENTS.md` is canonical. If the file already exists, the installer should append to it. [^3]
+
+### Config File Format
+
+Mux uses JSONC (JSON with comments) for MCP configuration files (`mcp.jsonc`) and standard JSON for `config.json`. Instruction files are Markdown. Agent definitions are Markdown with YAML frontmatter. [^4] [^2]
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/coder/mux
+[^2]: https://mux.coder.com/agents
+[^3]: https://mux.coder.com/agents/instruction-files
+[^4]: https://mux.coder.com/config/mcp-servers
+[^5]: https://mux.coder.com/agent-skills
+[^6]: https://mux.coder.com/agents/system-prompt
+[^7]: https://mux.coder.com/hooks/init
+[^8]: https://mux.coder.com/hooks/tools
