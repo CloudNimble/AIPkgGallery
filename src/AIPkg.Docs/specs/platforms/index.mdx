@@ -116,3 +116,54 @@ The [Vercel Skills](https://github.com/vercel-labs/skills) project maintains a l
 <Note>
   All Vercel Skills-listed platforms now have full specs. The Vercel Skills list is maintained externally and may change independently of AIPkg's canonical moniker table. Platforms targeting the `ai` root moniker will work with any agent that supports the `AGENTS.md` convention.
 </Note>
+
+---
+
+## AIPkg Capability Support
+
+The [Metadata Schema](../08-metadata-schema) defines nine package capabilities that an `.aipkg` can declare. The table below maps which capabilities each platform can consume.
+
+| Capability | Description | Platforms Supporting It |
+|------------|-------------|------------------------|
+| `skill` | AI skill files (SKILL.md) | Most platforms via Agent Skills open standard |
+| `command` | Slash commands | Claude Code, Copilot, Cursor, Kode, Neovate, Pochi, Qoder, Droid |
+| `agent` | AI agent definitions | Copilot, Gemini CLI, Kiro, Trae, Droid, Kode, Mistral Vibe, Mux, Pochi, Qoder, Kimi CLI |
+| `prompt` | System prompts / templates | Continue (Prompts), Pi (Prompt Templates) |
+| `mcp-server` | MCP server configuration | All platforms with Native MCP support |
+| `lsp-server` | Language Server Protocol server | Claude Code, Copilot, Cursor, Windsurf, Zed |
+| `config` | Platform configuration files | All platforms with config file systems |
+| `hook` | Lifecycle hooks | Claude Code, Copilot, OpenClaw, Kode, Neovate (plugins) |
+| `theme` | UI theme or styling | Cursor, Windsurf, Zed |
+
+<Warning>
+  This capability matrix is a first approximation based on the platform specs. Each platform's individual spec should be consulted for detailed support information. Some capabilities may be partially supported or require platform-specific adaptations.
+</Warning>
+
+---
+
+## Platforms Needing Specs
+
+The following platforms have been identified but do not yet have spec files:
+
+| Platform | Type | Notes |
+|----------|------|-------|
+| GitHub Copilot CLI | Terminal agent | Standalone `copilot` command (GA Feb 2026), distinct from VS Code Copilot. Has MCP, AGENTS.md, SKILL.md, hooks, plugins. |
+| JetBrains Air | Agentic IDE | New IDE (preview March 2026), built on Fleet codebase. Supports multiple agents, MCP, custom slash commands. |
+
+---
+
+## Plugin Ecosystems to Research
+
+<Note>
+  Several platforms maintain their own plugin/extension marketplaces and ecosystems that may interact with or complement AIPkg packages. These need further research to understand how AIPkg can integrate with or distribute through them:
+
+  - **Vercel Skills** — Open standard for agent skills (`SKILL.md`) with a CLI installer and growing registry
+  - **Windsurf MCP Marketplace** — Built-in MCP server marketplace within the Cascade panel
+  - **Goose Extensions** — Extension registry for Goose plugins
+  - **Zencoder Zen Agents Marketplace** — Open-source agent library (`zencoderai/zenagents-library`)
+  - **AdaL Plugin Marketplace** — Built-in `/plugin marketplace` for discovering and installing skills
+  - **ChatGPT GPT Store** — Public marketplace for Custom GPTs and Actions
+  - **VS Code Marketplace** — Extension distribution for Copilot, Cursor, Windsurf, Cline, Roo, Kilo Code, etc.
+  - **JetBrains Marketplace** — Plugin distribution for JetBrains AI, Junie, and Air
+  - **npm / PyPI** — Many MCP servers and CLI agents are distributed as packages
+</Note>
