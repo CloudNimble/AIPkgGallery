@@ -1,0 +1,390 @@
+---
+title: Cursor
+description: Platform specification for Cursor, the AI-first code editor by Anysphere built as a fork of VS Code
+icon: cursor-text
+---
+
+## Overview
+
+[Cursor](https://cursor.com/) is an AI-first code editor by **Anysphere**, forked from VS Code. Extensibility is via MCP servers (JSON config), **Custom Rules** (`.cursor/rules/*.mdc` files), and **Custom Modes** (user-defined tool/prompt configurations).
+
+---
+
+## Configuration
+
+### File Locations
+
+Cursor uses a combination of JSON configuration files and Markdown-based rule files. Configuration is split between global (user-level) and project-level locations.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Global MCP config | `~/.cursor/mcp.json` | MCP servers available across all projects |
+    | Project MCP config | `<project>/.cursor/mcp.json` | MCP servers scoped to a specific project |
+    | Project rules | `<project>/.cursor/rules/*.mdc` | MDC rule files for AI behavior (per-project) |
+    | Legacy rules | `<project>/.cursorrules` | Legacy single-file project rules (deprecated) |
+    | Global rules | Cursor Settings > General > Rules for AI | Global rules applied to all projects |
+    | Cursor settings | Cursor Settings UI (or `settings.json`) | Editor and AI feature configuration |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Global MCP config | `%USERPROFILE%\.cursor\mcp.json` | MCP servers available across all projects |
+    | Project MCP config | `<project>\.cursor\mcp.json` | MCP servers scoped to a specific project |
+    | Project rules | `<project>\.cursor\rules\*.mdc` | MDC rule files for AI behavior (per-project) |
+    | Legacy rules | `<project>\.cursorrules` | Legacy single-file project rules (deprecated) |
+    | Global rules | Cursor Settings > General > Rules for AI | Global rules applied to all projects |
+  </Tab>
+</Tabs>
+
+### Configuration Hierarchy
+
+Settings and rules are resolved in the following order (highest to lowest):
+
+1. **Team Rules** (shared via repository)
+2. **Project Rules** (`.cursor/rules/`)
+3. **User Rules** (Cursor Settings > General > Rules for AI)
+
+All applicable rules are merged. Earlier sources take precedence when guidance conflicts.
+
+<Note>
+  The legacy `.cursorrules` file in the project root still works but is deprecated. Cursor recommends migrating to the `.cursor/rules/` system for better flexibility and granular control.
+</Note>
+
+---
+
+## Custom Instructions / Rules
+
+Cursor supports three levels of rules for customizing AI behavior: Global Rules, Project Rules (`.cursor/rules/*.mdc`), and the legacy `.cursorrules` file.
+
+### Global Rules
+
+Global rules are configured in **Cursor Settings > General > Rules for AI**. They apply to every project and are useful for universal preferences like output language, response length, or coding style.
+
+### Project Rules (`.cursor/rules/*.mdc`)
+
+Project rules provide granular, file-pattern-aware control over AI behavior. Each rule is stored as an MDC (Markdown Configuration) file with YAML frontmatter.
+
+<CodeGroup>
+
+```markdown Always Rule (.cursor/rules/general.mdc)
+---
+description: "General project guidelines"
+globs:
+alwaysApply: true
+---
+
+This is a TypeScript monorepo using pnpm workspaces.
+Prefer functional patterns over classes.
+All public APIs must have JSDoc comments.
+Use strict TypeScript with no `any` types.
+```
+
+```markdown Auto-Attached Rule (.cursor/rules/react.mdc)
+---
+description: "React component standards"
+globs: "src/components/**/*.tsx"
+alwaysApply: false
+---
+
+Use functional components with hooks.
+Prefer named exports over default exports.
+All components must have prop type definitions.
+Use CSS Modules for styling.
+```
+
+```markdown Agent-Requested Rule (.cursor/rules/database.mdc)
+---
+description: "Database migration and schema standards"
+globs:
+alwaysApply: false
+---
+
+Use Prisma for database access.
+All migrations must be reversible.
+Always add indexes for foreign keys.
+```
+
+```markdown Manual Rule (.cursor/rules/deployment.mdc)
+---
+description:
+globs:
+alwaysApply: false
+---
+
+Deploy to staging first. Run smoke tests before production.
+Use blue-green deployment strategy.
+```
+
+</CodeGroup>
+
+### Rule Types
+
+The rule type is determined by the combination of frontmatter fields:
+
+| Rule Type | `alwaysApply` | `globs` | `description` | Behavior |
+|---|---|---|---|---|
+| **Always** | `true` | -- | -- | Always included in context for every request |
+| **Auto-Attached** | `false` | defined | -- | Included when referenced files match the glob pattern |
+| **Agent-Requested** | `false` | -- | defined | Agent retrieves the rule when it determines relevance |
+| **Manual** | `false` | -- | -- | Only included when explicitly referenced via `@Cursor Rules` |
+
+<Info>
+  You can create a new rule using the command palette: **Cmd+Shift+P > New Cursor Rule**. Project rules are version-controlled since they are just files in your repository.
+</Info>
+
+### Legacy `.cursorrules` File
+
+The `.cursorrules` file is placed in the project root and contains plain-text instructions appended to the AI's context. It has no frontmatter or file-pattern matching.
+
+```text .cursorrules
+This is a Python FastAPI project.
+Use type hints for all function parameters and return types.
+Follow PEP 8 naming conventions.
+Prefer async functions for I/O-bound operations.
+Write tests using pytest with fixtures.
+```
+
+<Warning>
+  The `.cursorrules` format is deprecated. Cursor will eventually remove support for it. Migrate to `.cursor/rules/*.mdc` files for better flexibility, file-pattern matching, and reduced token usage.
+</Warning>
+
+---
+
+## Custom Modes
+
+Custom modes allow you to define specialized AI assistants with specific models, tools, and system prompts. Enable them from **Settings > Features > Chat > Custom modes**.
+
+Each custom mode can configure:
+
+- **Name and keybinding** (e.g., "Frontend Expert" on Cmd+E)
+- **Fixed model** (e.g., always use Claude for planning)
+- **Tool selection** (enable/disable specific tools like Edit, Terminal, Codebase, MCP)
+- **Custom instructions** (system prompt for the mode)
+- **Auto-run settings** (whether terminal commands run without confirmation)
+
+---
+
+## MCP Servers
+
+Cursor supports the Model Context Protocol for extending agent capabilities with external tools and data sources. MCP servers are configured via JSON files.
+
+### Configuration Format
+
+<CodeGroup>
+
+```json Project-Level (.cursor/mcp.json)
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "env": {}
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
+      }
+    }
+  }
+}
+```
+
+```json Global (~/.cursor/mcp.json)
+{
+  "mcpServers": {
+    "my-global-server": {
+      "command": "node",
+      "args": ["/path/to/server.js"],
+      "env": {
+        "API_KEY": "your-key"
+      }
+    }
+  }
+}
+```
+
+```json SSE / Remote Server
+{
+  "mcpServers": {
+    "remote-server": {
+      "url": "https://mcp.example.com/sse"
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Transport Types
+
+| Type | Configuration | Use Case |
+|---|---|---|
+| **stdio** | `command` + `args` + `env` | Local MCP servers communicating over standard I/O |
+| **SSE** | `url` | Remote servers using Server-Sent Events |
+| **Streamable HTTP** | `url` | Remote servers using HTTP streaming |
+
+### Adding MCP Servers
+
+<Tabs>
+  <Tab title="Settings UI">
+    Navigate to **Cursor Settings > Tools & MCP > New MCP Server** and fill in the server details. Some servers support one-click installation via deep-link buttons.
+  </Tab>
+  <Tab title="Project Config (Manual)">
+    Create or edit `.cursor/mcp.json` in your project root:
+
+    ```json
+    {
+      "mcpServers": {
+        "my-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "value"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Global Config (Manual)">
+    Create or edit `~/.cursor/mcp.json` to make servers available across all projects.
+  </Tab>
+</Tabs>
+
+<Warning>
+  API keys in `mcp.json` are stored in cleartext. Use the `${env:VAR_NAME}` reference syntax for stdio servers to avoid hardcoding secrets. Never commit `mcp.json` files containing credentials to version control.
+</Warning>
+
+### MCP Capabilities
+
+Cursor supports the full MCP protocol feature set:
+
+| Capability | Status | Description |
+|---|---|---|
+| **Tools** | Supported | Functions the agent can call |
+| **Resources** | Supported (v1.6+) | Contextual data like schemas and file contents |
+| **Prompts** | Supported | Reusable prompt templates |
+| **Sampling** | Supported | Servers can request AI completions |
+| **Elicitation** | Supported (v1.5+) | Servers can ask for structured user input mid-execution |
+
+<Note>
+  Cursor auto-starts stdio MCP servers when Agent mode activates. There is a practical limit of approximately 40 active tools across all servers -- beyond that, the agent's tool selection accuracy degrades.
+</Note>
+
+---
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Cursor platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **Global MCP config**: `~/.cursor/mcp.json`
+    - **Project MCP config**: `<project>/.cursor/mcp.json`
+    - **Project rules**: `<project>/.cursor/rules/*.mdc`
+    - **Legacy rules**: `<project>/.cursorrules`
+  </Tab>
+  <Tab title="Windows">
+    - **Global MCP config**: `%USERPROFILE%\.cursor\mcp.json`
+    - **Project MCP config**: `<project>\.cursor\mcp.json`
+    - **Project rules**: `<project>\.cursor\rules\*.mdc`
+    - **Legacy rules**: `<project>\.cursorrules`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into the `mcpServers` object in `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `mcpServers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- The root key **must** be `mcpServers` (not `servers` or `mcp`); Cursor silently ignores the file if this key is missing
+- For project-scoped servers, write to `<project>/.cursor/mcp.json`
+- For global servers, write to `~/.cursor/mcp.json`
+- Use `command` + `args` + `env` for stdio servers; use `url` for SSE/HTTP servers
+- Always include `-y` in npx args to avoid interactive prompts that hang the server process
+- Cursor auto-starts stdio servers when Agent mode activates; no manual restart is required after config changes
+
+### Installing Project Rules
+
+To install project-level instructions, create MDC files in the `.cursor/rules/` directory:
+
+```markdown
+---
+description: "Package-specific guidelines"
+globs:
+alwaysApply: true
+---
+
+Instructions for using this package...
+```
+
+**Key considerations:**
+
+- Create the `.cursor/rules/` directory if it does not exist
+- Each rule should be a separate `.mdc` file with a descriptive name
+- Use `alwaysApply: true` for rules that should always be in context
+- Use `globs` for rules that apply only to specific file patterns
+- If a `.cursorrules` file already exists, consider appending to it for backward compatibility, but prefer creating `.cursor/rules/` files for new installations
+- Rules files are version-controlled and should be committed to the repository
+
+### Config File Format
+
+Cursor uses JSON for MCP configuration (`mcp.json`). The installer must:
+
+1. Read the existing JSON file (if it exists)
+2. Deep-merge new server definitions into the `mcpServers` object
+3. Write the result back, preserving existing entries
+4. Ensure the `.cursor/` directory exists before writing
+
+<Note>
+  Unlike some other platforms, Cursor does not use a single unified config file. MCP servers go in `mcp.json`, rules go in `.cursor/rules/`, and editor settings are managed through the Cursor Settings UI. An installer primarily interacts with `mcp.json` and `.cursor/rules/`.
+</Note>
+
+### Environment Variable References
+
+For stdio MCP servers, Cursor supports referencing environment variables in the config to avoid hardcoding secrets:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server"],
+      "env": {
+        "API_KEY": "${env:MY_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+### Practical Limits
+
+- Approximately 40 active tools across all MCP servers is the practical upper bound before agent tool-selection accuracy degrades
+- Cursor creates checkpoints before every AI change, enabling rollback regardless of MCP server behavior
+- MCP server stdout is captured for tool responses; stderr is available in Cursor's developer tools for debugging

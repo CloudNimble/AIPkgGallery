@@ -1,0 +1,428 @@
+---
+title: Cline & Roo Code
+description: Platform specification for Cline and Roo Code, open-source autonomous AI coding agent extensions for VS Code
+icon: terminal
+---
+
+## Overview
+
+[Cline](https://cline.bot/) is an open-source AI coding agent VS Code extension (`saoudrizwan.claude-dev`). [Roo Code](https://docs.roocode.com/) is a popular fork (`RooVeterinaryInc.roo-cline`) that adds custom modes, project-level MCP config, and mode-specific rules. Both use MCP for extensibility, `.clinerules`/`.roo/rules/` for custom instructions, and Roo Code supports custom modes via `.roomodes`.
+
+---
+
+## Configuration
+
+### File Locations
+
+Both Cline and Roo Code store their global settings in VS Code's extension global storage directory. Project-level configuration uses files in the workspace root.
+
+<Tabs>
+  <Tab title="Cline">
+    | File | Path | Purpose |
+    |---|---|---|
+    | MCP settings | `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` | Global MCP server configuration |
+    | `.clinerules` | `<project-root>/.clinerules` | Single-file project instructions |
+    | `.clinerules/` | `<project-root>/.clinerules/*.md` | Directory of modular rule files |
+    | `AGENTS.md` | `<project-root>/AGENTS.md` | Fallback agent instructions |
+
+    <Note>
+      On macOS, the global storage base path is `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/`. On Windows, it is `%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/`.
+    </Note>
+  </Tab>
+  <Tab title="Roo Code">
+    | File | Path | Purpose |
+    |---|---|---|
+    | MCP settings | `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json` | Global MCP server configuration |
+    | Project MCP | `<project-root>/.roo/mcp.json` | Project-level MCP server configuration |
+    | Custom modes | `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_custom_modes.json` | Global custom mode definitions |
+    | `.roomodes` | `<project-root>/.roomodes` | Project-level custom mode definitions (JSON or YAML) |
+    | `.roo/rules/` | `<project-root>/.roo/rules/*.md` | Generic workspace rules |
+    | `.roo/rules-{mode}/` | `<project-root>/.roo/rules-code/*.md` | Mode-specific workspace rules |
+    | Global rules | `~/.roo/rules/` | Global rules applied across all projects |
+    | Global mode rules | `~/.roo/rules-{modeSlug}/` | Global mode-specific rules |
+    | `AGENTS.md` | `<project-root>/AGENTS.md` | Agent instructions (loaded by default) |
+
+    <Note>
+      On macOS, the global storage base path is `~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/`. On Windows, it is `%APPDATA%/Code/User/globalStorage/rooveterinaryinc.roo-cline/`. Paths also apply to VS Code forks like Cursor and Windsurf (with their respective config directories).
+    </Note>
+  </Tab>
+</Tabs>
+
+### VS Code Settings
+
+Both extensions expose their settings through VS Code's standard settings system. Key settings can be configured via `settings.json`:
+
+```json VS Code settings.json
+{
+  // Roo Code: disable AGENTS.md auto-loading
+  "roo-cline.useAgentRules": false
+}
+```
+
+---
+
+## Custom Instructions
+
+### Cline: .clinerules
+
+Cline rules provide system-level guidance and preferences that persist across conversations. Rules can exist as either a single `.clinerules` text file or as multiple Markdown files within a `.clinerules/` directory.
+
+<CodeGroup>
+
+```text Single File (.clinerules)
+This is a TypeScript monorepo using pnpm workspaces.
+
+Coding conventions:
+- Use strict TypeScript with no `any` types
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+
+To run tests: pnpm test
+To build: pnpm build
+```
+
+```text Directory Structure
+your-project/
+├── .clinerules/
+│   ├── 01-coding.md        # Core coding standards
+│   ├── 02-documentation.md # Documentation requirements
+│   └── current-sprint.md   # Sprint-specific rules
+├── src/
+```
+
+</CodeGroup>
+
+**Key characteristics:**
+
+- Cline automatically processes all Markdown files inside `.clinerules/`, combining them into a unified set of rules
+- Numeric prefixes (e.g., `01-`, `02-`) are optional but help organize files in a logical sequence
+- Rules are version-controllable and can be committed to Git
+- Cline can read, write, and edit rule files -- enabling interactive rule refinement
+- A toggleable popover in the UI (v3.13+) lets you enable/disable specific rule files
+- The `/newrule` slash command creates new rule files
+
+<Warning>
+  Cline has deprecated the older "Custom Instructions" text field in the settings UI in favor of `.clinerules` files. Migrate any existing custom instructions to `.clinerules` files.
+</Warning>
+
+### Roo Code: .roo/rules/
+
+Roo Code uses a directory-based rules system with support for mode-specific rules.
+
+```text Directory Structure
+your-project/
+├── .roo/
+│   ├── rules/              # Generic rules (all modes)
+│   │   ├── coding-style.md
+│   │   └── project-info.md
+│   ├── rules-code/         # Rules for Code mode only
+│   │   └── code-standards.md
+│   ├── rules-architect/    # Rules for Architect mode only
+│   │   └── design-patterns.md
+│   └── mcp.json            # Project-level MCP config
+```
+
+**Rules loading order:**
+
+1. Global rules (`~/.roo/rules/` and `~/.roo/rules-{modeSlug}/`)
+2. Workspace generic rules (`.roo/rules/`)
+3. Workspace mode-specific rules (`.roo/rules-{modeSlug}/`)
+4. `AGENTS.md` files (loaded after mode-specific rules)
+
+Files within each directory are read recursively and appended to the system prompt in alphabetical order by filename. Workspace rules take precedence over global rules in case of conflict.
+
+<Note>
+  Legacy files (`.roorules`, `.clinerules` at workspace root) are used only if no generic rules directory content is found. The preferred approach is the `.roo/rules/` directory structure.
+</Note>
+
+---
+
+## Custom Mode Configuration (Roo Code)
+
+Custom modes are defined in a `.roomodes` file at the project root (JSON or YAML format):
+
+```json .roomodes
+{
+  "customModes": [
+    {
+      "slug": "docs-writer",
+      "name": "Documentation Writer",
+      "description": "Specialized mode for technical documentation",
+      "roleDefinition": "You are a technical writer specializing in clear, comprehensive documentation.",
+      "whenToUse": "Use this mode for writing and editing documentation files.",
+      "customInstructions": "Focus on clarity, completeness, and consistency.",
+      "groups": [
+        "read",
+        ["edit", { "fileRegex": "\\.(md|mdx)$", "description": "Markdown files only" }],
+        "command"
+      ]
+    }
+  ]
+}
+```
+
+**Tool group options for the `groups` array:**
+
+| Group | Description |
+|---|---|
+| `"read"` | Read files and directories |
+| `"edit"` | Edit and create files (supports file regex restrictions) |
+| `"command"` | Execute terminal commands |
+| `"browser"` | Use browser capabilities |
+| `"mcp"` | Use MCP server tools |
+
+Groups can be simple strings or arrays with file restrictions using `fileRegex` patterns.
+
+---
+
+---
+
+## MCP Servers
+
+Both Cline and Roo Code support the Model Context Protocol for extending capabilities with external tools.
+
+### MCP Configuration Format
+
+<Tabs>
+  <Tab title="Cline (Global)">
+    Cline stores MCP configuration in a global settings file:
+
+    ```json cline_mcp_settings.json
+    {
+      "mcpServers": {
+        "my-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "your-api-key"
+          },
+          "alwaysAllow": ["tool1", "tool2"],
+          "disabled": false
+        }
+      }
+    }
+    ```
+
+    **File location:**
+    - **Linux:** `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+    - **macOS:** `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+    - **Windows:** `%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+
+    <Note>
+      Cline currently supports only global MCP configuration. Project-level MCP configuration (e.g., `.cline/mcp.json`) is a requested feature but is not yet implemented.
+    </Note>
+  </Tab>
+  <Tab title="Roo Code (Global + Project)">
+    Roo Code supports both global and project-level MCP configuration:
+
+    **Global** (`cline_mcp_settings.json` in Roo Code's global storage):
+    ```json
+    {
+      "mcpServers": {
+        "global-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "your-api-key"
+          },
+          "alwaysAllow": [],
+          "disabled": false
+        }
+      }
+    }
+    ```
+
+    **Project-level** (`.roo/mcp.json` in workspace root):
+    ```json
+    {
+      "mcpServers": {
+        "project-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/project-specific-server"],
+          "env": {
+            "PROJECT_TOKEN": "token-value"
+          }
+        }
+      }
+    }
+    ```
+
+    If a server name exists in both global and project configurations, the **project-level configuration takes precedence**. The `.roo/mcp.json` file can be committed to version control for team sharing.
+  </Tab>
+</Tabs>
+
+### MCP Server Configuration Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `command` | string | The command to start the MCP server (e.g., `npx`, `node`, `python`) |
+| `args` | string[] | Arguments for the server command |
+| `env` | object | Environment variables passed to the server process |
+| `alwaysAllow` | string[] | List of tool names to auto-approve without confirmation |
+| `disabled` | boolean | Whether the server is disabled |
+| `transportType` | string | Transport type (e.g., `"stdio"`) |
+| `timeout` | number | Server startup timeout in seconds |
+
+### Built-in MCP Marketplace
+
+Both extensions include a built-in MCP server marketplace accessible from the toolbar. You can browse servers by category (web scraping, file systems, research tools, etc.) and install them with one click. If a server requires an API key, the extension walks you through configuration.
+
+Both Cline and Roo Code can also create custom MCP servers on demand -- ask the agent to "add a tool" and it will create, build, and register a new MCP server tailored to your workflow.
+
+---
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for Cline and Roo Code.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="Cline">
+    | Platform | MCP Settings Path |
+    |---|---|
+    | **Linux** | `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
+    | **macOS** | `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
+    | **Windows** | `%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
+
+    - **Project instructions**: `<project-root>/.clinerules` (single file) or `<project-root>/.clinerules/*.md` (directory)
+    - **AGENTS.md**: `<project-root>/AGENTS.md` (fallback)
+
+    <Warning>
+      Cline does not currently support project-level MCP configuration. MCP servers can only be configured globally. An installer must modify the global `cline_mcp_settings.json` file.
+    </Warning>
+  </Tab>
+  <Tab title="Roo Code">
+    | Platform | MCP Settings Path |
+    |---|---|
+    | **Linux** | `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json` |
+    | **macOS** | `~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json` |
+    | **Windows** | `%APPDATA%/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json` |
+
+    - **Project MCP**: `<project-root>/.roo/mcp.json`
+    - **Project rules**: `<project-root>/.roo/rules/*.md`
+    - **Mode-specific rules**: `<project-root>/.roo/rules-{modeSlug}/*.md`
+    - **Custom modes**: `<project-root>/.roomodes`
+    - **Global rules**: `~/.roo/rules/` and `~/.roo/rules-{modeSlug}/`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into the `mcpServers` object of the appropriate JSON file:
+
+<CodeGroup>
+
+```json Cline (Global Only)
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "value"
+      },
+      "alwaysAllow": [],
+      "disabled": false
+    }
+  }
+}
+```
+
+```json Roo Code (Project-Level .roo/mcp.json)
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+**Key considerations:**
+
+- The `mcpServers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- For Cline, only global configuration is supported; modify `cline_mcp_settings.json`
+- For Roo Code, prefer project-level `.roo/mcp.json` when the server is project-specific (it can be committed to version control)
+- For Roo Code, project-level configuration takes precedence over global configuration when server names collide
+- The MCP settings file path varies by VS Code variant (Cursor, Windsurf, etc.) -- the editor's config directory replaces `Code` in the path
+- The global settings directory must exist before writing; create it if necessary
+- Both extensions pick up MCP configuration changes without a restart
+
+### Installing Project Instructions
+
+<Tabs>
+  <Tab title="Cline">
+    To install project-level instructions, either:
+    - Write a `.clinerules` file to the project root (single file approach)
+    - Create a `.clinerules/` directory and add Markdown files (modular approach)
+
+    If a `.clinerules` file already exists, the installer should append to it. If using the directory approach, add new `.md` files without removing existing ones.
+  </Tab>
+  <Tab title="Roo Code">
+    To install project-level instructions:
+    - Create the `.roo/rules/` directory if it does not exist
+    - Add Markdown files with instructions
+    - For mode-specific rules, use `.roo/rules-{modeSlug}/` directories
+
+    Files are loaded in alphabetical order by filename. Use numeric prefixes to control ordering.
+  </Tab>
+</Tabs>
+
+### Installing Custom Modes (Roo Code Only)
+
+To install a custom mode, write or merge into the `.roomodes` file at the project root:
+
+```json .roomodes
+{
+  "customModes": [
+    {
+      "slug": "my-custom-mode",
+      "name": "My Custom Mode",
+      "roleDefinition": "You are a specialized assistant for...",
+      "groups": ["read", "edit", "command"],
+      "customInstructions": "Additional instructions for this mode."
+    }
+  ]
+}
+```
+
+If a `.roomodes` file already exists, parse it (JSON or YAML), append the new mode to the `customModes` array (avoiding duplicate slugs), and write it back.
+
+### Config File Format
+
+Both extensions use JSON for their configuration files. The installer must:
+
+1. Parse the existing JSON file (if it exists)
+2. Deep-merge new server definitions into the `mcpServers` object
+3. Write the result back, preserving existing entries
+
+The `mcpServers` key is the primary integration point for MCP server packages.
+
+### Extension Detection
+
+To detect whether Cline or Roo Code is installed, check for the extension directory:
+
+| Extension | Directory Name |
+|---|---|
+| **Cline** | `saoudrizwan.claude-dev` in VS Code's extensions directory |
+| **Roo Code** | `rooveterinaryinc.roo-cline` in VS Code's extensions directory |
+
+Or use the VS Code CLI:
+
+```bash
+# Check if Cline is installed
+code --list-extensions | grep saoudrizwan.claude-dev
+
+# Check if Roo Code is installed
+code --list-extensions | grep RooVeterinaryInc.roo-cline
+```

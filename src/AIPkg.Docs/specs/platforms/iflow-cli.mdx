@@ -1,0 +1,484 @@
+---
+title: 'iFlow CLI'
+description: 'Platform specification for iFlow CLI, an AI coding agent'
+icon: 'terminal'
+---
+
+## Overview
+
+[iFlow CLI](https://github.com/iflow-ai/iflow-cli) is an open-source terminal-based AI coding agent by **iFlow (Alibaba)** that embeds in your terminal, analyzes repositories, and performs tasks from file operations to complex workflow automation.[^1] Extensibility is via MCP servers, **Skills** (`SKILL.md` workflow definitions), **SubAgents** (specialized agent configurations), **Hooks** (lifecycle event handlers), and **IFLOW.md** project instruction files.[^2]
+
+---
+
+## Configuration
+
+### File Locations
+
+iFlow CLI uses a hierarchical configuration system with JSON settings files and Markdown instruction files.[^3]
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User settings | `~/.iflow/settings.json` | Personal global settings for all projects |
+    | User instructions | `~/.iflow/IFLOW.md` | Global instructions applied to all projects |
+    | User skills | `~/.iflow/skills/<name>/SKILL.md` | Personal skills available across all projects |
+    | MCP config | `~/.iflow/settings.json` (under `mcpServers`) | User-scoped MCP server definitions |
+    | MCP config (alt) | `~/.iflow/mcp/config.json` | Global MCP configuration |
+    | Project settings | `<project>/.iflow/settings.json` | Project-specific settings |
+    | Project instructions | `<project>/IFLOW.md` | Project-level instructions (committed to repo) |
+    | Directory instructions | `<project>/src/IFLOW.md` | Subdirectory-level overrides |
+    | Project skills | `<project>/.iflow/skills/<name>/SKILL.md` | Project-specific skills |
+    | Project MCP | `<project>/.iflow/mcp.json` | Project-scoped MCP server definitions |
+    | Project agents | `<project>/.iflow/agents/<name>.md` | Project-specific subagent definitions |
+  </Tab>
+  <Tab title="Linux (System)">
+    | File | Path | Purpose |
+    |---|---|---|
+    | System settings | `/etc/iflow-cli/settings.json` | System-wide settings |
+  </Tab>
+  <Tab title="macOS (System)">
+    | File | Path | Purpose |
+    |---|---|---|
+    | System settings | `/Library/Application Support/iFlowCli/settings.json` | System-wide settings |
+  </Tab>
+  <Tab title="Windows (System)">
+    | File | Path | Purpose |
+    |---|---|---|
+    | System settings | `C:\ProgramData\iflow-cli\settings.json` | System-wide settings |
+  </Tab>
+</Tabs>
+
+### settings.json Structure
+
+<CodeGroup>
+
+```json Basic Configuration
+{
+  "selectedAuthType": "iflow",
+  "apiKey": "your-iflow-key",
+  "baseUrl": "https://apis.iflow.cn/v1",
+  "modelName": "Qwen3-Coder",
+  "theme": "Default",
+  "contextFileName": "IFLOW.md"
+}
+```
+
+```json MCP Servers
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server"],
+      "env": { "API_KEY": "$MY_API_TOKEN" },
+      "cwd": "/path/to/working/dir",
+      "timeout": 30000,
+      "trust": false,
+      "includeTools": ["tool-a", "tool-b"],
+      "excludeTools": ["tool-c"]
+    }
+  },
+  "allowMCPServers": ["server-a", "server-b"],
+  "excludeMCPServers": ["server-c"]
+}
+```
+
+```json Hooks Configuration
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".iflow/hooks/protect-files.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".iflow/hooks/auto-format.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Session started'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+</CodeGroup>
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):[^3]
+
+1. **Command-line parameters**
+2. **IFLOW-prefixed environment variables** (e.g., `IFLOW_modelName`)
+3. **System configuration** (`/etc/iflow-cli/settings.json` on Linux)
+4. **Project settings** (`.iflow/settings.json`)
+5. **User settings** (`~/.iflow/settings.json`)
+6. **Application defaults**
+
+<Note>
+  All settings in `settings.json` can be overridden via environment variables using the `IFLOW_` prefix. Priority ordering: `IFLOW_camelCase` > `IFLOW_underscore` > `iflow_camelCase` > `iflow_underscore`.[^3]
+</Note>
+
+### The IFLOW.md File
+
+`IFLOW.md` is a Markdown file that iFlow CLI reads at session start. It serves as persistent memory for coding standards, architecture decisions, and project-specific instructions. The filename is configurable via the `contextFileName` setting and can accept a single filename or an array of filenames (e.g., `["IFLOW.md", "AGENTS.md"]`).[^4]
+
+```markdown IFLOW.md
+# Project: My App
+
+## Build & Test
+- Build: `pnpm build`
+- Test: `pnpm test`
+
+## Code Style
+- Use TypeScript with strict mode
+- Prefer functional patterns over classes
+
+## Architecture
+- packages/core: Shared business logic
+- packages/web: Next.js frontend
+```
+
+**Placement locations:**[^4]
+
+| Scope | Location | Behavior |
+|---|---|---|
+| Global | `~/.iflow/IFLOW.md` | Applied to all projects for all sessions |
+| Project | `<project-root>/IFLOW.md` | Loaded at session start, committed to repo |
+| Subdirectory | `<subdirectory>/IFLOW.md` | Loaded when working in that directory |
+
+iFlow CLI searches for context files starting from the current working directory up to the project root (identified by a `.git` folder), and also scans subdirectories (limited to 200 directories by default, configurable via `memoryDiscoveryMaxDirs`).[^4]
+
+**Modular imports:** IFLOW.md supports importing other files using `@` syntax, for example `@./shared/coding-standards.md`.[^4]
+
+<Note>
+  IFLOW.md content is added as user messages after iFlow CLI's default system prompt -- it does not replace the system prompt.[^4] Use `/init` to auto-generate an IFLOW.md by scanning your codebase, and `/memory refresh` to force a rescan of all context files.
+</Note>
+
+---
+
+## MCP Servers
+
+iFlow CLI connects to external tools through the Model Context Protocol. MCP servers can be configured at multiple scope levels:[^5]
+
+| Scope | Storage | Who can access |
+|---|---|---|
+| **Global** | `~/.iflow/settings.json` or `~/.iflow/mcp/config.json` | You, across all projects |
+| **Project** | `<project>/.iflow/settings.json` or `<project>/.iflow/mcp.json` | All collaborators on this project |
+
+<Tabs>
+  <Tab title="CLI (iflow mcp add-json)">
+    ```bash
+    # Add an MCP server from JSON configuration
+    iflow mcp add-json my-server '{"command":"npx","args":["-y","@scope/mcp-server"],"env":{"API_KEY":"value"}}'
+    ```
+  </Tab>
+  <Tab title="settings.json">
+    ```json
+    {
+      "mcpServers": {
+        "my-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server"],
+          "env": {
+            "API_KEY": "$MY_API_TOKEN"
+          },
+          "includeTools": ["tool-a"],
+          "excludeTools": ["tool-b"]
+        }
+      }
+    }
+    ```
+
+    Environment variables can be referenced using `$VAR_NAME` or `${VAR_NAME}` syntax.[^3]
+  </Tab>
+</Tabs>
+
+### MCP Server Options
+
+Each MCP server entry in the `mcpServers` object supports these fields:[^6]
+
+| Field | Type | Description |
+|---|---|---|
+| `command` | string (required) | Command to launch the MCP server |
+| `args` | string[] | Arguments passed to the command |
+| `env` | object | Environment variables for the server process |
+| `cwd` | string | Working directory for the server |
+| `timeout` | number | Request timeout in milliseconds |
+| `trust` | boolean | Bypass tool confirmation prompts |
+| `includeTools` | string[] | Whitelist of tool names to expose |
+| `excludeTools` | string[] | Blacklist of tools (takes precedence over `includeTools`) |
+
+<Note>
+  If multiple MCP servers expose tools with the same name, iFlow CLI prefixes tool names with the server alias (e.g., `serverAlias__actualToolName`) to avoid conflicts.[^5]
+</Note>
+
+### Global MCP Filtering
+
+Use `allowMCPServers` and `excludeMCPServers` in `settings.json` to control which MCP servers are connected globally. Servers listed in both arrays will be excluded. These settings are overridden by the `--allowed-mcp-server-names` CLI flag.[^5]
+
+---
+
+## Hooks System
+
+Hooks are user-defined shell commands that execute automatically at specific points in iFlow CLI's lifecycle.[^7]
+
+### Hook Events
+
+| Event | When it fires | Matcher filters on |
+|---|---|---|
+| `PreToolUse` | Before a tool call executes (can block it) | Tool name pattern |
+| `PostToolUse` | After a tool call completes | Tool name pattern |
+| `SetUpEnvironment` | During environment setup at initialization | -- |
+| `SessionStart` | Session begins | Source: `startup`, `resume`, `clear`, `compress` |
+| `SessionEnd` | Session terminates | -- |
+| `Stop` | Main session ends | -- |
+| `SubagentStop` | A subagent ends | -- |
+| `UserPromptSubmit` | User submits a prompt (can block it) | Prompt content |
+| `Notification` | A notification is triggered | Message content |
+
+### Hook Configuration
+
+Hooks are defined in `settings.json` at user or project scope. Project-level hooks supplement user-level hooks.[^7]
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".iflow/hooks/protect-files.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Hook Input and Exit Codes
+
+Hook commands receive JSON data via **stdin** with these fields:[^7]
+
+| Field | Available in | Description |
+|---|---|---|
+| `session_id` | All hooks | Current session identifier |
+| `hook_event_name` | All hooks | Name of the triggering event |
+| `cwd` | All hooks | Current working directory |
+| `tool_name` | PreToolUse, PostToolUse | Name of the tool being called |
+| `tool_input` | PreToolUse, PostToolUse | Arguments passed to the tool |
+
+**Exit codes:**
+
+| Exit Code | Effect |
+|---|---|
+| `0` | Action proceeds normally |
+| `2` | Action is **blocked** (stderr sent as feedback) |
+| Other | Action proceeds; stderr is logged |
+
+<Note>
+  Hook commands that meet matching conditions execute in parallel, and results are collected. The environment variable `IFLOW_SESSION_SOURCE` is available in SessionStart hooks, indicating the session start source.[^7]
+</Note>
+
+---
+
+## Skills
+
+Skills extend iFlow CLI's capabilities with reusable instruction packages. Each skill is a directory containing a `SKILL.md` file as its entry point.[^8]
+
+### Skill Locations
+
+| Scope | Path | Priority |
+|---|---|---|
+| Project | `<project>/.iflow/skills/<skill-name>/SKILL.md` | Higher (takes precedence) |
+| Global | `~/.iflow/skills/<skill-name>/SKILL.md` | Lower |
+
+### Skill Structure
+
+```yaml SKILL.md
+---
+name: my-skill
+description: A clear description of what this skill does and when to use it
+license: MIT
+---
+
+# My Skill Name
+
+[Instructions that iFlow will follow when this skill is active]
+
+## Guidelines
+- Guideline 1
+- Guideline 2
+```
+
+The YAML frontmatter requires `name` and `description` fields. The `name` must use lowercase letters, numbers, and hyphens only (max 64 characters). The `description` should explain both what the skill does and when to use it (max 1024 characters).[^8]
+
+### Skill Directory Layout
+
+```
+my-skill/
+├── SKILL.md          # Core prompt and instructions (required)
+├── scripts/          # Executable scripts
+├── references/       # Documentation loaded into context
+└── assets/           # Templates and other files
+```
+
+### How Skills Are Invoked
+
+Skills are invoked by the model, not the user. iFlow autonomously decides when to use a skill based on the user's request and the skill's description. This differs from slash commands, which require explicit `/command` input.[^8]
+
+<Note>
+  Skills can be installed from the iFlow Open Marketplace. Use `/skills list` to view installed skills and `/skills refresh` to rescan skill directories.[^8]
+</Note>
+
+---
+
+## SubAgents
+
+SubAgents are specialized agents that iFlow CLI can delegate tasks to. The system automatically selects the most suitable agent based on task type.[^9]
+
+### Built-in SubAgent Types
+
+| Type | Purpose |
+|---|---|
+| **Explore** | Read-only codebase search and analysis |
+| **General-purpose** | Complex multi-step tasks with file modification |
+| **Plan** | Research and recommendation before execution |
+
+### Custom SubAgents
+
+Custom subagents are defined as Markdown files in the `.iflow/agents/` directory.[^9] Users can also install subagents from the iFlow Open Marketplace using `/agents install`.
+
+SubAgents can be quickly invoked using the `$` prefix (e.g., `$code-reviewer`, `$frontend-developer`).[^9]
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the iFlow CLI platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **User settings**: `~/.iflow/settings.json`
+    - **User instructions**: `~/.iflow/IFLOW.md`
+    - **User skills**: `~/.iflow/skills/<name>/SKILL.md`
+    - **Project settings**: `<project>/.iflow/settings.json`
+    - **Project instructions**: `<project>/IFLOW.md`
+    - **Project skills**: `<project>/.iflow/skills/<name>/SKILL.md`
+    - **Project agents**: `<project>/.iflow/agents/<name>.md`
+    - **Project MCP**: `<project>/.iflow/mcp.json`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, an installer has two options:
+
+<Tabs>
+  <Tab title="CLI Command">
+    ```bash
+    iflow mcp add-json package-server \
+      '{"command":"npx","args":["-y","@scope/mcp-server-package"],"env":{"API_KEY":"value"}}'
+    ```
+  </Tab>
+  <Tab title="settings.json Merge">
+    Merge the server definition into `~/.iflow/settings.json` or `<project>/.iflow/settings.json` under the `mcpServers` key:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "$API_KEY"
+          }
+        }
+      }
+    }
+    ```
+
+    Environment variables use `$VAR_NAME` syntax in settings values.[^3]
+  </Tab>
+</Tabs>
+
+### Installing Skills
+
+To install a skill, create a directory under the skills path containing a `SKILL.md` file:
+
+<Tabs>
+  <Tab title="Project Scope">
+    Write the skill to `<project>/.iflow/skills/<skill-name>/SKILL.md`.
+  </Tab>
+  <Tab title="Global Scope">
+    Write the skill to `~/.iflow/skills/<skill-name>/SKILL.md`.
+  </Tab>
+</Tabs>
+
+Project-level skills take precedence over global-level skills with the same name.[^8]
+
+### Installing Project Instructions
+
+To install project-level instructions, write or append to `<project>/IFLOW.md`. iFlow CLI merges context files hierarchically from all levels, so appending to an existing file is safe.[^4]
+
+### Config File Format
+
+iFlow CLI uses standard JSON for `settings.json` files. The installer must:
+
+<Steps>
+  <Step title="Parse existing file">
+    Read and parse the existing `settings.json` file (if it exists).
+  </Step>
+  <Step title="Deep-merge">
+    Deep-merge new configuration (e.g., `mcpServers`, `hooks`) into the existing structure, preserving all existing entries.
+  </Step>
+  <Step title="Write back">
+    Write the merged result back to the file.
+  </Step>
+</Steps>
+
+<Warning>
+  Do not overwrite existing `settings.json` files. Always perform a deep-merge to avoid destroying user configuration. The `mcpServers` object and `hooks` arrays are the primary integration points for extensions.
+</Warning>
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/iflow-ai/iflow-cli
+[^2]: https://www.npmjs.com/package/@iflow-ai/iflow-cli
+[^3]: https://platform.iflow.cn/en/cli/configuration/settings
+[^4]: https://platform.iflow.cn/en/cli/configuration/iflow
+[^5]: https://platform.iflow.cn/en/cli/examples/mcp
+[^6]: https://github.com/iflow-ai/iflow-cli-action/blob/main/iflow-settings.schema.json
+[^7]: https://platform.iflow.cn/en/cli/examples/hooks
+[^8]: https://platform.iflow.cn/en/cli/examples/skill
+[^9]: https://platform.iflow.cn/en/cli/examples/subagent

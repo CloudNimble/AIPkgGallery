@@ -1,0 +1,296 @@
+---
+title: 'Qoder'
+description: 'Platform specification for Qoder, an AI coding agent by Alibaba'
+icon: 'code'
+---
+
+[Qoder](https://qoder.com/) is an AI-powered agentic coding platform developed by **Alibaba**, available as a standalone IDE (based on VS Code), a JetBrains plugin, and a terminal CLI (`qodercli`).[^1] Extensibility is provided through project rules (`.qoder/rules/`), AGENTS.md support, MCP server integration, Skills (`SKILL.md` capability packages), custom agents (subagents), custom commands, and a memory system that learns coding preferences over time.[^2][^3][^4]
+
+---
+
+## Configuration
+
+### File Locations
+
+Qoder uses a hierarchical configuration system with global (`~/.qoder/`) and project-level (`.qoder/`) directories.[^3][^4]
+
+| File | Path | Purpose |
+|---|---|---|
+| Project settings | `<project>/.qoder/settings.json` | Project-level settings and hooks |
+| Local overrides | `<project>/.qoder/settings.local.json` | User-specific overrides (not committed) |
+| Global settings | `~/.qoder/settings.json` | User-wide settings |
+| Project rules | `<project>/.qoder/rules/*.md` | Project-specific AI behavior rules |
+| Project skills | `<project>/.qoder/skills/<name>/SKILL.md` | Project-specific skills |
+| Global skills | `~/.qoder/skills/<name>/SKILL.md` | User-wide skills |
+| Project agents | `<project>/.qoder/agents/<name>.md` | Project-specific subagents |
+| Global agents | `~/.qoder/agents/<name>.md` | User-wide subagents |
+| Project commands | `<project>/.qoder/commands/<name>.md` | Project-specific custom commands |
+| Global commands | `~/.qoder/commands/<name>.md` | User-wide custom commands |
+| Project instructions | `<project>/AGENTS.md` | Cross-platform project context |
+
+### Settings Precedence
+
+Settings are resolved with project-local overrides taking highest priority:[^4]
+
+1. `<project>/.qoder/settings.local.json` (highest)
+2. `<project>/.qoder/settings.json`
+3. `~/.qoder/settings.json` (lowest)
+
+---
+
+## Custom Instructions
+
+### Rules
+
+Qoder uses a dedicated rules system stored in the `.qoder/rules/` directory within the project. Rules optimize model adaptation to coding preferences, project frameworks, and code styles.[^5]
+
+| Rule Type | Trigger | Use Case |
+|---|---|---|
+| **Always Apply** | Every AI Chat and Inline Chat request | Project-wide standards enforcement |
+| **Model Decision** | AI evaluates autonomously based on context | Scenario-specific tasks (e.g., unit tests) |
+| **Apply Manually** | User invokes via `@rule` mention | On-demand custom workflows |
+| **Specific Files** | File pattern matching (e.g., `*.js`, `src/**/*.ts`) | Language or directory-specific guidance |
+
+<Note>
+  Rules take precedence over both AGENTS.md content and Memory entries when conflicts occur.[^5][^6]
+</Note>
+
+<Warning>
+  There is a maximum of 100,000 total characters across all active rule files. Excess content is automatically truncated.[^5]
+</Warning>
+
+### AGENTS.md
+
+Qoder supports the `AGENTS.md` standard for cross-platform project context.[^5] Place an `AGENTS.md` file in the project root directory and the agent will automatically recognize and use the instructions defined in the file. The `/init` command can auto-generate an `AGENTS.md` file by analyzing the project codebase.[^4]
+
+---
+
+## MCP Integration
+
+Qoder supports Model Context Protocol servers for extending agent capabilities with external tools and services. MCP configuration is managed through the Qoder Settings UI or by editing a JSON configuration file.[^7]
+
+### Supported Transports
+
+| Type | Description |
+|---|---|
+| **stdio** | Local process communicating via stdin/stdout |
+| **sse** | Remote server using Server-Sent Events |
+| **Streamable HTTP** | Remote HTTP endpoint (auto-detected when configured like SSE) |
+
+### Configuration Format
+
+<CodeGroup>
+
+```json stdio Server
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "<YOUR_TOKEN>"
+      }
+    }
+  }
+}
+```
+
+```json SSE Server
+{
+  "mcpServers": {
+    "fetch": {
+      "type": "sse",
+      "url": "https://example.com/sse"
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+<Warning>
+  MCP servers are only supported in Agent mode. A maximum of 10 MCP servers can be used simultaneously.[^7]
+</Warning>
+
+### CLI Management
+
+The Qoder CLI also supports MCP servers (stdio, SSE, and HTTP transports) and provides the `/mcp` command for interactive management.[^4]
+
+---
+
+## Skills
+
+Qoder supports Skills as modular capability extensions defined by `SKILL.md` files with YAML frontmatter, following the open Agent Skills specification.[^3][^8]
+
+### Skill Structure
+
+```
+skill-name/
+├── SKILL.md          # Required: definition and instructions
+├── REFERENCE.md      # Optional: reference documentation
+├── EXAMPLES.md       # Optional: usage examples
+├── scripts/          # Optional: helper scripts
+└── templates/        # Optional: template files
+```
+
+### SKILL.md Format
+
+```markdown .qoder/skills/my-skill/SKILL.md
+---
+name: my-skill
+description: Brief description of functionality and when to use
+---
+
+Step-by-step instructions for the agent when this skill is activated.
+```
+
+The `name` field must use lowercase letters, numbers, and hyphens only (max 64 characters). The `description` field has a maximum of 1,024 characters.[^8]
+
+### Skill Locations
+
+| Scope | Path | Priority |
+|---|---|---|
+| Project | `<project>/.qoder/skills/<name>/SKILL.md` | Higher |
+| Personal | `~/.qoder/skills/<name>/SKILL.md` | Lower |
+
+Project-level skills override personal skills when names conflict.[^3]
+
+### Invocation
+
+Skills can be triggered automatically (the model selects based on task description) or manually via slash commands (e.g., `/skill-name`). The built-in `/create-skill` command provides interactive guidance for creating new skills.[^3]
+
+---
+
+## Custom Agents (Subagents)
+
+Qoder supports custom agent definitions for task delegation with independent context windows, tool permissions, and system prompts.[^9][^10]
+
+### Agent File Format
+
+```markdown .qoder/agents/reviewer.md
+---
+name: reviewer
+description: Review code for correctness, security, and simplicity
+tools: Read, Grep
+---
+
+Review instructions go here.
+```
+
+### Agent Locations
+
+| Scope | Path |
+|---|---|
+| Project | `<project>/.qoder/agents/<name>.md` |
+| User | `~/.qoder/agents/<name>.md` |
+
+### Built-in Agents
+
+Qoder CLI includes four default subagents: `code-reviewer`, `design-agent`, `general-purpose`, and `task-executor`.[^10]
+
+### Invoking Agents
+
+Agents can be invoked explicitly by name, implicitly (the model selects based on task), or chained together for multi-step workflows. The `/agents` command provides interactive agent management.[^10]
+
+---
+
+## Hooks and Lifecycle
+
+Qoder CLI supports hooks for integrating with external systems at key execution stages, configured in `settings.json`.[^4]
+
+<Note>
+  At the time of writing, only **Notification** hooks are available. More hook types (e.g., tool invocation, session intervention) are planned for future releases.[^4]
+</Note>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Qoder platform.
+
+### Configuration File Paths
+
+| Purpose | Path |
+|---|---|
+| Project settings | `<project>/.qoder/settings.json` |
+| Local overrides | `<project>/.qoder/settings.local.json` |
+| Global settings | `~/.qoder/settings.json` |
+| Project rules | `<project>/.qoder/rules/` |
+| Project skills | `<project>/.qoder/skills/` |
+| Global skills | `~/.qoder/skills/` |
+| Project agents | `<project>/.qoder/agents/` |
+| Global agents | `~/.qoder/agents/` |
+| Project commands | `<project>/.qoder/commands/` |
+| Global commands | `~/.qoder/commands/` |
+| Project instructions | `<project>/AGENTS.md` |
+
+### Installing MCP Server Extensions
+
+MCP server configuration is managed through the Qoder Settings UI. The configuration uses a `mcpServers` JSON object:
+
+```json
+{
+  "mcpServers": {
+    "package-server": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "<KEY>"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- Config format is **JSON** with a `mcpServers` top-level key
+- Merge carefully to avoid overwriting existing server entries
+- For remote servers, use `"type": "sse"` with a `"url"` field
+- Maximum of 10 MCP servers can be active simultaneously[^7]
+
+### Installing Skills
+
+To install a skill, create a directory with a `SKILL.md` file at the appropriate scope:
+
+- **Project scope:** `<project>/.qoder/skills/<skill-name>/SKILL.md`
+- **Global scope:** `~/.qoder/skills/<skill-name>/SKILL.md`
+
+Skills are auto-discovered at runtime. No additional registration is required.[^3]
+
+### Installing Project Instructions
+
+Write an `AGENTS.md` file to the project root. If one already exists, the installer should append rather than overwrite. Rules in `.qoder/rules/` take precedence over AGENTS.md content.[^5]
+
+### Installing Custom Agents
+
+Write a Markdown file with YAML frontmatter to `<project>/.qoder/agents/<name>.md` or `~/.qoder/agents/<name>.md`. The frontmatter must include `name` and `description` fields.[^9]
+
+### Skill Install Paths (Vercel Skills)
+
+The Vercel Skills project uses the following install paths for Qoder:[^11]
+
+- **Project path:** `.qoder/skills/`
+- **Global path:** `~/.qoder/skills/`
+
+Skills can be installed via the Vercel Skills CLI:
+
+```bash
+npx skills add vercel-labs/agent-skills -a qoder
+```
+
+---
+
+## Footnotes
+
+[^1]: https://qoder.com/
+[^2]: https://docs.qoder.com
+[^3]: https://docs.qoder.com/extensions/skills
+[^4]: https://docs.qoder.com/cli/using-cli
+[^5]: https://docs.qoder.com/user-guide/rules
+[^6]: https://docs.qoder.com/user-guide/chat/memory
+[^7]: https://docs.qoder.com/user-guide/chat/model-context-protocol
+[^8]: https://docs.qoder.com/cli/Skills
+[^9]: https://docs.qoder.com/extensions/subagent
+[^10]: https://docs.qoder.com/en/cli/user-guide/subagent
+[^11]: https://github.com/vercel-labs/skills

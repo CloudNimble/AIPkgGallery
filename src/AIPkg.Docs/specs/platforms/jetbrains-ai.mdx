@@ -1,0 +1,390 @@
+---
+title: JetBrains AI Assistant
+description: Platform specification for JetBrains AI Assistant and Junie, the AI-powered coding tools integrated into JetBrains IDEs
+icon: brain
+---
+
+## Overview
+
+[JetBrains AI Assistant](https://www.jetbrains.com/ai-assistant/) is a multi-model AI plugin for all JetBrains IDEs, extensible through MCP servers, project rules, custom prompt libraries, and the Agent Client Protocol (ACP) for third-party agent integration.
+
+---
+
+## Configuration
+
+### Settings Location
+
+All AI Assistant settings are accessed through the IDE settings dialog:
+
+**Settings | Tools | AI Assistant**
+
+This is the primary configuration hub, with sub-pages for:
+
+- **Prompt Library** -- Custom and built-in prompt templates
+- **Rules** -- Project-level AI instruction files
+- **Model Context Protocol (MCP)** -- MCP server connections
+- **Providers & API keys** -- Third-party LLM and local model configuration
+- **Project Settings** -- `.aiignore` and project-specific options
+
+### Key Configuration Files
+
+| File / Directory | Location | Purpose |
+|---|---|---|
+| `.aiignore` | Project root | Exclude files/folders from AI processing (`.gitignore` syntax) |
+| `.aiassistant/rules/*.md` | Project root | Project-level AI instruction rules |
+| `.jb-mcp.json` | Project root | Project-level MCP server definitions |
+
+<Note>
+  JetBrains AI Assistant also recognizes `.cursorignore`, `.codeiumignore`, and `.aiexclude` files as alternatives to `.aiignore`, so there is no need to create a separate file if one of these already exists in the project.
+</Note>
+
+### The `.aiignore` File
+
+The `.aiignore` file prevents AI Assistant from processing specific files or folders. It uses the same syntax as `.gitignore`.
+
+<Steps>
+  <Step title="Enable .aiignore">
+    Navigate to **Settings | Tools | AI Assistant | Project Settings** and check **Enable .aiignore**.
+  </Step>
+  <Step title="Create the file">
+    Click **Create .aiignore file**, or manually create `.aiignore` at the project root.
+  </Step>
+  <Step title="Add patterns">
+    Add file and directory patterns using `.gitignore` syntax:
+    ```gitignore
+    # Exclude secrets and credentials
+    .env
+    credentials/
+    *.key
+
+    # Exclude generated files
+    build/
+    dist/
+    node_modules/
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  The `.aiignore` file only affects the JetBrains AI Assistant plugin. It does not affect third-party AI plugins or other tools that may send code to external LLMs. In some edge cases, ignored files may still be processed due to unforeseen issues.
+</Warning>
+
+---
+
+## Custom Prompts
+
+### Prompt Library
+
+The Prompt Library stores reusable prompt templates that appear as **AI Actions** in the editor context menu. Access it via:
+
+- **Settings | Tools | AI Assistant | Prompt Library**
+- Right-click in editor, then **AI Actions | Add Your Prompts**
+- Press `Alt+Enter`, select **AI Actions**, then **Add your prompts**
+
+### Creating a Custom Prompt
+
+<Steps>
+  <Step title="Open Prompt Library">
+    Navigate to **Settings | Tools | AI Assistant | Prompt Library**.
+  </Step>
+  <Step title="Add a new prompt">
+    Click the **+** button to create a new entry.
+  </Step>
+  <Step title="Write the prompt text">
+    Enter your prompt instructions in the text field. Use the `$SELECTION` variable to include the currently selected code as a Markdown-formatted code block with language identifier.
+  </Step>
+  <Step title="Name the prompt">
+    Give your prompt a descriptive name that will appear in the AI Actions menu.
+  </Step>
+  <Step title="Configure options">
+    - **Wait for additional user input after invoking** -- Enable if you want to add extra context in the chat after triggering the prompt.
+    - **Show prompt in 'AI Actions' popup** -- Keep enabled to make the prompt accessible from the editor context menu.
+  </Step>
+</Steps>
+
+### Available Variables
+
+| Variable | Description |
+|---|---|
+| `$SELECTION` | Inserts the currently selected code as a Markdown code block with language identifier |
+
+### Modifying Built-in Prompts
+
+Built-in prompts (e.g., "Explain Code", "Generate Unit Tests", "Suggest Refactoring") can be extended without replacing them:
+
+1. Open the Prompt Library
+2. Select the built-in action to modify
+3. Add supplementary instructions that append to the existing prompt
+4. Click **Apply**
+
+<Info>
+  Custom prompts saved in the Prompt Library act as "AI macros" for frequently performed tasks. They are available in the right-click AI Actions menu and can be triggered via keyboard shortcuts.
+</Info>
+
+---
+
+## Project Rules
+
+Project rules let you define coding standards, tech stack preferences, and behavioral guidelines that AI Assistant follows during chat sessions.
+
+### Creating Rules
+
+Rules are Markdown files stored in the `.aiassistant/rules/` directory at the project root.
+
+<Tabs>
+  <Tab title="Via Settings UI">
+    1. Go to **Settings | Tools | AI Assistant | Rules**
+    2. Click **New Project Rules File**
+    3. Provide a name for the rule file
+  </Tab>
+  <Tab title="Manual Creation">
+    1. Create the `.aiassistant/rules/` directory in your project root
+    2. Add `.md` files with your rule content:
+    ```markdown
+    # Coding Standards
+
+    - Use TypeScript strict mode
+    - Prefer functional components with hooks over class components
+    - All public functions must have JSDoc comments
+    - Use Vitest for testing, not Jest
+    ```
+  </Tab>
+</Tabs>
+
+### Rule Application Modes
+
+| Mode | Behavior |
+|---|---|
+| **Always** | Automatically applied to all chat sessions |
+| **Manually** | Applied only when invoked via `@rule:` or `#rule:` in the chat |
+| **By model decision** | Applied when the AI model considers the rule relevant, based on a provided instruction |
+| **By file patterns** | Applied when a referenced file matches a glob pattern (e.g., `*.kt`, `src/**`) |
+| **Off** | Rule is inactive and not applied |
+
+<Note>
+  By default, rules set to "Always" are automatically injected into every chat session. To ensure rules are consistently applied to specific actions like "Generate Unit Tests", consider duplicating them in the Prompt Library as well.
+</Note>
+
+---
+
+## MCP Servers
+
+AI Assistant supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) for connecting to external tools and data sources. MCP servers extend AI Assistant's capabilities with tools, resources, and prompts from external systems.
+
+### Transport Types
+
+| Transport | Description |
+|---|---|
+| **STDIO** | IDE launches the server as a subprocess; data exchanged via stdin/stdout. Best for local servers. |
+| **Streamable HTTP** | Connects over HTTP; supports request/response and streaming. Works for local and remote servers. |
+| **SSE (Legacy)** | Server-Sent Events transport for legacy MCP servers. |
+
+### Configuring MCP Servers
+
+<Steps>
+  <Step title="Open MCP Settings">
+    Navigate to **Settings | Tools | AI Assistant | Model Context Protocol (MCP)**.
+  </Step>
+  <Step title="Add a Server">
+    Click **Add** to create a new MCP server configuration.
+  </Step>
+  <Step title="Select Transport and Provide Configuration">
+    Choose the transport type and enter the JSON configuration for your server.
+  </Step>
+  <Step title="Set Server Level">
+    Choose whether the server is available **globally** (all projects) or **only in the current project**.
+  </Step>
+</Steps>
+
+### JSON Configuration Format
+
+<Tabs>
+  <Tab title="STDIO (Local)">
+    ```json
+    {
+      "mcpServers": {
+        "my-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "your-key-here"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Streamable HTTP (Remote)">
+    ```json
+    {
+      "mcpServers": {
+        "my-remote-server": {
+          "url": "https://mcp.example.com/endpoint"
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Project-Level MCP Configuration
+
+MCP servers can also be defined in a `.jb-mcp.json` file at the project root, enabling version-controlled, team-shared server definitions:
+
+```json
+{
+  "mcpServers": {
+    "project-database": {
+      "command": "npx",
+      "args": ["-y", "@mcp/postgres-server"],
+      "env": {
+        "DATABASE_URL": "postgresql://localhost:5432/mydb"
+      }
+    }
+  }
+}
+```
+
+### Importing from Claude Desktop
+
+If you already have MCP servers configured in Claude Desktop, click **Import from Claude** in the MCP settings dialog to reuse your existing `claude_desktop_config.json` configuration.
+
+### Using MCP Tools
+
+MCP tools are invoked in AI Chat using the `/` symbol. Codebase mode must be enabled for MCP tools to be available. Tools provided by MCP servers are also accessible to Junie and third-party agents like Claude Agent.
+
+<Info>
+  MCP server logs are available via **Help | Show Log in Explorer/Finder** in the `mcp` folder, with individual log files for each configured server.
+</Info>
+
+---
+
+## Agent Client Protocol (ACP)
+
+JetBrains has developed the **Agent Client Protocol (ACP)**, which standardizes communication between IDEs and coding agents (analogous to LSP for language servers). Third-party agents integrated via ACP include:
+
+- **Claude Agent** (Anthropic) -- first third-party agent natively integrated into JetBrains IDEs
+- **Codex** (OpenAI) -- accessible via ChatGPT account sign-in
+- **Cursor** -- available as an AI agent through ACP
+
+You can pass custom MCP servers to installed agents and expose the IDE's built-in MCP server to them.
+
+### Built-in MCP Server (IDE as MCP Server)
+
+Starting with IDE version 2025.2, JetBrains IDEs can act as an MCP server themselves, exposing IDE capabilities (code navigation, refactoring, search, inspections) to external AI clients:
+
+- Enable via **Settings | Tools | MCP Server** and check **Enable MCP Server**
+- External clients like Claude Code, Claude Desktop, Cursor, VS Code, and Windsurf can connect automatically
+- Configuration can be performed via the settings UI for supported external clients
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the JetBrains AI Assistant platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS">
+    - **IDE settings directory**: `~/Library/Application Support/JetBrains/<product><version>/`
+    - **IDE plugins directory**: `~/Library/Application Support/JetBrains/<product><version>/plugins/`
+    - **Project rules**: `<project>/.aiassistant/rules/*.md`
+    - **Project MCP config**: `<project>/.jb-mcp.json`
+    - **AI ignore file**: `<project>/.aiignore`
+  </Tab>
+  <Tab title="Linux">
+    - **IDE settings directory**: `~/.config/JetBrains/<product><version>/`
+    - **IDE plugins directory**: `~/.local/share/JetBrains/<product><version>/plugins/`
+    - **Project rules**: `<project>/.aiassistant/rules/*.md`
+    - **Project MCP config**: `<project>/.jb-mcp.json`
+    - **AI ignore file**: `<project>/.aiignore`
+  </Tab>
+  <Tab title="Windows">
+    - **IDE settings directory**: `%APPDATA%\JetBrains\<product><version>\`
+    - **IDE plugins directory**: `%APPDATA%\JetBrains\<product><version>\plugins\`
+    - **Project rules**: `<project>\.aiassistant\rules\*.md`
+    - **Project MCP config**: `<project>\.jb-mcp.json`
+    - **AI ignore file**: `<project>\.aiignore`
+  </Tab>
+</Tabs>
+
+<Note>
+  The `<product><version>` placeholder follows the pattern `IntelliJIdea2025.2`, `PyCharm2025.2`, `WebStorm2025.2`, etc. Each IDE product and version has its own settings directory.
+</Note>
+
+### Installing MCP Servers
+
+To programmatically register an MCP server for a project, create or merge into the `.jb-mcp.json` file at the project root:
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_CONFIG": "value"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `.jb-mcp.json` file uses the same `mcpServers` format as Claude Desktop's `claude_desktop_config.json`
+- If the file already exists, perform a deep merge into the `mcpServers` object -- do not overwrite existing server entries
+- Global MCP server configuration is managed through the IDE settings UI and is not file-based; only project-level config uses `.jb-mcp.json`
+- The IDE reads the file on startup and when changes are detected; a restart may be needed for initial setup
+
+### Installing Project Rules
+
+To install project-level AI rules, create the `.aiassistant/rules/` directory and write `.md` files:
+
+```
+<project>/
+  .aiassistant/
+    rules/
+      coding-standards.md
+      testing-guidelines.md
+```
+
+**Key considerations:**
+
+- Each `.md` file in `.aiassistant/rules/` is treated as a separate rule
+- New rules default to "Always" application mode
+- Rules are additive -- multiple rule files can coexist and are all loaded
+- If rules already exist, the installer should append a new `.md` file rather than modifying existing ones
+
+### Installing the AI Assistant Plugin
+
+The AI Assistant plugin is installed through the IDE's built-in plugin manager or via the JetBrains Toolbox. There is no public CLI command to install plugins programmatically from outside the IDE. The installer should:
+
+1. Check if the plugin is already installed by looking for the plugin directory in the IDE's plugins folder
+2. Direct the user to install via **Settings | Plugins | Marketplace** and search for "JetBrains AI Assistant"
+3. Or provide the plugin page URL: `https://plugins.jetbrains.com/plugin/22282-jetbrains-ai-assistant`
+
+### API Key Management
+
+API keys for third-party providers are configured through the IDE settings UI (**Settings | Tools | AI Assistant | Providers & API keys**) and stored in the IDE's secure credential storage. They cannot be set programmatically through file manipulation.
+
+Options for automated configuration:
+
+- Environment variables are **not** natively supported for BYOK keys (unlike some other platforms)
+- The installer should instruct the user to enter keys through the IDE settings UI
+- JetBrains AI service authentication uses the JetBrains account, which requires interactive sign-in
+
+### Settings Format
+
+AI Assistant settings are stored in the IDE's XML-based configuration system (not a standalone JSON file). The primary programmatic integration points are:
+
+- **`.jb-mcp.json`** at the project root for MCP server definitions
+- **`.aiassistant/rules/*.md`** at the project root for AI rules
+- **`.aiignore`** at the project root for file exclusions
+
+These three file-based configurations are the recommended integration points for package installers, as they are version-controllable, team-shareable, and do not require modifying IDE internals.
+
+<Warning>
+  Unlike VS Code or Zed, JetBrains IDEs do not expose AI Assistant settings through a single user-editable JSON file. IDE-level settings (model selection, API keys, prompt library entries) are managed through the settings UI and stored in internal XML configuration. Package installers should focus on the project-level file-based integration points listed above.
+</Warning>

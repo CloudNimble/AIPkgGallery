@@ -1,0 +1,511 @@
+---
+title: Qodo
+description: Platform specification for Qodo, the AI code quality platform (formerly CodiumAI)
+icon: check-circle
+---
+
+## Overview
+
+[Qodo](https://www.qodo.ai/) (formerly CodiumAI) is an AI-powered code quality platform by **Qodo** (founded 2022 by Itamar Friedman and Dedy Kredo; rebranded from CodiumAI in 2024).[^1] The platform focuses on code integrity -- catching logic bugs, security risks, missing tests, and compliance issues rather than just generating more code.[^2] Extensibility is via **MCP servers** (Agentic Tools), **custom instructions** (`best_practices.md`), **agent configuration** (`.toml` files), **Qodo Merge configuration** (`.pr_agent.toml`), and a **Context Engine configuration** (`.ai_config.toml`).
+
+Qodo consists of four main products:[^2]
+
+| Product | Description |
+|---|---|
+| **Qodo Gen** | IDE plugin for VS Code, JetBrains, and Visual Studio -- generates code, writes tests, and provides AI chat with agentic workflows |
+| **Qodo Merge** | Git agent that reviews pull requests on GitHub, GitLab, Bitbucket, and Azure DevOps |
+| **Qodo Command** | CLI tool for running and managing AI agents from the terminal or CI/CD |
+| **Qodo Cover** | Automated testing solution that generates tests aligned with organizational best practices |
+
+Qodo 2.0 was released in February 2026, introducing a multi-agent expert review architecture where specialized agents handle distinct review responsibilities (bug detection, standards enforcement, risk assessment) instead of treating review as a single broad task.[^3]
+
+---
+
+## Configuration
+
+### File Locations
+
+<Tabs>
+  <Tab title="Repository Files">
+    | File | Purpose |
+    |---|---|
+    | `best_practices.md` | Coding guidelines read by Qodo Gen to guide suggestions and decisions [^4] |
+    | `.codiumai.toml` | Test generation configuration (framework, instructions, examples) [^5] |
+    | `.ai_config.toml` | Context Engine configuration (file filters, tags) [^6] |
+    | `.pr_agent.toml` | Qodo Merge configuration for PR review behavior [^7] |
+    | `agents/<name>.toml` | CLI agent definitions for Qodo Command [^8] |
+    | `agent.toml` | Root agent manifest for Qodo Command [^8] |
+    | `mcp.json` | MCP server definitions for Qodo Command agents [^9] |
+    | `AGENTS.MD` | Cross-agent instructions (also read by Qodo Merge) [^10] |
+    | `QODO.MD` | Qodo-specific repository metadata [^10] |
+    | `CLAUDE.MD` | Also read by Qodo Merge for repository context [^10] |
+  </Tab>
+  <Tab title="User-Level Files">
+    | File | Purpose |
+    |---|---|
+    | `~/.qodo/agents/` | Agent TOML files managed by Qodo Gen IDE plugin [^11] |
+    | VS Code `settings.json` | Extension settings under `Codium.*` keys |
+    | JetBrains plugin settings | Configured via IDE Settings > Qodo |
+  </Tab>
+  <Tab title="Organization-Level Files">
+    | File | Purpose |
+    |---|---|
+    | `pr-agent-settings` repo / `.pr_agent.toml` | Global Qodo Merge configuration for all repos in the organization [^7] |
+    | Wiki page `.pr_agent.toml` | Highest-precedence Qodo Merge configuration (no commit required) [^7] |
+    | `org_mcp.json` (on-prem Helm) | Enterprise MCP allow-list for Qodo Gen [^12] |
+  </Tab>
+</Tabs>
+
+### Settings Structure
+
+<CodeGroup>
+```toml .codiumai.toml
+# Test generation configuration
+# Place in project root; commit to share with team
+
+[tests]
+framework = "pytest"              # Testing framework
+num_desired_tests = 4             # Number of tests to generate initially
+
+[tests.general_instructions]
+text = """
+- Always use descriptive test names with test_ prefix
+- Include docstrings for each test
+- Use fixtures for common setup
+"""
+
+[tests.example_test]
+text = """
+def test_example_addition():
+    \"\"\"Verify that addition works correctly.\"\"\"
+    assert 1 + 1 == 2
+"""
+```
+
+```toml .ai_config.toml
+# Context Engine configuration
+# One file per repository, placed at project root
+
+[file_filters]
+include = ['src/**/*.py', 'config/*.json']
+exclude = ['tests/*', 'src/legacy/**', '*.log']
+
+[tags]
+# Descriptive labels for repository discovery and filtering
+```
+
+```toml .pr_agent.toml
+# Qodo Merge configuration
+# Place in repo root, wiki, or pr-agent-settings org repo
+
+[config]
+model = "o3-mini"
+fallback_models = ["gpt-4o-2024-11-20"]
+ai_timeout = 120
+response_language = "en-US"
+
+[pr_reviewer]
+extra_instructions = "Focus on security issues and error handling."
+
+[pr_code_suggestions]
+num_code_suggestions = 6
+suggestions_score_threshold = 7
+
+[github_app]
+pr_commands = ["/describe", "/review", "/improve"]
+```
+</CodeGroup>
+
+<Note>
+For `.pr_agent.toml`, keep the file minimal -- only include settings you need to override. Copying the entire default configuration can cause issues when defaults change over time.[^7]
+</Note>
+
+---
+
+## Custom Instructions
+
+Qodo supports multiple layers of custom instructions depending on the product.
+
+### best_practices.md (IDE Plugin)
+
+Create a `best_practices.md` file in your repository root to provide coding guidelines that Qodo Gen reads and follows when generating code, tests, and suggestions.[^4]
+
+- Maximum **1,500 lines** will be processed; content beyond this is ignored[^4]
+- Include brief code examples with before/after patterns where helpful
+- Focus on project-specific guidelines rather than generic rules already known to AI models
+- Qodo can auto-generate an initial `best_practices.md` via the `/generate-best-practices` command[^4]
+
+### Custom Modes (IDE Plugin)
+
+Modes are persona-driven AI agents for multi-turn conversations in the IDE. Three default modes ship out of the box:[^13]
+
+| Mode | Purpose |
+|---|---|
+| **Ask** | Read-only, minimal tools -- optimized for speed and quick queries |
+| **Code** | Full tool access for writing, executing workflows, and problem-solving |
+| **Plan** | Architectural thinking and high-level system design |
+
+Custom modes can be created, exported as `.toml` files, and shared across teams.[^13]
+
+### Qodo Merge Instructions
+
+In `.pr_agent.toml`, use the `extra_instructions` field within any tool section to customize review behavior:[^7]
+
+```toml
+[pr_reviewer]
+extra_instructions = "Ensure all public methods have docstrings. Flag any use of eval()."
+
+[pr_code_suggestions]
+extra_instructions = "Prefer list comprehensions over map/filter where readability is not impacted."
+```
+
+---
+
+## MCP Support (Agentic Tools)
+
+Qodo Gen supports the Model Context Protocol (MCP) for extending agent capabilities with external tools and services. Qodo was the first MCP-enabled AI coding agent for JetBrains.[^14]
+
+### MCP Configuration
+
+<Tabs>
+  <Tab title="Local MCP Servers">
+    Local MCPs run directly in your environment without network calls. Configure them by pasting JSON into the Qodo Gen tools management UI:[^9]
+
+    ```json
+    {
+      "mcpServers": {
+        "github": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-github"],
+          "env": {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "<YOUR_TOKEN>"
+          }
+        }
+      }
+    }
+    ```
+
+    <Note>
+    Node.js must be installed for local MCP servers to function. Verify with `node --version`.[^9]
+    </Note>
+  </Tab>
+  <Tab title="Remote (SSE) MCP Servers">
+    Remote MCPs communicate via HTTP and are recommended for Enterprise environments:[^9]
+
+    ```json
+    {
+      "semgrep": {
+        "url": "https://mcp.semgrep.ai/sse"
+      }
+    }
+    ```
+
+    Optional custom HTTP headers can be added for authentication.
+  </Tab>
+  <Tab title="CLI Agent MCP (mcp.json)">
+    For Qodo Command, create an `mcp.json` file at the project root to define MCP servers available to all agents:[^8]
+
+    ```json
+    {
+      "mcpServers": {
+        "github": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-github"],
+          "env": {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "<YOUR_TOKEN>"
+          }
+        }
+      }
+    }
+    ```
+
+    Agent-specific MCP servers can also be defined inline within individual agent `.toml` files.[^8]
+  </Tab>
+</Tabs>
+
+### Built-in Tools
+
+Qodo Gen includes several built-in tools that do not require MCP configuration:[^9]
+
+| Tool | Description |
+|---|---|
+| **File System** | Manages files and directories |
+| **Git** | Provides Git repository insights |
+| **Code Navigation (LSP)** | Analyzes and tracks code structure |
+| **Fetch** | Retrieves web content |
+
+### Qodo Context Engine as MCP Server
+
+The Qodo Context Engine can also serve as an MCP server, allowing external clients (Cursor, Windsurf, Claude Desktop, GitHub Copilot) to connect to your indexed codebase for organization-aware responses.[^15]
+
+### Enterprise MCP Allow List
+
+Organizations can enforce centralized control over which MCPs can run in the development environment by defining an allow list, preventing developers from adding unapproved tools.[^12]
+
+---
+
+## Qodo Merge (Git PR Review)
+
+Qodo Merge integrates directly with Git providers to automate pull request analysis.[^16]
+
+### Supported Platforms
+
+| Platform | Variants |
+|---|---|
+| **GitHub** | Cloud, Enterprise Server |
+| **GitLab** | .com, Self-Managed |
+| **Bitbucket** | Cloud, Server, Data Center |
+| **Azure DevOps** | Services, Server |
+
+### Slash Commands
+
+Qodo Merge responds to slash commands posted as PR comments:[^17]
+
+| Command | Description |
+|---|---|
+| `/review` | Trigger a full code review |
+| `/describe` | Auto-generate PR description |
+| `/improve` | Suggest code improvements |
+| `/ask <question>` | Ask a question about the PR |
+| `/implement` | Implement suggested changes |
+| `/add_docs` | Generate documentation |
+| `/compliance` | Check compliance against policies |
+| `/analyze` | Deep analysis of the PR |
+
+### Configuration Precedence
+
+Qodo Merge configuration follows this precedence (highest to lowest):[^7]
+
+1. **Wiki** -- `.pr_agent.toml` wiki page (editable without commits)
+2. **Repository** -- `.pr_agent.toml` in repo root (merged after commit)
+3. **Organization** -- `.pr_agent.toml` in `pr-agent-settings` repo
+
+### Auto-Run on PR Open
+
+Configure which tools run automatically when a new PR is opened:[^10]
+
+```toml
+[github_app]
+pr_commands = ["/describe", "/review", "/improve"]
+```
+
+### PR Filtering
+
+Control which PRs are processed using regex patterns:[^10]
+
+```toml
+[config]
+ignore_pr_title = ["\\[WIP\\]", "\\[Draft\\]"]
+ignore_pr_target_branches = ["release/.*"]
+ignore_pr_labels = ["no-review"]
+ignore_pr_authors = ["dependabot.*"]
+```
+
+### Open-Source PR-Agent
+
+Qodo Merge is built on the open-source [PR-Agent](https://github.com/qodo-ai/pr-agent), which can be self-hosted. The commercial Qodo Merge adds features like severity-based findings, team norms learning, and multi-repo intelligence.[^18]
+
+---
+
+## Qodo Command (CLI)
+
+[Qodo Command](https://github.com/qodo-ai/command) is a CLI tool (currently in beta) for running AI agents from the terminal, CI/CD pipelines, or as HTTP services.[^19]
+
+### Installation
+
+```bash
+# Install globally via npm
+npm install -g @qodo/command
+
+# Verify installation
+qodo --version
+
+# Login
+qodo login
+```
+
+### Key Commands
+
+| Command | Description |
+|---|---|
+| `qodo chat` | Interactive chat with an AI agent in the terminal [^20] |
+| `qodo <command>` | Run a configured agent command [^20] |
+| `qodo login` | Authenticate and receive API key [^20] |
+| `qodo models` | List available AI models [^20] |
+| `qodo list-mcp` | List available local and remote MCP tools [^20] |
+| `qodo key list` | List API keys [^20] |
+| `qodo key create <name>` | Create a new API key [^20] |
+
+### Key Flags
+
+| Flag | Description |
+|---|---|
+| `--ui` | Open interactive web UI mode [^20] |
+| `--model=<name>` | Specify AI model (Claude, GPT-4, etc.) [^20] |
+| `--mcp` | Turn agent into an MCP server on port 3000 [^20] |
+| `--webhook` | Run agent as an HTTP API service [^20] |
+| `--ci` | Run in CI mode [^20] |
+| `-y, --yes` | Auto-confirm all prompts (useful for CI) [^20] |
+| `-q, --silent` | Suppress output except final result [^20] |
+| `--agent-file=<path>` | Specify agent configuration from a TOML file or URL [^20] |
+| `--mcp-file=<path>` | Specify custom path to mcp.json [^20] |
+| `--act` | Enable immediate action execution strategy [^20] |
+| `--plan` | Enable multi-step planning strategy [^20] |
+
+### Agent TOML Configuration
+
+Agents are defined in `.toml` files within an `agents/` directory, referenced by a root `agent.toml` manifest:[^8]
+
+```toml agents/review.toml
+[agent]
+name = "review"
+description = "Code review agent"
+instructions = """
+Review the code for bugs, security issues, and style violations.
+Follow the team's coding standards.
+"""
+available_tools = ["filesystem", "git", "shell", "github"]
+```
+
+<Warning>
+Qodo Command requires Node.js and npm. The package name is `@qodo/command` (migrated from the earlier `@qodo/gen` package).[^19]
+</Warning>
+
+---
+
+## Pricing
+
+| Plan | Price | Key Features |
+|---|---|---|
+| **Developer (Free)** | $0/month | 75 PRs + 250 LLM credits/month; IDE plugin; basic code review [^21] |
+| **Teams** | ~$19--30/user/month | 2,500 credits; bug detection; PR automation; repo best practices learning; enhanced privacy [^21] |
+| **Enterprise** | Custom pricing | Multi-repo intelligence; dashboards; admin controls; flexible deployment (SaaS, VPC, on-prem, air-gapped); SOC 2 Type II [^21] |
+
+<Note>
+Credits reset every 30 days from your first Qodo Gen message, not on the 1st of the month. Using Local LLMs (e.g., Ollama) bypasses the credit limit entirely.[^21]
+</Note>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Qodo platform.
+
+### Configuration File Paths
+
+| File | Path | Purpose |
+|---|---|---|
+| Coding guidelines | `<repo>/best_practices.md` | Project-wide guidelines for Qodo Gen |
+| Test configuration | `<repo>/.codiumai.toml` | Test generation settings |
+| Context Engine config | `<repo>/.ai_config.toml` | File filters and tags for indexing |
+| Merge config (repo) | `<repo>/.pr_agent.toml` | PR review configuration |
+| Merge config (org) | `pr-agent-settings` repo / `.pr_agent.toml` | Organization-wide PR review defaults |
+| Merge config (wiki) | Wiki page `.pr_agent.toml` | Highest-precedence PR config |
+| CLI agent manifest | `<repo>/agent.toml` | Root agent configuration for Qodo Command |
+| CLI agent definitions | `<repo>/agents/<name>.toml` | Individual agent configurations |
+| CLI MCP config | `<repo>/mcp.json` | MCP servers for CLI agents |
+| Agent TOML (user) | `~/.qodo/agents/` | IDE-managed agent configurations |
+| Cross-agent instructions | `<repo>/AGENTS.MD` | Read by Qodo Merge |
+| Qodo instructions | `<repo>/QODO.MD` | Read by Qodo Merge |
+
+### Installing MCP Server Extensions
+
+Qodo Gen manages MCP servers through its IDE UI rather than a static config file. To programmatically configure MCPs:
+
+1. **IDE Plugin**: MCP servers are added through the Qodo Gen chat tools management UI by pasting JSON configuration. There is no standalone file on disk that can be edited externally for the IDE plugin.
+2. **CLI (Qodo Command)**: Create or merge into `mcp.json` at the project root:
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "<TOKEN>"
+      }
+    }
+  }
+}
+```
+
+3. **Enterprise (on-prem)**: Mount an `org_mcp.json` secret via Helm values to define organization-wide approved MCPs.
+
+### Installing Custom Instructions
+
+To install project-level instructions:
+
+- **Coding guidelines**: Write to `best_practices.md` at the repo root. If the file exists, append to it. Keep under 1,500 lines.
+- **Test configuration**: Write to `.codiumai.toml` at the repo root.
+- **PR review instructions**: Add `extra_instructions` fields to the appropriate sections in `.pr_agent.toml`.
+- **Context Engine filters**: Write to `.ai_config.toml` at the repo root.
+
+<Note>
+Unlike platforms that use Markdown for custom instructions, Qodo uses a combination of Markdown (`best_practices.md`) and TOML (`.codiumai.toml`, `.pr_agent.toml`, `.ai_config.toml`) depending on the product surface.
+</Note>
+
+### Config File Formats
+
+| File | Format | Merge Strategy |
+|---|---|---|
+| `best_practices.md` | Markdown | Append to existing content |
+| `.codiumai.toml` | TOML | Overwrite or merge sections |
+| `.ai_config.toml` | TOML | Overwrite or merge sections |
+| `.pr_agent.toml` | TOML | Merge sections; local overrides global |
+| `mcp.json` | JSON | Deep-merge `mcpServers` object |
+| `agent.toml` / `agents/*.toml` | TOML | Add new agent files |
+
+### IDE Extension Installation
+
+```bash
+# VS Code (extension ID: Codium.codium)
+code --install-extension Codium.codium
+
+# Verify
+code --list-extensions | grep Codium.codium
+
+# Qodo Command CLI
+npm install -g @qodo/command
+qodo --version
+```
+
+For JetBrains, the plugin ID is `21206` and can be installed via the JetBrains plugin marketplace or bundled plugin management.[^22]
+
+<Warning>
+Some JetBrains IDEs (notably Android Studio) may lack JCEF (Java Chromium Embedded Framework) in their boot runtime, which prevents the Qodo plugin from loading. Verify JCEF availability before deployment.[^22]
+</Warning>
+
+### Non-Interactive Considerations
+
+- Qodo Gen IDE plugin requires authentication via browser-based login flow -- not suitable for fully headless environments
+- Qodo Command CLI supports `qodo login` for interactive auth, and `--ci` / `-y` flags for non-interactive execution in CI/CD pipelines[^20]
+- `.pr_agent.toml` changes take effect on the next PR after the file is merged to the default branch (or immediately if using wiki configuration)[^7]
+- `best_practices.md` is read automatically with no restart required[^4]
+- MCP server configurations in the IDE require manual setup through the UI; the CLI supports file-based configuration via `mcp.json`
+
+---
+
+## Footnotes
+
+[^1]: [Qodo - Wikipedia](https://en.wikipedia.org/wiki/Qodo)
+[^2]: [Qodo AI Review 2026](https://myaiverdict.com/qodo-ai-review/)
+[^3]: [Introducing Qodo 2.0 and the next generation of AI code review](https://www.qodo.ai/blog/introducing-qodo-2-0-agentic-code-review/)
+[^4]: [Best Practices - Qodo Documentation](https://docs.qodo.ai/qodo-documentation/qodo-gen/code-intelligence/best-practices)
+[^5]: [Configuration - Qodo Gen (Formerly Codiumate)](https://qodo-gen-docs.qodo.ai/tests/configuration/)
+[^6]: [Configuration File - Context Engine - Qodo Documentation](https://docs.qodo.ai/qodo-documentation/qodo-gen/code-intelligence/context-engine/configuration-file)
+[^7]: [Configuration File - Qodo Merge Documentation](https://qodo-merge-docs.qodo.ai/usage-guide/configuration_options/)
+[^8]: [Creating and Managing Agents - CLI - Qodo Documentation](https://docs.qodo.ai/qodo-documentation/qodo-command/features/creating-and-managing-agents)
+[^9]: [Agentic Tools (MCPs) - Qodo Documentation](https://docs.qodo.ai/qodo-documentation/qodo-gen/tools-mcps/agentic-tools-mcps)
+[^10]: [PR-Agent configuration.toml - GitHub](https://github.com/qodo-ai/pr-agent/blob/main/pr_agent/settings/configuration.toml)
+[^11]: [Agent TOML File - Qodo Documentation](https://docs.qodo.ai/qodo-documentation/qodo-gen/agent/workflows/agent-toml-file)
+[^12]: [How to Add Agentic Tools (MCPs) to an Organization - Qodo Documentation](https://docs.qodo.ai/qodo-documentation/on-prem/ide-plugin/how-to-add-agentic-tools-mcps-to-an-organization)
+[^13]: [Modes - Qodo Documentation](https://docs.qodo.ai/qodo-documentation/qodo-gen/agent/modes)
+[^14]: [Introducing Qodo Gen 1.0: Agentic flows for the enterprise](https://www.qodo.ai/blog/introducing-qodo-gen-1-0-agentic-flows-for-the-enterprise/)
+[^15]: [MCP Usage - Context Engine - Qodo Documentation](https://docs.qodo.ai/qodo-documentation/qodo-aware/usage/mcp-usage)
+[^16]: [Qodo Merge Setup and Installation](https://docs.qodo.ai/qodo-documentation/code-review/qodo-merge/getting-started/setup-and-installation)
+[^17]: [Usage and Automation - PR-Agent](https://qodo-merge-docs.qodo.ai/usage-guide/automations_and_usage/)
+[^18]: [PR-Agent GitHub Repository](https://github.com/qodo-ai/pr-agent)
+[^19]: [Qodo Command - npm](https://www.npmjs.com/package/@qodo/command)
+[^20]: [List of CLI Commands and Flags - Qodo Documentation](https://docs.qodo.ai/qodo-documentation/qodo-command/getting-started/list-of-cli-commands-and-flags)
+[^21]: [Qodo Plans and Pricing](https://www.qodo.ai/pricing/)
+[^22]: [JetBrains Installation - Qodo Documentation](https://docs.qodo.ai/qodo-documentation/qodo-gen/getting-started/setup-and-installation/jetbrains-installation)

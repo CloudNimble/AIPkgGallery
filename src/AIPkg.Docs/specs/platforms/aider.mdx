@@ -1,0 +1,311 @@
+---
+title: Aider
+description: Platform specification for Aider, the open-source AI pair programming tool for the terminal
+icon: terminal
+---
+
+## Overview
+
+[Aider](https://aider.chat/) is an open-source AI pair programming CLI tool by **Paul Gauthier**. It has **no native MCP support** (third-party bridges exist). Extensibility is limited to **Conventions files** (read-only context files like `CONVENTIONS.md`) and `.aider.conf.yml` / `.aiderignore` configuration.
+
+---
+
+## Configuration
+
+### File Locations
+
+Aider uses a layered configuration system. Settings can be specified via command-line flags, YAML config files, environment variables, or `.env` files. Later sources override earlier ones.
+
+| File | Search Locations | Purpose |
+|---|---|---|
+| `.aider.conf.yml` | `~/.aider.conf.yml`, `<git-root>/.aider.conf.yml`, `<cwd>/.aider.conf.yml` | Primary YAML configuration (all settings) |
+| `.env` | `~/.env`, `<git-root>/.env`, `<cwd>/.env` | Environment variables and API keys for all providers |
+| `.aider.input.history` | `<git-root>/` | Chat input history |
+| `.aider.chat.history.md` | `<git-root>/` | Markdown log of chat history |
+| `.aider.tags.cache.v3/` | `<git-root>/` | Disk cache for tree-sitter repository map tags |
+| `.aiderignore` | `<git-root>/` | Gitignore-format file to exclude files from aider's view |
+| `.aider.model.settings.yml` | Specified via `--model-settings-file` | Custom model settings (edit formats, provider routing) |
+
+<Note>
+  Files loaded later in the search order take priority. For example, a `.aider.conf.yml` in the current directory overrides the one in your home directory. You can also specify a custom config path with `--config <filename>` or a custom env file with `--env-file <filename>`.
+</Note>
+
+### .aider.conf.yml Structure
+
+<CodeGroup>
+
+```yaml Basic Configuration
+# Model selection
+model: anthropic/claude-sonnet-4-20250514
+
+# API keys (only OpenAI and Anthropic supported in YAML; use .env for others)
+openai-api-key: sk-...
+anthropic-api-key: sk-ant-...
+
+# Edit format (auto-detected by default)
+edit-format: diff         # whole | diff | udiff | editor-diff | editor-whole
+
+# Architect mode
+architect: false
+auto-accept-architect: true
+
+# Weak model for commit messages and summarization
+weak-model: anthropic/claude-haiku-3-5-20241022
+
+# Editor model for architect mode
+editor-model: anthropic/claude-sonnet-4-20250514
+```
+
+```yaml Git Settings
+# Git integration
+git: true                   # Enable git features
+gitignore: true             # Add aider files to .gitignore
+auto-commits: true          # Auto-commit AI changes
+dirty-commits: true         # Commit dirty repos before editing
+attribute-author: true      # Mark AI commits in author name
+attribute-committer: true   # Mark AI commits in committer name
+attribute-co-authored-by: true  # Add Co-authored-by trailer
+git-commit-verify: false    # Allow pre-commit hooks to run
+commit-prompt: null         # Custom commit message prompt
+```
+
+```yaml Repository Map & Context
+# Repo map token budget (0 to disable)
+map-tokens: 1024
+map-refresh: auto           # auto | always | files | manual
+map-multiplier-no-files: 2  # Multiplier when no files in chat
+
+# Caching
+cache-prompts: false
+cache-keepalive-pings: 0
+
+# File management
+file:                       # Files to add to chat
+  - src/main.py
+  - src/utils.py
+read:                       # Read-only context files
+  - CONVENTIONS.md
+  - docs/architecture.md
+```
+
+```yaml Testing & Linting
+# Linting
+auto-lint: true
+lint-cmd:
+  - "python: flake8 --select=E9,F63,F7,F82"
+  - "javascript: eslint"
+
+# Testing
+auto-test: false
+test-cmd: pytest
+```
+
+```yaml Display & Input
+# Terminal appearance
+dark-mode: false
+light-mode: false
+pretty: true
+stream: true
+code-theme: default          # default | monokai | solarized-dark | solarized-light
+
+# Color customization
+user-input-color: "#00cc00"
+tool-output-color: null
+tool-error-color: "#FF2222"
+tool-warning-color: "#FFA500"
+assistant-output-color: "#0088ff"
+
+# Input behavior
+vim: false
+fancy-input: true
+multiline: false
+suggest-shell-commands: true
+detect-urls: true
+```
+
+</CodeGroup>
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):
+
+1. **Command-line flags** (e.g., `--model anthropic/claude-sonnet-4-20250514`)
+2. **Environment variables** (e.g., `AIDER_MODEL=anthropic/claude-sonnet-4-20250514`)
+3. **`.env` file** in current directory
+4. **`.aider.conf.yml`** in current directory
+5. **`.env` file** in git root
+6. **`.aider.conf.yml`** in git root
+7. **`.env` file** in home directory
+8. **`.aider.conf.yml`** in home directory
+9. **Default values**
+
+### The Conventions File
+
+Aider supports project-specific coding conventions via a `CONVENTIONS.md` (or any named file) loaded as read-only context. This guides the LLM to follow your coding style, testing practices, and documentation standards.
+
+```markdown CONVENTIONS.md
+# Coding Conventions
+
+## Style
+- Use TypeScript strict mode with no `any` types
+- Prefer functional patterns over classes
+- All exported functions must have JSDoc comments
+
+## Testing
+- Write tests using vitest
+- Aim for 80%+ coverage on new code
+- Use descriptive test names: "should [expected behavior] when [condition]"
+
+## Git
+- Use conventional commits (feat:, fix:, chore:, etc.)
+- Keep commits atomic and focused
+
+## Architecture
+- Follow hexagonal architecture patterns
+- Keep business logic in the domain layer
+- Use dependency injection for external services
+```
+
+**Loading conventions:**
+
+| Method | Usage |
+|---|---|
+| CLI flag | `aider --read CONVENTIONS.md` |
+| In-chat command | `/read-only CONVENTIONS.md` |
+| Config file | `read: CONVENTIONS.md` in `.aider.conf.yml` |
+
+<Warning>
+  Load conventions files with `--read` (read-only mode), not `--file`. Read-only files benefit from prompt caching when `cache-prompts: true` is enabled, reducing costs for repeated sessions. They also cannot be accidentally edited by the LLM.
+</Warning>
+
+---
+
+## MCP Support
+
+Aider does not natively support the Model Context Protocol (MCP) as of early 2026. There is an [open feature request](https://github.com/aider-ai/aider/issues/4506) to add native MCP server and agent mode support.
+
+However, several third-party projects bridge Aider with the MCP ecosystem:
+
+| Project | Description |
+|---|---|
+| **[aider-mcp-server](https://github.com/disler/aider-mcp-server)** | MCP server that exposes Aider as a tool, allowing Claude Code or other MCP clients to delegate coding tasks to Aider |
+| **[AiderDesk](https://github.com/hotovo/aider-desk)** | Desktop GUI built on Aider with full MCP server support, agent mode, and built-in power tools |
+| **mcpm-aider** | General-purpose management tool for connecting Aider to any MCP server and its tools |
+
+<Note>
+  While Aider itself cannot consume MCP servers, it can be exposed *as* an MCP server via third-party wrappers. This allows MCP-native clients (like Claude Desktop or Goose) to offload coding tasks to Aider.
+</Note>
+
+---
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Aider platform.
+
+### Configuration File Paths
+
+| File | Path | Purpose |
+|---|---|---|
+| **YAML config** | `~/.aider.conf.yml` or `<git-root>/.aider.conf.yml` | Primary configuration (all settings) |
+| **Environment file** | `~/.env` or `<git-root>/.env` | API keys for all providers, general settings as `AIDER_*` variables |
+| **Conventions** | `<project>/CONVENTIONS.md` (or any name) | Read-only coding guidelines loaded via `read:` config |
+| **Ignore file** | `<git-root>/.aiderignore` | Gitignore-format list of files to exclude from aider |
+| **Model settings** | `<git-root>/.aider.model.settings.yml` | Custom model configurations and provider routing |
+
+### Installing Custom Instructions
+
+To install project-level instructions, write a conventions file (e.g., `CONVENTIONS.md`) to the project root and add it to the `read` key in `.aider.conf.yml`:
+
+```yaml
+read:
+  - CONVENTIONS.md
+```
+
+If a `.aider.conf.yml` already exists, the installer must parse the existing YAML and append to the `read` list without overwriting other entries.
+
+<Note>
+  Unlike platforms with a single fixed instructions file, Aider supports loading multiple read-only files. The `read` key accepts a list, so appending new entries is safe and will not conflict with existing conventions files.
+</Note>
+
+### API Key Management
+
+API keys can be configured in multiple ways:
+
+1. **`.env` file** (recommended for installers): Write keys to `<git-root>/.env` or `~/.env`
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...
+   OPENAI_API_KEY=sk-...
+   ```
+2. **Environment variables**: Set in the user's shell profile
+3. **YAML config**: Only `openai-api-key` and `anthropic-api-key` are supported in `.aider.conf.yml`
+4. **CLI flag**: `--api-key provider=<key>` (sets the corresponding `PROVIDER_API_KEY` environment variable)
+
+<Warning>
+  The YAML config file only supports OpenAI and Anthropic API keys directly. All other provider keys must be stored in a `.env` file or set as environment variables. An installer targeting non-OpenAI/Anthropic providers should always use the `.env` file.
+</Warning>
+
+### Config File Format
+
+Aider uses standard YAML for `.aider.conf.yml`. The installer must:
+
+1. Parse the existing YAML file (if it exists)
+2. Merge new settings, being careful with list-type values (`read`, `file`, `lint-cmd`) -- append rather than overwrite
+3. Write the result back, preserving existing entries
+
+Key settings an installer may need to modify:
+
+| Setting | Type | Purpose |
+|---|---|---|
+| `model` | string | Set the default LLM |
+| `read` | list | Add read-only context files (conventions, docs) |
+| `auto-lint` | boolean | Enable/disable auto-linting |
+| `lint-cmd` | list | Configure per-language linters |
+| `test-cmd` | string | Configure the test runner |
+| `auto-test` | boolean | Enable/disable auto-testing |
+| `map-tokens` | integer | Token budget for repository map |
+
+### Non-Interactive Execution
+
+For CI/CD, automation, or scripting:
+
+```bash
+# Run a single instruction and exit
+aider --message "Add error handling to the API endpoints" --yes-always
+
+# Run instructions from a file
+aider --message-file instructions.md --yes-always
+
+# Process multiple files with the same instruction
+for FILE in src/*.py; do
+    aider --message "Add type hints to all functions" --yes-always "$FILE"
+done
+
+# Dry run (preview changes without applying)
+aider --message "Refactor the database layer" --dry-run
+```
+
+**Key flags for scripting:**
+
+| Flag | Environment Variable | Description |
+|---|---|---|
+| `--message` | `AIDER_MESSAGE` | Send a single message and exit |
+| `--message-file` | `AIDER_MESSAGE_FILE` | Read message from a file and exit |
+| `--yes-always` | `AIDER_YES_ALWAYS` | Auto-confirm all prompts |
+| `--no-auto-commits` | `AIDER_AUTO_COMMITS=false` | Disable automatic git commits |
+| `--dry-run` | `AIDER_DRY_RUN` | Preview without modifying files |
+| `--no-git` | `AIDER_GIT=false` | Disable all git integration |
+| `--read` | `AIDER_READ` | Add read-only context files |
+
+### Detecting Aider Installation
+
+An installer can check for aider with:
+
+```bash
+# Check if aider is installed
+command -v aider >/dev/null 2>&1
+
+# Check version
+aider --version
+
+# Check if running inside a git repo (required by aider)
+git rev-parse --is-inside-work-tree >/dev/null 2>&1
+```

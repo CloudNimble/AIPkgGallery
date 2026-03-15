@@ -1,0 +1,486 @@
+---
+title: Goose
+description: Platform specification for Goose, the open-source extensible AI agent by Block (formerly Square)
+icon: bird
+---
+
+## Overview
+
+[Goose](https://block.github.io/goose/) is an open-source, extensible AI agent by **Block**. It is deeply built on MCP -- in Goose's terminology, MCP servers are called **extensions**. It also supports **Recipes** (YAML-based shareable workflow definitions) and `.goosehints` for project-level instructions.
+
+---
+
+## Configuration
+
+### File Locations
+
+Goose uses YAML configuration files with a hierarchical system. Both the Desktop app and CLI share the same configuration.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `config.yaml` | `~/.config/goose/config.yaml` | Primary configuration (provider, model, extensions, settings) |
+    | `permission.yaml` | `~/.config/goose/permission.yaml` | Tool permission levels |
+    | `secrets.yaml` | `~/.config/goose/secrets.yaml` | API keys (file-based fallback when keyring unavailable) |
+    | `tool_permissions.json` | `~/.config/goose/permissions/tool_permissions.json` | Runtime permission decisions (auto-managed) |
+    | Custom providers | `~/.config/goose/custom_providers/*.json` | Custom LLM provider definitions |
+    | Prompt templates | `~/.config/goose/prompts/` | Custom prompt templates |
+    | Sessions database | `~/.config/goose/sessions.db` | SQLite session storage (since v1.10.0) |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `config.yaml` | `%APPDATA%\Block\goose\config\config.yaml` | Primary configuration |
+    | Custom providers | `%APPDATA%\Block\goose\config\custom_providers\` | Custom LLM provider definitions |
+  </Tab>
+</Tabs>
+
+### config.yaml Structure
+
+<CodeGroup>
+
+```yaml Extensions Configuration
+extensions:
+  developer:
+    bundled: true
+    enabled: true
+    name: developer
+    timeout: 300
+    type: builtin
+
+  my-mcp-server:
+    enabled: true
+    name: my-mcp-server
+    type: stdio
+    cmd: npx
+    args:
+      - "-y"
+      - "@my-org/mcp-server"
+    envs:
+      API_KEY: "your-key-here"
+    timeout: 300
+    description: "My custom MCP server"
+```
+
+</CodeGroup>
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):
+
+1. **Environment variables** (e.g., `GOOSE_PROVIDER=anthropic`)
+2. **Config file** (`~/.config/goose/config.yaml`)
+3. **Default values**
+
+<Note>
+  Changes to config files require restarting Goose to take effect. Use `goose info -v` to display active configuration and verify current values.
+</Note>
+
+### The .goosehints File
+
+The `.goosehints` file provides Goose with supplemental context about your project. Its contents are appended to the system prompt at the start of each session.
+
+```text .goosehints
+This is a TypeScript monorepo using pnpm workspaces.
+
+To run tests: pnpm test
+To build: pnpm build
+
+Key modules:
+- packages/core: Core library
+- packages/cli: Command-line interface
+- apps/web: Next.js web application
+
+Coding conventions:
+- Use strict TypeScript with no `any` types
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+```
+
+**Placement locations:**
+
+| Scope | Location |
+|---|---|
+| Project-wide | `<project-root>/.goosehints` |
+| User-global | `~/.goosehints` |
+| Directory-specific | `<subdirectory>/.goosehints` |
+
+Goose supports hierarchical `.goosehints` files at different levels of a project. Multiple files are combined.
+
+<Warning>
+  Keep `.goosehints` minimal. For extensive conventions (200+ lines), consider using the Memory Extension MCP server instead, which retrieves detailed standards on-demand rather than including them in every request.
+</Warning>
+
+---
+
+## MCP Servers / Extensions
+
+Goose's extension system is built entirely on the Model Context Protocol. In Goose, every extension is an MCP server -- there is no separate plugin format.
+
+### Extension Types
+
+| Type | Description | Configuration |
+|---|---|---|
+| **builtin** | Core extensions bundled with Goose | Enabled via `config.yaml` or `goose configure` |
+| **stdio** | Local MCP servers communicating over standard I/O | Command, args, and env vars in `config.yaml` |
+| **sse** | Remote MCP servers using Server-Sent Events | URI endpoint in `config.yaml` |
+| **streamable_http** | Remote MCP servers using HTTP streaming | URI endpoint in `config.yaml` |
+
+### Adding Extensions
+
+<Tabs>
+  <Tab title="CLI (goose configure)">
+    Run `goose configure` and select the extensions menu. For a command-line (stdio) extension, provide:
+    - **Name**: A human-readable label (e.g., "filesystem")
+    - **Command**: The command that starts the MCP server
+    - **Args**: Arguments for the server command
+    - **Timeout**: Start with 300 seconds; increase for slow-starting servers
+  </Tab>
+  <Tab title="Desktop App">
+    Go to **Settings > Extensions > Add custom extension** and fill in the required fields in the form.
+  </Tab>
+  <Tab title="config.yaml (Manual)">
+    ```yaml
+    extensions:
+      github:
+        enabled: true
+        name: github
+        type: stdio
+        cmd: npx
+        args:
+          - "-y"
+          - "@modelcontextprotocol/server-github"
+        envs:
+          GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_..."
+        timeout: 300
+
+      remote-server:
+        enabled: true
+        name: remote-server
+        type: sse
+        uri: "https://mcp.example.com/sse"
+        timeout: 300
+    ```
+  </Tab>
+</Tabs>
+
+### Dynamic Extension Discovery
+
+Goose includes an **Extensions Manager** that allows the agent to search for and enable relevant MCP servers dynamically during a session, even for servers that require authentication (as long as they are pre-configured).
+
+### MCP Sampling
+
+MCP Sampling allows your MCP servers to request AI completions from Goose's LLM, transforming simple tool servers into intelligent agents that can leverage the model for their own processing.
+
+---
+
+## Recipes
+
+Recipes are YAML (or JSON) workflow definitions that bundle instructions, extensions, parameters, and execution logic into shareable, reproducible configurations. They are one of Goose's most distinctive features.
+
+### Recipe Structure
+
+```yaml example-recipe.yaml
+version: 1.0.0
+title: "Code Review Pipeline"
+description: "Automated code review with security analysis"
+author:
+  contact: "your-github-username"
+
+# System prompt for the agent
+instructions: |
+  You are a senior code reviewer. Analyze the provided repository
+  for code quality, security issues, and adherence to best practices.
+
+# Settings override
+settings:
+  goose_provider: "anthropic"
+  goose_model: "claude-sonnet-4-20250514"
+  temperature: 0.3
+  max_turns: 50
+
+# Typed input parameters
+parameters:
+  - key: repository_path
+    input_type: string
+    requirement: required
+    description: "Path to the repository to analyze"
+  - key: scan_level
+    input_type: string
+    requirement: optional
+    default: "standard"
+    description: "Depth of review: quick, standard, thorough"
+
+# Extensions required by this recipe
+extensions:
+  - type: builtin
+    name: developer
+    display_name: Developer
+    timeout: 300
+    bundled: true
+
+# Initial prompt (required for headless/non-interactive mode)
+prompt: |
+  Analyze the project at {{ repository_path }} using a {{ scan_level }} scan.
+
+# Optional UI activities (Desktop only)
+activities:
+  - "Scanning repository structure"
+  - "Running security checks"
+  - "Generating report"
+
+# Sub-recipes for decomposed tasks
+sub_recipes:
+  - name: "security_audit"
+    path: "./sub-recipes/security.yaml"
+    values:
+      check_cors: "true"
+  - name: "style_check"
+    path: "./sub-recipes/style.yaml"
+
+# Retry logic
+retry:
+  max_retries: 3
+  checks:
+    - type: shell
+      command: "test -f report.md"
+      on_failure: "rm -f temp_*"
+
+# Structured output schema
+response:
+  json_schema:
+    type: object
+    properties:
+      summary:
+        type: string
+      issues_found:
+        type: integer
+      critical_issues:
+        type: array
+        items:
+          type: string
+    required:
+      - summary
+      - issues_found
+```
+
+### Parameter Substitution
+
+Parameters use `{{ parameter_name }}` syntax and are substituted into `instructions`, `prompt`, and `activities` fields before the recipe starts.
+
+### Sub-Recipes
+
+Sub-recipes run in isolated sessions with their own context. When a main recipe runs, Goose generates a tool for each sub-recipe that accepts defined parameters, executes in a separate session, and returns output to the main recipe.
+
+<Warning>
+  Sub-recipes cannot define their own sub-recipes. Only one level of nesting is allowed.
+</Warning>
+
+### Running Recipes
+
+```bash
+# Run a recipe file
+goose run --recipe ./my-recipe.yaml
+
+# Run with parameters
+goose run --recipe ./my-recipe.yaml --params repository_path=/home/user/project
+
+# Open in Desktop
+goose recipe open ./my-recipe.yaml
+
+# Validate syntax
+goose recipe validate ./my-recipe.yaml
+
+# Generate a shareable deeplink
+goose recipe deeplink my-recipe
+
+# List available recipes
+goose recipe list
+```
+
+### Scheduling Recipes
+
+```bash
+# Schedule a recipe with cron
+goose schedule add \
+  --schedule-id daily-report \
+  --cron "0 0 9 * * *" \
+  --recipe-source ./recipes/daily-report.yaml
+
+# List scheduled jobs
+goose schedule list
+
+# Remove a scheduled job
+goose schedule remove --schedule-id daily-report
+```
+
+### Slash Command Recipes
+
+Recipes can be bound to slash commands in `config.yaml`:
+
+```yaml
+slash_commands:
+  - command: "onboarding"
+    recipe_path: "/path/to/onboarding-recipe.yaml"
+```
+
+This allows users to type `/onboarding` in a session to execute the recipe.
+
+---
+
+---
+
+## Extension Development
+
+Extensions in Goose are standard MCP servers. You can build them in any language that has an MCP SDK (Python, TypeScript, Kotlin, etc.).
+
+<Steps>
+  <Step title="Create an MCP Server">
+    Use the MCP SDK for your language. The official tutorial uses Python with `uv`:
+
+    ```bash
+    uv init my-extension
+    cd my-extension
+    uv add mcp
+    ```
+
+    Implement your server with tools, resources, and/or prompts using the MCP SDK.
+  </Step>
+  <Step title="Test with MCP Inspector">
+    Use the MCP Inspector (a browser-based development tool) to verify your server works correctly before integrating with Goose.
+
+    ```bash
+    npx @modelcontextprotocol/inspector uv run my-extension
+    ```
+  </Step>
+  <Step title="Register in Goose">
+    Add your extension to Goose via `goose configure` or by editing `config.yaml`:
+
+    ```yaml
+    extensions:
+      my-extension:
+        enabled: true
+        name: my-extension
+        type: stdio
+        cmd: uv
+        args: ["run", "my-extension"]
+        timeout: 300
+    ```
+  </Step>
+  <Step title="Iterate">
+    After code changes, reinstall your package (`uv pip install .`) and restart Goose to pick up the new version.
+  </Step>
+</Steps>
+
+<Info>
+  MCP Sampling allows your extension to request AI completions from Goose's configured LLM, enabling extensions to leverage the model for their own intelligent processing beyond simple tool execution.
+</Info>
+
+---
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Goose platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **Primary config**: `~/.config/goose/config.yaml`
+    - **Secrets**: `~/.config/goose/secrets.yaml`
+    - **Custom providers**: `~/.config/goose/custom_providers/<name>.json`
+    - **Project hints**: `<project>/.goosehints`
+    - **Global hints**: `~/.goosehints`
+  </Tab>
+  <Tab title="Windows">
+    - **Primary config**: `%APPDATA%\Block\goose\config\config.yaml`
+    - **Custom providers**: `%APPDATA%\Block\goose\config\custom_providers\<name>.json`
+    - **Project hints**: `<project>\.goosehints`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the extension definition into the `extensions` key of `config.yaml`:
+
+```yaml
+extensions:
+  package-server-name:
+    enabled: true
+    name: package-server-name
+    type: stdio
+    cmd: npx
+    args:
+      - "-y"
+      - "@scope/mcp-server-package"
+    envs:
+      SOME_API_KEY: "value"
+    timeout: 300
+    description: "Description of the extension"
+```
+
+**Key considerations:**
+
+- The `extensions` object is a flat map; each key is a unique extension identifier
+- Merge carefully -- do not overwrite existing extension entries
+- Goose requires a restart to pick up config file changes (it does not hot-reload)
+- The `type` field must be one of: `builtin`, `stdio`, `sse`, or `streamable_http`
+- For remote servers, use `uri` instead of `cmd`/`args`
+
+### Installing Project Instructions
+
+To install project-level instructions, write a `.goosehints` file to the project root. If a `.goosehints` file already exists, the installer should append to it.
+
+<Note>
+  Unlike some other platforms, Goose combines multiple `.goosehints` files hierarchically rather than using only the first match. Appending to an existing file is safe.
+</Note>
+
+### API Key Management
+
+API keys are stored in the system keyring by default. If the keyring is unavailable, Goose falls back to `~/.config/goose/secrets.yaml`. An installer can:
+
+- Set environment variables in the user's shell profile (e.g., `ANTHROPIC_API_KEY`)
+- Write to `secrets.yaml` as a fallback (less secure)
+- Instruct the user to run `goose configure` to enter keys interactively
+
+### Config File Format
+
+Goose uses standard YAML for `config.yaml`. The installer must:
+
+1. Parse the existing YAML file
+2. Deep-merge new configuration (particularly the `extensions` map) into the existing structure
+3. Write the result back, preserving existing entries
+
+The `extensions` key is the primary integration point for MCP server packages. Provider settings use top-level keys prefixed with `GOOSE_` (e.g., `GOOSE_PROVIDER`, `GOOSE_MODEL`).
+
+### Execution Modes
+
+An installer should be aware of Goose's execution modes, which control tool approval behavior:
+
+| Mode | Behavior |
+|---|---|
+| `auto` | Tools run without user confirmation |
+| `approve` | Every tool invocation requires explicit user approval |
+| `smart_approve` | Goose decides which tools need approval based on risk |
+| `chat` | Conversation only, no tool execution |
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows, use `goose run`:
+
+```bash
+# Run instructions from text
+goose run -t "Run the test suite and report results"
+
+# Run from a file
+goose run -i ./instructions.md
+
+# Run a recipe with parameters
+goose run --recipe ./recipe.yaml --params key=value
+
+# Run without saving a session
+goose run --no-session -t "one-off task"
+```

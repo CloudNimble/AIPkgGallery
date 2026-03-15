@@ -1,0 +1,387 @@
+---
+title: 'Mistral Vibe'
+description: 'Platform specification for Mistral Vibe, Mistral AI''s coding agent'
+icon: 'wind'
+---
+
+## Overview
+
+[Mistral Vibe](https://mistral.ai/products/vibe) is an open-source CLI coding agent by **Mistral AI**, powered by Devstral models[^1]. Extensibility is via `config.toml` settings, **MCP servers**, **custom system prompts**, **AGENTS.md** project instruction files, **custom agents** (TOML profiles), and **Skills** (`SKILL.md` workflow definitions following the Agent Skills specification)[^2].
+
+---
+
+## Configuration
+
+### File Locations
+
+Mistral Vibe uses a TOML-based configuration system with a hierarchical lookup order. The base directory defaults to `~/.vibe/` but can be overridden with the `VIBE_HOME` environment variable[^3].
+
+| File | Path | Purpose |
+|---|---|---|
+| Global config | `~/.vibe/config.toml` | Personal settings for all projects |
+| Project config | `.vibe/config.toml` | Project-specific settings (also checks parent directories) |
+| API keys | `~/.vibe/.env` | API keys and provider credentials |
+| Custom prompts | `~/.vibe/prompts/<name>.md` | Custom system prompt files |
+| Custom agents | `~/.vibe/agents/<name>.toml` | Custom agent profiles |
+| Custom tools | `~/.vibe/tools/` | Custom tool definitions |
+| Global skills | `~/.vibe/skills/` | Personal skills available across all projects |
+| Project skills | `.vibe/skills/` | Project-specific skills |
+| Trusted folders | `~/.vibe/trusted_folders.toml` | Trusted directory list |
+| Session logs | `~/.vibe/logs/` | Session logs |
+
+### config.toml Structure
+
+<CodeGroup>
+
+```toml Basic Configuration
+active_model = "devstral-2"
+system_prompt_id = "cli"
+enable_telemetry = false
+enable_auto_update = false
+auto_compact_threshold = 200000
+api_timeout = 720.0
+```
+
+```toml Tool Management
+# Exact names, glob patterns, or regex (re: prefix)
+enabled_tools = ["serena_*"]
+disabled_tools = ["mcp_*", "grep"]
+
+# Per-tool permission overrides
+[tools.bash]
+permission = "always"
+
+[tools.read_file]
+permission = "ask"
+```
+
+```toml Custom Provider
+[[providers]]
+name = "openrouter"
+api_base = "https://openrouter.ai/api/v1"
+api_key_env_var = "OPENROUTER_API_KEY"
+api_style = "openai"
+backend = "generic"
+
+[[models]]
+name = "mistralai/devstral-2512:free"
+provider = "openrouter"
+alias = "devstral-openrouter"
+temperature = 0.2
+input_price = 0.0
+output_price = 0.0
+```
+
+</CodeGroup>
+
+### Configuration Priority
+
+Project-specific `.vibe/config.toml` settings override global `~/.vibe/config.toml` settings. Vibe walks parent directories looking for `.vibe/config.toml` files[^3]. Environment variables (e.g., `MISTRAL_API_KEY`) take precedence over values in `~/.vibe/.env`[^3].
+
+---
+
+## Custom Instructions
+
+### AGENTS.md
+
+Mistral Vibe supports `AGENTS.md` files for project-level coding instructions[^4]. When placed in the workspace root, this file is read by the agent to enforce coding standards, style rules, and project conventions.
+
+```markdown AGENTS.md (example)
+---
+name: python312.rule
+globs: "**/*.py"
+---
+
+## Coding Standards
+
+- Prefer Pydantic v2 native validation over ad-hoc parsing
+- Use pathlib.Path for file system operations
+- Modern type hints: use built-in generics and pipe operator
+- Write declarative, minimalist code
+```
+
+<Note>
+  AGENTS.md support is currently only functional when the file is placed in the root of the workspace[^5].
+</Note>
+
+### Custom System Prompts
+
+Custom system prompts replace the default prompt. Create a Markdown file in `~/.vibe/prompts/` and reference it by filename (without `.md`) in `config.toml`[^3]:
+
+```toml
+system_prompt_id = "my_custom_prompt"
+```
+
+This loads `~/.vibe/prompts/my_custom_prompt.md` as the system prompt for all sessions.
+
+---
+
+## MCP Servers
+
+MCP servers extend Vibe with additional tools and are configured in `config.toml` using the `[[mcp_servers]]` array[^3].
+
+<Warning>
+  If your default config contains `mcp_servers = []`, you must remove that line before adding `[[mcp_servers]]` entries[^3].
+</Warning>
+
+### Transport Types
+
+| Type | Description |
+|---|---|
+| `http` | Standard HTTP connection |
+| `streamable-http` | HTTP with streaming support |
+| `stdio` | Local process via stdin/stdout |
+
+### Configuration Examples
+
+<CodeGroup>
+
+```toml HTTP Server
+[[mcp_servers]]
+name = "my_http_server"
+transport = "http"
+url = "http://localhost:8000"
+headers = { "Authorization" = "Bearer my_token" }
+api_key_env = "MY_API_KEY_ENV_VAR"
+api_key_header = "Authorization"
+api_key_format = "Bearer {token}"
+env = { "DEBUG" = "1", "LOG_LEVEL" = "info" }
+startup_timeout_sec = 15
+tool_timeout_sec = 120
+```
+
+```toml Streamable HTTP Server
+[[mcp_servers]]
+name = "my_streamable_server"
+transport = "streamable-http"
+url = "http://localhost:8001"
+headers = { "X-API-Key" = "my_api_key" }
+```
+
+```toml stdio Server
+[[mcp_servers]]
+name = "fetch_server"
+transport = "stdio"
+command = "uvx"
+args = ["mcp-server-fetch"]
+```
+
+</CodeGroup>
+
+### MCP Tool Naming and Permissions
+
+MCP tools are exposed with the naming convention `{server_name}_{tool_name}` (using underscores, not dots)[^3]. Permissions for MCP tools can be configured individually:
+
+```toml
+[tools.fetch_server_get]
+permission = "always"
+
+[tools.my_http_server_query]
+permission = "ask"
+```
+
+You can also use glob patterns to manage MCP tools in bulk:
+
+```toml
+disabled_tools = ["mcp_*"]
+```
+
+---
+
+## Custom Agents
+
+Custom agents are TOML profiles stored in `~/.vibe/agents/` that define specialized behaviors, tool sets, and safety levels[^2].
+
+### Agent Configuration Format
+
+```toml ~/.vibe/agents/redteam.toml
+display_name = "Red Team"
+description = "Security-focused agent with restricted tools"
+safety = "destructive"
+auto_approve = false
+active_model = "devstral-2"
+system_prompt_id = "redteam"
+enabled_tools = ["read_file", "grep", "bash"]
+disabled_tools = ["search_replace", "write_file"]
+
+[tools.bash]
+permission = "always"
+
+[tools.read_file]
+permission = "always"
+```
+
+### Safety Levels
+
+The `safety` field controls the visual border color of the agent's input area. It is a visual indicator only and does not enforce safety restrictions[^2]:
+
+| Value | Purpose |
+|---|---|
+| `safe` | Green border -- read-only or low-risk agents |
+| `neutral` | Default border -- general-purpose agents |
+| `destructive` | Red border -- agents with elevated permissions |
+| `yolo` | Red border -- auto-approve everything |
+
+### Built-in Agents
+
+Vibe ships with four built-in agent profiles, switchable at runtime via `Shift+Tab` or `--agent`[^2]:
+
+- **default** -- Requires approval for tool executions
+- **plan** -- Read-only agent for exploration and planning (auto-approves safe tools)
+- **accept-edits** -- Auto-approves file edits only
+- **auto-approve** -- Auto-approves all tool executions
+
+### Subagents
+
+Subagents are specialized agents that run independently via the `task` tool. They cannot ask questions and return results as text only[^2].
+
+```toml ~/.vibe/agents/research.toml
+display_name = "Research"
+description = "Read-only subagent for research tasks"
+safety = "safe"
+agent_type = "subagent"
+enabled_tools = ["grep", "read_file"]
+```
+
+---
+
+## Skills
+
+Vibe follows the [Agent Skills specification](https://agentskills.io/specification) for defining reusable, slash-command-invocable workflows[^2].
+
+### SKILL.md Format
+
+Each skill is a directory containing a `SKILL.md` file with YAML frontmatter:
+
+```markdown .vibe/skills/code-review/SKILL.md
+---
+name: code-review
+description: Perform automated code reviews
+license: MIT
+compatibility: Python 3.12+
+user-invocable: true
+allowed-tools:
+  - read_file
+  - grep
+  - ask_user_question
+---
+
+# Code Review Skill
+
+This skill helps analyze code quality and suggest improvements.
+Review the specified files and provide actionable feedback.
+```
+
+When `user-invocable` is `true`, the skill becomes available as a `/code-review` slash command[^2].
+
+### Skill Discovery Paths
+
+Skills are discovered from multiple locations[^2][^4]:
+
+| Scope | Path |
+|---|---|
+| Custom paths | Configured via `skill_paths` in `config.toml` |
+| Agent Skills standard | `.agents/skills/` (project root, trusted folders only) |
+| Project skills | `.vibe/skills/` (project root, trusted folders only) |
+| Global skills | `~/.vibe/skills/` |
+
+### Enabling and Disabling Skills
+
+Skills can be filtered in `config.toml` using exact names, glob patterns, or regex[^2]:
+
+```toml
+enabled_skills = ["code-review", "test-*"]
+disabled_skills = ["experimental-*"]
+```
+
+---
+
+## Hooks
+
+<Note>
+  No public documentation for a built-in hooks or lifecycle events system in Mistral Vibe's `config.toml` was found as of March 2026. Lifecycle-related behavior exists in the ACP (Agent Communication Protocol) integration for IDE embeddings, and third-party orchestration tools like [Otter](https://github.com/Unchained-Labs/otter) provide post-execution hook support, but Vibe itself does not expose a user-configurable hooks system comparable to Claude Code's[^6].
+</Note>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for Mistral Vibe.
+
+### Configuration File Paths
+
+| Scope | Path |
+|---|---|
+| Global config | `~/.vibe/config.toml` |
+| Global skills | `~/.vibe/skills/<name>/SKILL.md` |
+| Global agents | `~/.vibe/agents/<name>.toml` |
+| Global prompts | `~/.vibe/prompts/<name>.md` |
+| API keys | `~/.vibe/.env` |
+| Project config | `<project>/.vibe/config.toml` |
+| Project skills | `<project>/.vibe/skills/<name>/SKILL.md` |
+| Project instructions | `<project>/AGENTS.md` |
+
+### Installing Skills
+
+To install a skill, create a directory with a `SKILL.md` file in either the project or global skills path:
+
+<Tabs>
+  <Tab title="Project Scope">
+    Write the skill to `.vibe/skills/<skill-name>/SKILL.md` in the project root.
+  </Tab>
+  <Tab title="Global Scope">
+    Write the skill to `~/.vibe/skills/<skill-name>/SKILL.md`.
+  </Tab>
+  <Tab title="Custom Path">
+    Write skills to a custom directory and register the path in `config.toml`:
+
+    ```toml
+    skill_paths = ["/path/to/custom/skills"]
+    ```
+  </Tab>
+</Tabs>
+
+### Installing MCP Servers
+
+To programmatically register an MCP server, merge a `[[mcp_servers]]` entry into `config.toml` at either the project or global level:
+
+```toml
+[[mcp_servers]]
+name = "package-server"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@scope/mcp-server-package"]
+```
+
+<Warning>
+  Mistral Vibe does not provide a CLI subcommand (like `claude mcp add`) for adding MCP servers. The installer must parse and merge TOML configuration directly. If the default config contains `mcp_servers = []`, it must be removed before adding `[[mcp_servers]]` entries[^3].
+</Warning>
+
+### Installing Custom Instructions
+
+To install project-level instructions, write or append to `AGENTS.md` in the project root. This file is read automatically when Vibe runs in the workspace[^5].
+
+### Config File Format
+
+Mistral Vibe uses TOML for its configuration. The installer must:
+
+1. Parse the existing `config.toml` file (if it exists)
+2. Merge new configuration (e.g., `[[mcp_servers]]`, `skill_paths`, tool permissions)
+3. Write the result back, preserving existing entries
+
+The `enabled_tools`/`disabled_tools` arrays and `[[mcp_servers]]` table arrays are the primary integration points.
+
+### No CLI Configuration Commands
+
+As of March 2026, Mistral Vibe does not expose CLI subcommands for programmatically adding MCP servers, skills, or agent configurations. All configuration must be done by directly editing `config.toml` or placing files in the appropriate directories[^3].
+
+---
+
+## Footnotes
+
+[^1]: https://mistral.ai/news/devstral-2-vibe-cli
+[^2]: https://docs.mistral.ai/mistral-vibe/agents-skills
+[^3]: https://docs.mistral.ai/mistral-vibe/introduction/configuration
+[^4]: https://github.com/mistralai/mistral-vibe
+[^5]: https://github.com/mistralai/mistral-vibe/blob/main/AGENTS.md
+[^6]: https://github.com/Unchained-Labs/otter

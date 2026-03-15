@@ -1,0 +1,423 @@
+---
+title: Amp
+description: Platform specification for Amp, the AI coding agent built by Sourcegraph (now an independent company)
+icon: bolt
+---
+
+## Overview
+
+[Amp](https://ampcode.com/) is an AI coding agent available as a CLI, VS Code extension, and JetBrains plugin. It supports extensibility through MCP servers, custom skills, toolboxes, AGENT.md project instructions, and custom slash commands.
+
+---
+
+## Configuration & Extensibility
+
+### File Locations
+
+Amp uses JSON configuration files with a global and workspace hierarchy.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `settings.json` | `~/.config/amp/settings.json` | Global configuration (MCP servers, permissions, tools, preferences) |
+    | `settings.json` | `<project>/.amp/settings.json` | Workspace-specific configuration (merged with global) |
+    | `AGENT.md` | `<project>/AGENT.md` | Project-level agent instructions |
+    | `AGENTS.md` | `<project>/AGENTS.md` | Alternative agent instructions (AGENTS.md spec) |
+    | Skills | `~/.config/agents/skills/` | User-wide custom skills |
+    | Skills | `<project>/.agents/skills/` | Project-specific custom skills |
+    | Commands | `<project>/.agents/commands/` | Project-specific custom slash commands |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `settings.json` | `%APPDATA%\amp\settings.json` | Global configuration |
+    | `settings.json` | `<project>\.amp\settings.json` | Workspace-specific configuration |
+    | `AGENT.md` | `<project>\AGENT.md` | Project-level agent instructions |
+    | Skills | `%APPDATA%\agents\skills\` | User-wide custom skills |
+  </Tab>
+</Tabs>
+
+### settings.json Structure
+
+<CodeGroup>
+
+```json MCP Servers Configuration
+{
+  "amp.mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+    },
+    "linear": {
+      "url": "https://mcp.linear.app/sse"
+    },
+    "sourcegraph": {
+      "url": "${SRC_ENDPOINT}/.api/mcp/v1",
+      "headers": {
+        "Authorization": "token ${SRC_ACCESS_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+```json Permissions Configuration
+{
+  "amp.permissions": [
+    {
+      "tool": "Bash",
+      "action": "allow",
+      "matches": {
+        "cmd": ["ls*", "git status*", "npm test*", "cargo build*"]
+      }
+    },
+    {
+      "tool": "Bash",
+      "action": "ask",
+      "matches": {
+        "cmd": ["git push*", "git commit*", "rm -rf*"]
+      }
+    },
+    {
+      "tool": "Bash",
+      "action": "reject",
+      "matches": {
+        "cmd": ["curl*|*sh", "wget*|*bash"]
+      }
+    }
+  ],
+  "amp.tools.disable": ["web_search", "builtin:mermaid"],
+  "amp.guardedFiles.allowlist": ["*.generated.ts"],
+  "amp.dangerouslyAllowAll": false
+}
+```
+
+</CodeGroup>
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):
+
+1. **Command-line flags** (e.g., `--dangerously-allow-all`, `--settings-file`)
+2. **Environment variables** (e.g., `AMP_API_KEY`, `AMP_LOG_LEVEL`)
+3. **Workspace settings** (`<project>/.amp/settings.json`)
+4. **Global settings** (`~/.config/amp/settings.json`)
+5. **Built-in defaults**
+
+<Note>
+  Workspace settings (`.amp/settings.json`) are merged with global settings. MCP servers defined in workspace settings require explicit user approval before they can run, as a security measure against untrusted projects.
+</Note>
+
+### The AGENT.md File
+
+The `AGENT.md` file provides Amp with context about your project. Amp reads it to understand codebase structure, development practices, coding standards, and build/test commands.
+
+```markdown AGENT.md
+# Project Overview
+
+This is a TypeScript monorepo using pnpm workspaces.
+
+## Build & Test
+
+- Build: `pnpm build`
+- Test: `pnpm test`
+- Lint: `pnpm lint`
+
+## Key Modules
+
+- `packages/core` - Core library
+- `packages/cli` - Command-line interface
+- `apps/web` - Next.js web application
+
+## Conventions
+
+- Use strict TypeScript with no `any` types
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+
+## File References
+
+See @docs/architecture.md for system design.
+See @specs/**/*.md for detailed specifications.
+```
+
+**Placement and precedence:**
+
+| Scope | Location |
+|---|---|
+| Project-wide | `<project-root>/AGENT.md` or `<project-root>/AGENTS.md` |
+| Subdirectory-specific | `<subdirectory>/AGENT.md` |
+| User-global skills | `~/.config/agents/skills/` |
+
+Amp automatically reads the nearest `AGENT.md` in the directory tree relative to the files being edited. The closest file takes precedence, and explicit user prompts override everything.
+
+**@-mentions for file inclusion:** You can reference other files using `@path/to/file.md` syntax within agent files. Relative paths, absolute paths, `@~/path`, and glob patterns (e.g., `@docs/*.md`) are all supported.
+
+<Info>
+  Amp can generate an `AGENT.md` file for you using the `/agent` slash command. It reads your project structure and existing agent files (`.cursorrules`, `.cursor/rules`, `.windsurfrules`, `.clinerules`, `CLAUDE.md`, `.github/copilot-instructions.md`) to produce a comprehensive starting point.
+</Info>
+
+<Warning>
+  For extensive instructions, consider using skills instead of a massive `AGENT.md`. Skills load on demand, keeping the context window clean and reducing token usage.
+</Warning>
+
+---
+
+## MCP Servers
+
+Amp supports the Model Context Protocol for extending its capabilities with external tools and services.
+
+### Server Types
+
+| Type | Description | Configuration |
+|---|---|---|
+| **stdio** | Local MCP servers communicating over standard I/O | `command` and `args` in settings |
+| **Remote (SSE/HTTP)** | Remote MCP servers using Server-Sent Events or HTTP streaming | `url` (and optional `headers`) in settings |
+
+### Adding MCP Servers
+
+<Tabs>
+  <Tab title="CLI (amp mcp add)">
+    ```bash
+    # Add a local stdio server
+    amp mcp add playwright -- npx -y @playwright/mcp@latest --headless
+
+    # Add a remote server
+    amp mcp add linear https://mcp.linear.app/sse
+
+    # Add with OAuth authentication
+    amp mcp add sg https://sourcegraph.example.com/.api/mcp
+
+    # Add to workspace settings only
+    amp mcp add --workspace playwright -- npx -y @playwright/mcp@latest
+    ```
+  </Tab>
+  <Tab title="VS Code Settings UI">
+    Go to **Settings > Extensions > Amp > MCP Servers**. Click **Add MCP Server** and configure the server name, command, arguments, and environment variables. You can click on individual tools to disable ones you don't need.
+  </Tab>
+  <Tab title="settings.json (Manual)">
+    ```json
+    {
+      "amp.mcpServers": {
+        "github": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-github"],
+          "env": {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
+          }
+        },
+        "remote-server": {
+          "url": "https://mcp.example.com/sse",
+          "headers": {
+            "Authorization": "Bearer token-here"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### MCP Server Management
+
+```bash
+# Check health of all configured MCP servers
+amp mcp doctor
+
+# Remove an MCP server
+amp mcp remove playwright
+
+# Manage OAuth authentication
+amp mcp oauth login <server-name>
+amp mcp oauth logout <server-name>
+amp mcp oauth status <server-name>
+```
+
+### Skill-Bundled MCP Servers
+
+Skills can bundle MCP servers by including an `mcp.json` file in the skill directory. The servers start when Amp launches, but their tools remain hidden until the skill is loaded. This is the recommended approach for keeping the tool list clean and reducing context bloat.
+
+<Warning>
+  Too many available tools can reduce model performance. For best results, bundle MCP servers in skills instead of adding them globally, use servers that expose a small number of high-level tools, and disable MCP tools you aren't using.
+</Warning>
+
+---
+
+## Skills
+
+Skills are packages of instructions and resources that teach Amp how to perform specific tasks. Unlike `AGENT.md` (which is always loaded), skills are loaded on demand when the model determines they are relevant.
+
+### Skill Structure
+
+A skill is a markdown file with YAML front matter placed in a skills directory:
+
+```markdown .agents/skills/SKILL-deploy.md
+---
+name: deploy
+description: Deploy the application to production using our CI/CD pipeline
+---
+
+## Deployment Process
+
+1. Run `pnpm build` to create a production build
+2. Run `pnpm test` to verify all tests pass
+3. Run `./scripts/deploy.sh --env production`
+
+## Important Notes
+
+- Always check the deployment dashboard at https://dashboard.example.com
+- Never deploy on Fridays after 3pm
+- See @docs/deployment.md for rollback procedures
+```
+
+### Skill Locations
+
+| Scope | Location |
+|---|---|
+| Project-specific | `<project>/.agents/skills/` |
+| User-wide | `~/.config/agents/skills/` |
+| Built-in | Bundled with Amp |
+
+Project-specific skills take priority over user-wide skills, and both override built-in skills with the same name.
+
+---
+
+## Toolboxes
+
+Toolboxes provide a lightweight alternative to MCP servers for custom tools. A toolbox is a directory containing executable files that each implement the toolbox protocol:
+
+1. When called with `TOOLBOX_ACTION=describe`, the executable outputs its tool description
+2. When called with `TOOLBOX_ACTION=execute`, it processes the input and returns results
+
+Tools from toolboxes are registered with a `tb__` prefix (e.g., `run_tests` becomes `tb__run_tests`).
+
+---
+
+## Custom Slash Commands
+
+Custom slash commands can be defined by placing markdown files in `<project>/.agents/commands/`.
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Amp platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **Global settings**: `~/.config/amp/settings.json`
+    - **Workspace settings**: `<project>/.amp/settings.json`
+    - **Project instructions**: `<project>/AGENT.md` or `<project>/AGENTS.md`
+    - **User-wide skills**: `~/.config/agents/skills/`
+    - **Project skills**: `<project>/.agents/skills/`
+    - **Project commands**: `<project>/.agents/commands/`
+  </Tab>
+  <Tab title="Windows">
+    - **Global settings**: `%APPDATA%\amp\settings.json`
+    - **Workspace settings**: `<project>\.amp\settings.json`
+    - **Project instructions**: `<project>\AGENT.md` or `<project>\AGENTS.md`
+    - **User-wide skills**: `%APPDATA%\agents\skills\`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into the `amp.mcpServers` key of `settings.json`:
+
+```json
+{
+  "amp.mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `amp.mcpServers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- For local servers, use `command` and `args`; for remote servers, use `url` (and optional `headers`)
+- Use `${VAR_NAME}` syntax in `url` and `headers` values to reference environment variables
+- MCP servers in workspace settings require explicit user approval; global settings do not
+- The CLI command `amp mcp add` can also be used programmatically: `amp mcp add <name> -- <command> [args...]`
+
+### Installing Project Instructions
+
+To install project-level instructions, write an `AGENT.md` file to the project root. If an `AGENT.md` or `AGENTS.md` file already exists, the installer should append to it.
+
+Amp supports `@-mention` syntax for referencing other files (e.g., `See @docs/setup.md`), which can be used to keep the main agent file concise while linking to detailed documentation.
+
+### Installing Skills
+
+To install a custom skill, place a markdown file with YAML front matter in the appropriate skills directory:
+
+- **User-wide**: `~/.config/agents/skills/SKILL-<name>.md`
+- **Project-specific**: `<project>/.agents/skills/SKILL-<name>.md`
+
+Skills can also bundle MCP servers by including an `mcp.json` file alongside the skill markdown file.
+
+### Authentication
+
+Amp uses account-based authentication rather than individual LLM API keys:
+
+- **Interactive**: `amp login` opens a browser-based authentication flow
+- **Non-interactive / CI**: Set the `AMP_API_KEY` environment variable (obtain from ampcode.com/settings)
+
+<Note>
+  Unlike many other platforms, Amp routes all LLM requests through its own servers. Users do not need to provide individual API keys for Anthropic, OpenAI, Google, etc. The Amp account handles all model access.
+</Note>
+
+### Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `AMP_API_KEY` | Authentication token (from ampcode.com/settings) |
+| `AMP_URL` | Service endpoint (defaults to ampcode.com) |
+| `AMP_LOG_LEVEL` | Logging verbosity (error, warn, info, debug) |
+| `AMP_LOG_FILE` | Log file path |
+| `AMP_SETTINGS_FILE` | Custom settings file location |
+
+### Config File Format
+
+Amp uses standard JSON for `settings.json`. All settings use the `amp.` prefix. The installer must:
+
+1. Parse the existing JSON file (if it exists)
+2. Deep-merge new configuration (particularly the `amp.mcpServers` map and `amp.permissions` array) into the existing structure
+3. Write the result back, preserving existing entries
+
+The `amp.mcpServers` key is the primary integration point for MCP server packages. The `amp.permissions` array controls tool approval behavior.
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows, use execute mode:
+
+```bash
+# Run instructions from text
+amp -x "Run the test suite and report results"
+
+# Run with full autonomy (no prompts)
+amp --dangerously-allow-all -x "Fix lint errors and commit"
+
+# Run with piped input
+git diff | amp -x "Review these changes for bugs"
+
+# Run with custom MCP config
+amp --mcp-config ./mcp-servers.json -x "Deploy to staging"
+
+# Set API key for non-interactive environments
+export AMP_API_KEY="your-key-here"
+amp -x "Generate a changelog from recent commits"
+```

@@ -1,0 +1,433 @@
+---
+title: Continue
+description: Platform specification for Continue, the open-source AI code assistant for VS Code and JetBrains IDEs
+icon: forward
+---
+
+## Overview
+
+[Continue](https://www.continue.dev/) is an open-source AI code assistant for VS Code and JetBrains by **Continue Dev, Inc.** Extensibility is via MCP servers (YAML/JSON config), a **Rules** system (Markdown files with frontmatter), custom **Prompts** (slash commands), and [Continue Hub](https://hub.continue.dev/) for sharing reusable configs. It also auto-discovers MCP configs from Claude Desktop/Cursor format.
+
+---
+
+## Configuration
+
+### File Locations
+
+Continue uses YAML configuration files (with legacy JSON support) stored in the `.continue` global directory. The IDE extension and CLI share the same configuration system.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File / Directory | Path | Purpose |
+    |---|---|---|
+    | `config.yaml` | `~/.continue/config.yaml` | Primary configuration (models, rules, MCP servers, context) |
+    | `config.json` | `~/.continue/config.json` | Legacy configuration (deprecated; ignored if `config.yaml` exists) |
+    | `config.ts` | `~/.continue/config.ts` | Programmatic configuration extensions (advanced) |
+    | `rules/` | `~/.continue/rules/` | Global rule files (Markdown) applied to all projects |
+    | `mcpServers/` | `~/.continue/mcpServers/` | MCP server config files (YAML or JSON); auto-discovered |
+    | `permissions.yaml` | `~/.continue/permissions.yaml` | Tool permission policies for the CLI |
+    | `mcp.json` | `~/.continue/mcp.json` | Alternative MCP server definitions (JSON format) |
+  </Tab>
+  <Tab title="Windows">
+    | File / Directory | Path | Purpose |
+    |---|---|---|
+    | `config.yaml` | `%USERPROFILE%\.continue\config.yaml` | Primary configuration |
+    | `config.json` | `%USERPROFILE%\.continue\config.json` | Legacy configuration (deprecated) |
+    | `config.ts` | `%USERPROFILE%\.continue\config.ts` | Programmatic configuration extensions |
+    | `rules\` | `%USERPROFILE%\.continue\rules\` | Global rule files |
+    | `mcpServers\` | `%USERPROFILE%\.continue\mcpServers\` | MCP server config files |
+  </Tab>
+</Tabs>
+
+**Workspace-level files:**
+
+| File / Directory | Path | Purpose |
+|---|---|---|
+| `.continuerules` | `<project-root>/.continuerules` | Project-specific rules (appended to system prompt) |
+| `.continue/rules/` | `<project-root>/.continue/rules/` | Project rule files (Markdown with frontmatter) |
+| `.continuerc.json` | `<project-root>/.continuerc.json` | Workspace-level config overrides (merges with global config) |
+| `.continue/checks/` | `<project-root>/.continue/checks/` | AI check definitions for PR reviews |
+
+### config.yaml Structure
+
+<CodeGroup>
+
+```yaml Basic Configuration
+name: My Config
+version: 1.0.0
+schema: v1
+
+models:
+  - name: Claude Sonnet
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    apiKey: ${{ secrets.ANTHROPIC_API_KEY }}
+    roles:
+      - chat
+      - edit
+      - apply
+
+  - name: Codestral
+    provider: mistral
+    model: codestral-latest
+    roles:
+      - autocomplete
+
+context:
+  - provider: file
+  - provider: code
+  - provider: diff
+  - provider: terminal
+  - provider: docs
+  - provider: codebase
+
+rules:
+  - Always use TypeScript strict mode
+  - uses: file://.continue/rules/coding-standards.md
+```
+
+```yaml MCP Servers
+mcpServers:
+  - name: GitHub MCP
+    command: npx
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-github"
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  - name: Remote Server
+    type: streamable-http
+    url: https://mcp.example.com/api
+
+  - name: SSE Server
+    type: sse
+    url: https://mcp.example.com/sse
+```
+
+```yaml Prompts and Hub References
+# Custom slash command prompts
+prompts:
+  - name: review
+    description: Review selected code
+    prompt: |
+      Review the following code for bugs, security issues,
+      and adherence to best practices. Suggest improvements.
+
+# Rules from Continue Hub
+rules:
+  - uses: sanity/sanity-opinionated
+  - uses: myorg/typescript-standards
+  - uses: file://rules/project-rules.md
+```
+
+</CodeGroup>
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):
+
+1. **Workspace overrides** (`.continuerc.json` with `mergeBehavior: "overwrite"`)
+2. **Workspace merges** (`.continuerc.json` with `mergeBehavior: "merge"`, the default)
+3. **Global config** (`~/.continue/config.yaml`)
+4. **Hub config** (if using Continue Hub-managed configuration)
+5. **Default values**
+
+<Note>
+  Continue auto-reloads configuration when you save changes to `config.yaml` -- no IDE restart is required. The extension also provides autocomplete for config options within the YAML file.
+</Note>
+
+---
+
+## Rules and Custom Instructions
+
+Rules provide system message instructions that guide model behavior for Agent, Chat, and Edit mode requests. Rules are **not** included in autocomplete or apply operations.
+
+### Rule File Format
+
+Rules are written as Markdown files with optional YAML frontmatter:
+
+```markdown .continue/rules/typescript-standards.md
+---
+name: TypeScript Standards
+globs: ["**/*.ts", "**/*.tsx"]
+alwaysApply: false
+description: Enforces TypeScript coding standards for the project
+---
+
+## TypeScript Conventions
+
+- Use strict TypeScript with no `any` types
+- Prefer `interface` over `type` for object shapes
+- All exported functions must have JSDoc comments
+- Use `const` assertions for literal types
+- Handle all Promise rejections explicitly
+```
+
+### Rule Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `name` | string (required) | Display name shown in the rules toolbar |
+| `globs` | string or string[] | File patterns that trigger rule inclusion when matching files are in context |
+| `regex` | string or string[] | Content patterns that trigger rule inclusion |
+| `description` | string | Agent-readable explanation of the rule's purpose |
+| `alwaysApply` | boolean | `true`: always included; `false`: only when globs match or agent selects it; omitted: included if no globs or globs match |
+
+### Rule Sources
+
+| Source | Location | Scope |
+|---|---|---|
+| **Workspace rules** | `<project>/.continue/rules/*.md` | Project-specific, version-controlled |
+| **Global rules** | `~/.continue/rules/*.md` | Applied to all projects |
+| **`.continuerules` file** | `<project-root>/.continuerules` | Simple project-specific instructions |
+| **Hub rules** | Referenced via `uses:` in config.yaml | Shared across teams via Continue Hub |
+| **Inline rules** | Directly in `rules:` array in config.yaml | Simple string instructions |
+
+### Rule Application Order
+
+Rules are loaded sequentially and joined with newlines to form the system message:
+
+1. Hub assistant rules (if using a Hub-managed assistant)
+2. Referenced Hub rules (via `uses:` syntax)
+3. Local workspace rules (from `.continue/rules/`)
+4. Global rules (from `~/.continue/rules/`)
+
+### Overriding the System Prompt
+
+Advanced users can override the default system prompt per model using `chatOptions`:
+
+```yaml
+models:
+  - name: Custom Claude
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    chatOptions:
+      baseSystemMessage: "You are a senior TypeScript developer..."
+      baseAgentSystemMessage: "You are an autonomous coding agent..."
+      basePlanSystemMessage: "You are a planning assistant..."
+```
+
+---
+
+---
+
+## MCP Servers
+
+Continue supports the Model Context Protocol for connecting to external tools, systems, and databases. MCP tools are available in **Agent mode only**.
+
+### Transport Types
+
+| Type | Description | Configuration |
+|---|---|---|
+| **stdio** | Local MCP servers communicating over standard I/O | `command`, `args`, `env`, `cwd` |
+| **sse** | Remote servers using Server-Sent Events | `url`, `env` |
+| **streamable-http** | Remote servers using HTTP streaming | `url`, `env` |
+
+### Adding MCP Servers
+
+<Tabs>
+  <Tab title="config.yaml">
+    ```yaml
+    mcpServers:
+      - name: sqlite-server
+        command: uvx
+        args:
+          - mcp-server-sqlite
+          - --db-path
+          - ./database.db
+        env:
+          NODE_ENV: production
+        cwd: /path/to/project
+
+      - name: remote-tools
+        type: streamable-http
+        url: https://mcp.example.com/api
+    ```
+  </Tab>
+  <Tab title="JSON Config File">
+    Place a JSON file in `~/.continue/mcpServers/` or `<project>/.continue/mcpServers/`:
+
+    ```json my-server.json
+    {
+      "name": "My MCP Server",
+      "version": "0.0.1",
+      "schema": "v1",
+      "mcpServers": [
+        {
+          "name": "my-server",
+          "command": "npx",
+          "args": ["-y", "@my-org/mcp-server"],
+          "env": {
+            "API_KEY": "your-key"
+          }
+        }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab title="Claude Desktop / Cursor Format">
+    Copy existing JSON config files from Claude Desktop, Cursor, or Cline directly into `~/.continue/mcpServers/`. Continue automatically recognizes these formats:
+
+    ```json
+    {
+      "mcpServers": {
+        "server-name": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server"],
+          "env": {
+            "API_KEY": "value"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Environment Variable Secrets
+
+MCP server configurations support secret injection using the `${{ secrets.SECRET_NAME }}` syntax. This allows you to reference secrets stored in Continue Hub or environment variables without hardcoding them.
+
+---
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Continue platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **Primary config**: `~/.continue/config.yaml`
+    - **Legacy config**: `~/.continue/config.json` (deprecated)
+    - **Global rules**: `~/.continue/rules/*.md`
+    - **MCP server configs**: `~/.continue/mcpServers/`
+    - **MCP JSON fallback**: `~/.continue/mcp.json`
+    - **Tool permissions**: `~/.continue/permissions.yaml`
+    - **Project rules**: `<project>/.continue/rules/*.md`
+    - **Project MCP configs**: `<project>/.continue/mcpServers/`
+    - **Project instructions**: `<project>/.continuerules`
+  </Tab>
+  <Tab title="Windows">
+    - **Primary config**: `%USERPROFILE%\.continue\config.yaml`
+    - **Legacy config**: `%USERPROFILE%\.continue\config.json`
+    - **Global rules**: `%USERPROFILE%\.continue\rules\*.md`
+    - **MCP server configs**: `%USERPROFILE%\.continue\mcpServers\`
+    - **Project rules**: `<project>\.continue\rules\*.md`
+    - **Project instructions**: `<project>\.continuerules`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+There are two approaches to programmatically register an MCP server:
+
+**Approach 1: Add to `config.yaml`**
+
+Merge the MCP server definition into the `mcpServers` array in `config.yaml`:
+
+```yaml
+mcpServers:
+  - name: package-server-name
+    command: npx
+    args:
+      - "-y"
+      - "@scope/mcp-server-package"
+    env:
+      API_KEY: "value"
+```
+
+**Approach 2: Drop a JSON file into `mcpServers/`**
+
+Place a JSON config file in `~/.continue/mcpServers/` or `<project>/.continue/mcpServers/`. Continue auto-discovers files in this directory:
+
+```json package-server.json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+<Info>
+  The `mcpServers/` directory approach is recommended for installers because it avoids the need to parse and merge YAML. Each server gets its own file, and Continue automatically discovers all files in the directory. The JSON format is also compatible with Claude Desktop and Cursor configurations.
+</Info>
+
+**Key considerations:**
+
+- The `mcpServers` key in `config.yaml` is an **array** (not a map); each entry is identified by its `name` field
+- When using the `mcpServers/` directory approach, files can be YAML or JSON format
+- Continue supports Claude Desktop / Cursor JSON format natively -- the same JSON file can work across tools
+- Continue auto-reloads configuration on save; no IDE restart is required
+- For remote servers, set `type` to `sse` or `streamable-http` and use `url` instead of `command`/`args`
+- Environment variables support `${{ secrets.SECRET_NAME }}` syntax for secret injection
+
+### Installing Project Rules
+
+To install project-level instructions, either:
+
+1. **Write a `.continuerules` file** to the project root (simple plaintext instructions)
+2. **Create a Markdown file** in `<project>/.continue/rules/` with frontmatter (supports globs, conditional inclusion)
+
+If a `.continuerules` file already exists, the installer should append to it. For the `.continue/rules/` directory, add a new `.md` file with a unique name.
+
+```markdown .continue/rules/package-rules.md
+---
+name: Package Name Guidelines
+globs: ["**/*.ts", "**/*.js"]
+alwaysApply: true
+---
+
+When working with Package Name:
+- Follow the official API conventions
+- Use the provided utility functions from @scope/package
+```
+
+### API Key Management
+
+Continue stores API keys in the configuration file itself, referenced via the `${{ secrets.SECRET_NAME }}` syntax for Hub-managed configs, or as plain `apiKey` values in local configs. An installer can:
+
+- Set environment variables that the model provider reads (e.g., `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)
+- Write directly to the model's `apiKey` field in `config.yaml`
+- Instruct the user to configure keys through the IDE extension's settings UI
+
+### Config File Format
+
+Continue uses YAML for `config.yaml`. The installer must:
+
+1. Parse the existing YAML file (if it exists)
+2. Append new MCP server entries to the `mcpServers` array (or use the directory-based approach to avoid YAML manipulation)
+3. Write the result back, preserving existing entries
+
+Alternatively, use the `mcpServers/` directory approach to avoid YAML parsing entirely -- simply drop a JSON or YAML file into the directory.
+
+<Warning>
+  If both `config.yaml` and `config.json` exist, Continue loads `config.yaml` and ignores `config.json`. Installers should check for and modify `config.yaml` first, falling back to `config.json` only if no YAML config exists.
+</Warning>
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows, use the `cn` CLI:
+
+```bash
+# Run a headless agent task
+CONTINUE_API_KEY=your-key cn -p "Run the test suite and report results"
+
+# Run AI checks on a PR
+cn review --base main --format json --fail-fast
+
+# Apply suggested fixes
+cn review --fix
+
+# Output patches for git apply
+cn review --patch | git apply
+```

@@ -1,0 +1,362 @@
+---
+title: Zed
+description: Platform specification for Zed, the open-source Rust-based AI code editor by Zed Industries
+icon: code
+---
+
+## Overview
+
+[Zed](https://zed.dev) is an open-source, high-performance code editor written in Rust, available on macOS, Linux, and Windows. It supports extensibility through a WebAssembly extension system, MCP server integration via `context_servers` in settings, project-level rules files, custom agent profiles, and external agent connections via the Agent Client Protocol (ACP).
+
+---
+
+## Configuration
+
+### File Locations
+
+Zed uses a layered configuration system with JSON files at global and project levels.
+
+| File | Location | Purpose |
+|---|---|---|
+| `settings.json` | `~/.config/zed/settings.json` | Global user settings (includes `context_servers`, `agent` keys) |
+| `keymap.json` | `~/.config/zed/keymap.json` | Custom keybindings |
+| `settings.json` | `<project>/.zed/settings.json` | Project-specific settings (includes `context_servers`) |
+| `.rules` | `<project>/.rules` | Project-level AI rules |
+
+<Note>
+  On Linux, if `XDG_CONFIG_HOME` is set, the global settings path becomes `$XDG_CONFIG_HOME/zed/settings.json` instead of `~/.config/zed/settings.json`.
+</Note>
+
+### Configuration Hierarchy
+
+Settings are resolved with the following precedence (highest to lowest):
+
+1. **Nested project `.zed/settings.json`** closest to the edited file
+2. **Project root `.zed/settings.json`**
+3. **Global user `~/.config/zed/settings.json`**
+
+### The `.zed/` Directory
+
+The `.zed/` directory at a project root holds project-specific configuration. It is created when you run the `zed: open project settings` command from the command palette. The primary file is `settings.json`, which merges on top of your global user settings.
+
+---
+
+## Rules / Custom Prompts
+
+Rules are prompts that are automatically inserted into Agent Panel interactions. They replace the older "Prompt Library" system.
+
+### Rules Files
+
+Place a rules file at the root of your project for project-level instructions that auto-include in all Agent Panel interactions.
+
+<Warning>
+  If multiple recognized filenames exist, only the **first match** in priority order is used. Zed does not combine multiple rule files.
+</Warning>
+
+**Recognized filenames** (in priority order):
+
+1. `.rules`
+2. `.cursorrules`
+3. `.windsurfrules`
+4. `.clinerules`
+5. `.github/copilot-instructions.md`
+6. `AGENT.md`
+7. `AGENTS.md`
+8. `CLAUDE.md`
+9. `GEMINI.md`
+
+### Rules Library
+
+The Rules Library is a built-in editor for writing and managing reusable rules. Access it via:
+
+- Agent Panel menu (`...`) then "Rules..."
+- Command: `agent: open rules library`
+- Shortcut: `Cmd+Alt+L` / `Ctrl+Alt+L`
+
+Features include:
+
+- Full editor with syntax highlighting
+- Inline assistant support within the rules editor
+- Rename, duplicate, delete, and export capabilities
+- **Default rules**: Click the paper clip icon to mark a rule as default, automatically including it in every new Agent Panel interaction
+
+### Using Rules
+
+Rules can be referenced in three ways:
+
+1. **Auto-included**: `.rules` files in the project root and default rules from the library
+2. **@-mentioned**: Reference any rule from the library using `@` in the Agent Panel
+3. **Nested via `/prompt`**: Use the `/prompt` slash command inside rules to compose modular, reusable rule components
+
+<Info>
+  Slash commands inside rules (like `/now` or `/prompt`) only work when used in text threads, not in non-text-thread contexts.
+</Info>
+
+---
+
+## MCP Servers / Context Servers
+
+Zed supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) for connecting the Agent Panel to external tools and data sources. Zed implements MCP's Tools and Prompts features, plus the `notifications/tools/list_changed` notification for runtime tool updates.
+
+### Installing MCP Servers as Extensions
+
+The simplest method. Browse and install MCP server extensions from:
+
+- The [Zed Extensions marketplace](https://zed.dev/extensions)
+- The command palette: `zed: extensions`
+- The Agent Panel menu
+
+Popular MCP extensions include GitHub, Puppeteer, Brave Search, and Figma.
+
+After installing an extension-based MCP server, Zed displays a configuration modal for required credentials (e.g., GitHub Personal Access Token).
+
+### Configuring Custom MCP Servers
+
+Add servers directly to your `settings.json` for custom or private servers:
+
+<Tabs>
+  <Tab title="Local Server (stdio)">
+    ```json
+    {
+      "context_servers": {
+        "my-local-server": {
+          "command": "npx",
+          "args": ["-y", "@my-org/mcp-server"],
+          "env": {
+            "API_KEY": "your-key-here"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Remote Server (SSE)">
+    ```json
+    {
+      "context_servers": {
+        "my-remote-server": {
+          "url": "https://mcp.example.com/sse",
+          "headers": {
+            "Authorization": "Bearer your-token"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+Custom servers can also be added through the Agent Panel settings view (`agent: open settings`).
+
+### Verifying MCP Server Status
+
+In the Agent Panel settings view, each MCP server has a status indicator:
+
+- **Green dot**: Server is active and running
+- **Other colors**: Indicates configuration errors or connection issues (check the tooltip for details)
+
+### Tool Permissions
+
+Control how the agent handles tool invocations (including MCP tools):
+
+```json
+{
+  "agent": {
+    "tool_permissions": {
+      "default": "confirm",
+      "mcp:github:create_issue": "allow",
+      "mcp:filesystem:delete_file": "deny"
+    }
+  }
+}
+```
+
+| Permission | Behavior |
+|---|---|
+| `"confirm"` | Prompts for approval before running (default) |
+| `"allow"` | Auto-approves without prompting |
+| `"deny"` | Blocks the tool action |
+
+MCP tools use the key format `mcp:<server-name>:<tool_name>` for granular per-tool permissions.
+
+<Warning>
+  Even with `"allow"` as the default, per-tool overrides are still respected. Consider keeping `"confirm"` as default and selectively allowing trusted tools.
+</Warning>
+
+---
+
+## Custom Agent Profiles
+
+The Agent Panel supports custom profiles that control which tools the agent can use. Custom profiles can be created through the Agent Profile modal and are stored under the `agent.profiles` settings key.
+
+```json
+{
+  "agent": {
+    "profiles": {
+      "bedrock_long_context": {
+        "provider": "bedrock",
+        "allow_extended_context": true
+      }
+    }
+  }
+}
+```
+
+---
+
+## Extensions
+
+Zed's extension system uses WebAssembly sandboxing. Extensions can provide languages, themes, MCP servers, slash commands, debugger protocols, and more.
+
+### Extension Structure
+
+```
+my-extension/
+  extension.toml          # Required: extension manifest
+  Cargo.toml              # Optional: for Rust/WASM extensions
+  src/
+    lib.rs                # Optional: procedural extension code
+  languages/
+    my-language/
+      config.toml
+      highlights.scm
+  themes/
+    my-theme.json
+```
+
+### extension.toml Manifest
+
+```toml
+id = "my-extension"
+name = "My Extension"
+version = "0.0.1"
+schema_version = 1
+authors = ["Your Name <you@example.com>"]
+description = "Description of the extension"
+repository = "https://github.com/your-name/my-zed-extension"
+```
+
+<Note>
+  Theme extension IDs should be suffixed with `-theme`. All extension repositories must include a license file as of October 2025.
+</Note>
+
+### Extension Types
+
+| Type | Requires Rust/WASM | Description |
+|---|---|---|
+| **Theme** | No | JSON theme files only |
+| **Language** | Optional | Tree-sitter grammars, highlights, language server config |
+| **MCP Server** | Yes | Registers an MCP server for the Agent Panel |
+| **Slash Command** | Yes | Custom slash commands for text threads |
+| **Debugger** | Yes | Debug adapter protocol integration |
+
+Procedural extensions are written in Rust, compiled to WebAssembly, and depend on the `zed_extension_api` crate. Pure theme or icon theme extensions need only JSON and TOML files.
+
+### Installing Extensions
+
+Extensions are available through:
+
+- The [Zed Extensions page](https://zed.dev/extensions)
+- The command palette: `zed: extensions`
+- The extensions panel in the editor
+
+---
+
+## External Agents (ACP)
+
+Zed supports external AI agents via the **Agent Client Protocol (ACP)**, which provides a structured integration point for third-party agents like Gemini CLI and Claude Agent.
+
+<Warning>
+  External agents may not support all Agent Panel features. Thread history restoration, checkpoints, token usage display, and other features may vary depending on the agent implementation.
+</Warning>
+
+External agents can be installed via the ACP registry, including in remote project scenarios.
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Zed platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS">
+    - **Global settings**: `~/.config/zed/settings.json`
+    - **Global keymap**: `~/.config/zed/keymap.json`
+    - **Project settings**: `<project>/.zed/settings.json`
+    - **Project rules**: `<project>/.rules`
+  </Tab>
+  <Tab title="Linux">
+    - **Global settings**: `$XDG_CONFIG_HOME/zed/settings.json` (fallback: `~/.config/zed/settings.json`)
+    - **Global keymap**: `$XDG_CONFIG_HOME/zed/keymap.json`
+    - **Project settings**: `<project>/.zed/settings.json`
+    - **Project rules**: `<project>/.rules`
+  </Tab>
+  <Tab title="Windows">
+    - **Global settings**: `~/.config/zed/settings.json`
+    - **Global keymap**: `~/.config/zed/keymap.json`
+    - **Project settings**: `<project>/.zed/settings.json`
+    - **Project rules**: `<project>/.rules`
+  </Tab>
+</Tabs>
+
+### Installing MCP Servers
+
+To programmatically register an MCP server, merge the server definition into the `context_servers` key of `settings.json`:
+
+```json
+{
+  "context_servers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_CONFIG": "value"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `context_servers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- Zed watches `settings.json` for changes and reloads automatically; no editor restart is required
+- MCP servers installed as extensions are managed by Zed's extension system and should not be manually written to `settings.json`
+
+### Installing Rules
+
+To install project-level rules, write a `.rules` file to the project root. If a `.rules` file already exists, the installer should append to it or prompt the user, since Zed only reads the first matching rules file.
+
+**Recognized filenames** (Zed checks in order and uses the first match):
+`.rules`, `.cursorrules`, `.windsurfrules`, `.clinerules`, `.github/copilot-instructions.md`, `AGENT.md`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`
+
+<Warning>
+  If the project already has a `.cursorrules` or `CLAUDE.md` file, creating a `.rules` file will shadow it since `.rules` has higher priority. The installer should detect existing rule files and either use the same file or warn the user.
+</Warning>
+
+### Installing Extensions
+
+Extensions are installed through Zed's built-in extension manager. There is no CLI command or file-system mechanism to install extensions programmatically. The installer should:
+
+1. Direct the user to install the extension via the command palette (`zed: extensions`)
+2. Or provide the extension ID for lookup on [zed.dev/extensions](https://zed.dev/extensions)
+
+### API Key Management
+
+API keys are stored in the OS keychain, not in `settings.json`. An installer cannot programmatically set API keys through file manipulation. Options include:
+
+- Setting environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) in the user's shell profile
+- Instructing the user to enter keys through the Agent Panel settings UI
+
+### Settings Format
+
+Zed's `settings.json` uses standard JSON (with support for `//` comments). The installer must:
+
+1. Parse the existing file (preserving comments if possible)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back
+
+The `context_servers` key is the primary integration point for MCP server packages. Agent-related settings live under the `agent` key.

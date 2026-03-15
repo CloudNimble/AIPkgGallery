@@ -1,0 +1,358 @@
+---
+title: Windsurf
+description: Platform specification for Windsurf, the AI-native agentic code editor originally built by Codeium and now owned by Cognition AI
+icon: wind
+---
+
+## Overview
+
+[Windsurf](https://windsurf.com/) is an AI-native code editor (VS Code fork), now owned by **Cognition AI**. Extensibility is via MCP servers (`mcp_config.json`), **Rules** (markdown files with trigger frontmatter in `.windsurf/rules/`), and **Cascade Hooks** (Enterprise lifecycle commands).
+
+---
+
+## Configuration
+
+### File Locations
+
+Windsurf uses a combination of JSON configuration files and markdown-based rule files. As a VS Code fork, it inherits the standard `settings.json` configuration system while adding Codeium-specific paths.
+
+<Tabs>
+  <Tab title="macOS">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `settings.json` | `~/Library/Application Support/Windsurf/User/settings.json` | Editor settings (VS Code format) |
+    | `mcp_config.json` | `~/.codeium/windsurf/mcp_config.json` | MCP server definitions |
+    | Global rules | `~/.windsurf/rules/` | Rules applied to every project |
+    | Workspace rules | `<project>/.windsurf/rules/` | Project-specific rules (markdown files) |
+    | Legacy rules | `<project>/.windsurfrules` | Legacy project rules file (still supported) |
+    | `.codeiumignore` | `<project>/.codeiumignore` | Files to exclude from indexing |
+    | Global `.codeiumignore` | `~/.codeium/.codeiumignore` | Global ignore rules for all workspaces |
+    | Cache | `~/Library/Caches/Windsurf/` | Application cache |
+    | Logs | `~/.codeium/windsurf/logs/` | Debug and error logs |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `settings.json` | `%APPDATA%\Windsurf\User\settings.json` | Editor settings (VS Code format) |
+    | `mcp_config.json` | `%USERPROFILE%\.codeium\windsurf\mcp_config.json` | MCP server definitions |
+    | Global rules | `%USERPROFILE%\.windsurf\rules\` | Rules applied to every project |
+    | Workspace rules | `<project>\.windsurf\rules\` | Project-specific rules |
+    | Legacy rules | `<project>\.windsurfrules` | Legacy project rules file |
+    | `.codeiumignore` | `<project>\.codeiumignore` | Files to exclude from indexing |
+    | Cache | `%LOCALAPPDATA%\Windsurf\Cache\` | Application cache |
+    | Executable | `%LOCALAPPDATA%\Programs\Windsurf\Windsurf.exe` | Application binary |
+  </Tab>
+  <Tab title="Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `settings.json` | `~/.config/Windsurf/User/settings.json` | Editor settings (VS Code format) |
+    | `mcp_config.json` | `~/.codeium/windsurf/mcp_config.json` | MCP server definitions |
+    | Global rules | `~/.windsurf/rules/` | Rules applied to every project |
+    | Workspace rules | `<project>/.windsurf/rules/` | Project-specific rules |
+    | Legacy rules | `<project>/.windsurfrules` | Legacy project rules file |
+    | `.codeiumignore` | `<project>/.codeiumignore` | Files to exclude from indexing |
+    | Global `.codeiumignore` | `~/.codeium/.codeiumignore` | Global ignore rules for all workspaces |
+  </Tab>
+</Tabs>
+
+### Rules System
+
+Windsurf uses markdown-based rule files to provide custom instructions to Cascade. Rules are the highest-impact configuration for shaping Cascade's behavior.
+
+<CodeGroup>
+
+```markdown .windsurf/rules/general.md
+---
+trigger: always
+---
+
+This is a TypeScript monorepo using pnpm workspaces.
+
+Tech stack:
+- Frontend: React 19 with Next.js 15
+- Backend: Node.js with Express
+- Database: PostgreSQL with Drizzle ORM
+- Testing: Vitest for unit tests, Playwright for E2E
+
+Coding conventions:
+- Use strict TypeScript with no `any` types
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+- Use named exports, not default exports
+```
+
+```markdown .windsurf/rules/testing.md
+---
+trigger: glob
+globs: **/*.test.ts, **/*.spec.ts
+---
+
+All test files must:
+- Use `describe`/`it` blocks
+- Mock external API calls
+- Include both happy path and error cases
+- Use factory functions for test data, not raw objects
+```
+
+```markdown .windsurf/rules/api.md
+---
+trigger: glob
+globs: src/api/**/*.ts
+---
+
+API route conventions:
+- Use Zod for request/response validation
+- Return consistent error response shapes
+- Include rate limiting middleware on all public endpoints
+- Log all errors with structured JSON logging
+```
+
+</CodeGroup>
+
+### Rule Levels
+
+| Level | Location | Scope |
+|---|---|---|
+| **Global** | `~/.windsurf/rules/` | Applied to every project opened in Windsurf |
+| **Workspace** | `<project>/.windsurf/rules/` | Project-specific rules, can use glob triggers |
+| **System** | Managed by admin | Organization-wide baseline standards (Enterprise) |
+| **Legacy** | `<project>/.windsurfrules` | Single-file format, still supported |
+
+### Rule Trigger Types
+
+| Trigger | Description |
+|---|---|
+| `always` | Applied to every Cascade interaction |
+| `glob` | Applied only when working with files matching the specified glob pattern |
+
+<Warning>
+  Individual rule files are limited to 6,000 characters each. The total combined characters for global and workspace rules must not exceed 12,000. If this limit is exceeded, global rules take priority, followed by workspace rules, with any excess truncated.
+</Warning>
+
+### Rule Discovery
+
+Windsurf automatically discovers rules from multiple locations: the current workspace and sub-directories (all `.windsurf/rules` directories), the git repository structure (searching up to the git root), and when multiple folders are open, rules are deduplicated.
+
+<Note>
+  If `.windsurf/rules` is listed in `.gitignore`, the rules will not be loaded. This is a known limitation.
+</Note>
+
+### The .codeiumignore File
+
+The `.codeiumignore` file uses `.gitignore` syntax to exclude files from Cascade's indexing and context. Ignored files will not be indexed and do not count against workspace size limits.
+
+```text .codeiumignore
+# Exclude build artifacts
+dist/
+build/
+node_modules/
+
+# Exclude generated files
+*.generated.ts
+*.min.js
+
+# Exclude sensitive files
+.env*
+secrets/
+```
+
+---
+
+## MCP Servers
+
+Windsurf supports the Model Context Protocol for connecting Cascade to external tools, data sources, and services. MCP servers are configured in `mcp_config.json`.
+
+### Configuration Format
+
+MCP servers are defined in `~/.codeium/windsurf/mcp_config.json` using a JSON format with three supported transport types: **stdio**, **Streamable HTTP**, and **SSE**.
+
+<CodeGroup>
+
+```json stdio (Local Server)
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${env:GITHUB_TOKEN}"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/workspace"],
+      "disabled": false
+    }
+  }
+}
+```
+
+```json Streamable HTTP (Remote Server)
+{
+  "mcpServers": {
+    "remote-api": {
+      "serverUrl": "https://your-server.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:API_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+```json SSE (Server-Sent Events)
+{
+  "mcpServers": {
+    "streaming-server": {
+      "serverUrl": "https://mcp.example.com/sse"
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Environment Variable Interpolation
+
+The `mcp_config.json` file supports environment variable interpolation using `${env:VARIABLE_NAME}` syntax in the `command`, `args`, `env`, `serverUrl`, `url`, and `headers` fields.
+
+### Adding MCP Servers
+
+<Tabs>
+  <Tab title="MCP Marketplace">
+    Click the MCPs icon in the top-right corner of the Cascade panel. Browse the built-in marketplace to discover and enable available MCP servers.
+  </Tab>
+  <Tab title="Settings UI">
+    Navigate to **Windsurf Settings > Cascade > MCP Servers**. Add servers through the configuration form, or click **View raw config** to edit `mcp_config.json` directly.
+  </Tab>
+  <Tab title="Manual (mcp_config.json)">
+    Edit `~/.codeium/windsurf/mcp_config.json` directly. The file is created automatically when you add your first server through the UI, or you can create it manually.
+  </Tab>
+</Tabs>
+
+### OAuth Support
+
+Windsurf supports OAuth for all three transport types (stdio, Streamable HTTP, SSE), enabling authenticated access to MCP servers that require OAuth-based authorization.
+
+### Tool Limits
+
+Cascade has a limit of **100 total tools** across all enabled MCP servers at any given time. You can toggle individual tools on or off from each MCP server's settings page to stay within this limit.
+
+<Note>
+  When `mcp_config.json` is modified, only the affected MCP server instance is initialized or refreshed. Other server instances remain unaffected.
+</Note>
+
+---
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Windsurf platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS">
+    - **MCP config**: `~/.codeium/windsurf/mcp_config.json`
+    - **Editor settings**: `~/Library/Application Support/Windsurf/User/settings.json`
+    - **Global rules**: `~/.windsurf/rules/`
+    - **Project rules**: `<project>/.windsurf/rules/`
+    - **Legacy project rules**: `<project>/.windsurfrules`
+    - **Ignore file**: `<project>/.codeiumignore`
+    - **Global ignore**: `~/.codeium/.codeiumignore`
+  </Tab>
+  <Tab title="Windows">
+    - **MCP config**: `%USERPROFILE%\.codeium\windsurf\mcp_config.json`
+    - **Editor settings**: `%APPDATA%\Windsurf\User\settings.json`
+    - **Global rules**: `%USERPROFILE%\.windsurf\rules\`
+    - **Project rules**: `<project>\.windsurf\rules\`
+    - **Legacy project rules**: `<project>\.windsurfrules`
+    - **Ignore file**: `<project>\.codeiumignore`
+  </Tab>
+  <Tab title="Linux">
+    - **MCP config**: `~/.codeium/windsurf/mcp_config.json`
+    - **Editor settings**: `~/.config/Windsurf/User/settings.json`
+    - **Global rules**: `~/.windsurf/rules/`
+    - **Project rules**: `<project>/.windsurf/rules/`
+    - **Legacy project rules**: `<project>/.windsurfrules`
+    - **Ignore file**: `<project>/.codeiumignore`
+    - **Global ignore**: `~/.codeium/.codeiumignore`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into the `mcpServers` object in `mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "${env:SOME_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `mcpServers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- The config file may not exist yet; create it with the full structure if absent
+- The file supports three transport types: `stdio` (uses `command`/`args`), Streamable HTTP (uses `serverUrl`), and SSE (uses `serverUrl`)
+- Use `${env:VAR_NAME}` syntax for environment variable interpolation instead of hardcoding secrets
+- Cascade has a limit of 100 total tools across all MCP servers; be mindful when adding servers with many tools
+- When the config file is modified, only the affected MCP server is refreshed (no full restart required)
+- Set `"disabled": true` on a server entry to register it without enabling it
+
+### Installing Project Instructions
+
+To install project-level instructions, create markdown files in the `<project>/.windsurf/rules/` directory:
+
+1. Create the `.windsurf/rules/` directory in the project root if it does not exist
+2. Write rule files as markdown with optional YAML frontmatter for trigger configuration
+3. Each rule file should focus on a single topic (e.g., `general.md`, `testing.md`, `api.md`)
+
+For the legacy format, write a `.windsurfrules` file to the project root. If one already exists, the installer should append to it.
+
+```markdown
+---
+trigger: always
+---
+
+Your project-specific instructions here.
+```
+
+<Warning>
+  Individual rule files are limited to 6,000 characters. The combined total for global and workspace rules must not exceed 12,000 characters. Keep rules concise and focused.
+</Warning>
+
+### Config File Format
+
+The MCP configuration uses standard JSON. The installer must:
+
+1. Check if `~/.codeium/windsurf/mcp_config.json` exists; create the directory and file if absent
+2. Parse the existing JSON file
+3. Deep-merge new server entries into the `mcpServers` object, preserving existing entries
+4. Write the result back as formatted JSON
+
+Editor settings use the standard VS Code `settings.json` format and location.
+
+### Auto-Execution Modes
+
+An installer should be aware of Windsurf's command auto-execution levels, which control whether Cascade can run terminal commands without user approval:
+
+| Level | Behavior |
+|---|---|
+| `Off` | All commands require manual approval |
+| `Auto` | Safe commands run automatically; risky commands require approval |
+| `Turbo` | All commands run automatically unless on the deny list |
+
+### Enabling MCP
+
+MCP must be enabled in Windsurf settings before servers will be active. The setting is found under **Settings > Advanced Settings > Cascade > Model Context Protocol (MCP)**. Programmatically, this can be toggled in `settings.json`.

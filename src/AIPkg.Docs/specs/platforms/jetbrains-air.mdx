@@ -1,0 +1,266 @@
+---
+title: 'JetBrains Air'
+description: 'Platform specification for JetBrains Air, an agentic development environment by JetBrains'
+icon: 'jet-fighter'
+---
+
+[JetBrains Air](https://air.dev/) is an agentic development environment for delegating coding tasks to multiple AI agents and running them concurrently[^1]. Built on the Fleet IDE codebase, Air organizes work around tasks rather than files, with native support for Claude Agent, OpenAI Codex, Gemini CLI, and Junie, as well as third-party agents via the Agent Client Protocol (ACP)[^1][^2].
+
+---
+
+## Configuration
+
+### File Locations
+
+JetBrains Air stores project-specific settings in the `.air` directory within the project root. MCP server configuration supports three scopes[^3].
+
+| File | Path | Purpose |
+|---|---|---|
+| Local MCP config | `<project>/.air/mcp.json` | Project-specific MCP server definitions |
+| Workspace MCP config | `<project>/.mcp.json` | Shared MCP config from repository root |
+| Global MCP config | Via Settings UI | MCP servers available across all projects |
+| ACP config | `~/.jetbrains/acp.json` | Third-party agent definitions |
+| Claude Agent settings | Via Settings UI (JSON) | Global Claude Agent configuration |
+
+### AI Provider Setup
+
+At least one AI provider must be connected before running tasks. Providers are configured through **Settings > Account | AI Providers**[^3].
+
+| Provider | Authentication |
+|---|---|
+| JetBrains AI | JetBrains AI Pro/Ultimate subscription (includes all agents) |
+| Anthropic (Claude Agent) | Anthropic Console API billing[^4] |
+| OpenAI (Codex) | ChatGPT Plus/Pro/Team or Platform API billing[^4] |
+| Google (Gemini CLI) | Google Account, AI Studio, or Vertex AI[^4] |
+| JetBrains (Junie) | JetBrains account[^4] |
+
+<Note>
+  JetBrains Air supports BYOK (Bring Your Own Key). When a user-provided key is configured, it takes priority over the JetBrains AI subscription for that provider[^1].
+</Note>
+
+### Execution Environments
+
+Tasks can run in one of several execution environments[^2][^5]:
+
+| Environment | Description |
+|---|---|
+| Local Workspace | Fastest option; agent applies changes directly to the project folder |
+| Git Worktree | Isolated branch for sandboxed concurrent work |
+| Docker | Complete isolation via container |
+| Cloud Sandbox | Remote execution in isolated sandboxes (tech preview)[^2] |
+
+### Permission Modes
+
+JetBrains Air offers granular control over agent permissions[^5]:
+
+| Mode | Behavior |
+|---|---|
+| Ask Permission | Prompts on first tool use |
+| Auto-Edit | Auto-accepts file edits |
+| Plan | Analyzes without making modifications |
+| Full Access | Skips all permission checks |
+
+---
+
+## Custom Instructions
+
+### Agent-Specific Instructions
+
+JetBrains Air delegates custom instruction handling to each individual agent. Since Air hosts multiple agents (Claude Agent, Codex, Gemini CLI, Junie), each agent uses its own native instruction format[^4][^5]:
+
+- **Claude Agent:** Reads `CLAUDE.md` files from the project root and supports its own global settings configurable in JSON format via **Settings > AI | Claude Agent**[^4].
+- **Junie:** Uses its own guidelines system for project-specific instructions.
+- **Codex / Gemini CLI:** Use their respective native instruction formats.
+
+<Note>
+  As of the public preview launch, JetBrains Air does not document an Air-specific unified custom instruction system (such as `.air/rules/`). Each agent relies on its own instruction files when running within Air[^4][^5].
+</Note>
+
+### Slash Commands
+
+Claude Agent in JetBrains Air supports built-in and custom slash commands triggered by typing `/` in a task prompt[^4]. Custom commands follow the Claude Agent conventions (e.g., `.claude/commands/` or `.claude/skills/`).
+
+---
+
+## MCP Integration
+
+JetBrains Air connects to external tools and data sources through the Model Context Protocol (MCP). By connecting to MCP servers, agents gain access to tools that extend their capabilities[^3].
+
+### Configuration Scopes
+
+<Tabs>
+  <Tab title="Global">
+    Available in all projects on your machine. Configure via **Settings > AI | MCP Servers**, then click **Add Global MCP Server** and paste the server configuration in JSON format[^3].
+  </Tab>
+  <Tab title="Local (Project)">
+    Available only in the current project. Stored in `<project>/.air/mcp.json`. Use this for project-specific integrations[^3].
+  </Tab>
+  <Tab title="Workspace">
+    Uses the standard `.mcp.json` file in the project root. Enable **Launch workspace MCP servers** in settings for Air to pick it up automatically[^3].
+  </Tab>
+</Tabs>
+
+### Configuration Format
+
+MCP servers use the standard `mcpServers` JSON format:
+
+```json .mcp.json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "uvx",
+      "args": ["my-mcp-server", "ARG"]
+    }
+  }
+}
+```
+
+### Managing MCP Servers
+
+Open **Settings** (Command+,) and select **AI | MCP Servers**. From the server list, click the **...** button to Edit, Restart, Disable, or Delete a connection. Click the tool link next to a server name to see available tools[^5].
+
+---
+
+## Agent System
+
+### Built-In Agents
+
+JetBrains Air ships with four built-in agents[^4]:
+
+| Agent | Provider | Models |
+|---|---|---|
+| Claude Agent | Anthropic | Claude model family |
+| OpenAI Codex | OpenAI | GPT 5.x Codex variants |
+| Gemini CLI | Google | Gemini 2.5 / 3.x family |
+| Junie | JetBrains | Multi-model (Gemini, GPT, Grok, Opus) |
+
+Agents are selected per-task via the **Agent and Model** selector when opening a new task[^4].
+
+### Agent Client Protocol (ACP)
+
+JetBrains Air supports the [Agent Client Protocol (ACP)](https://www.jetbrains.com/acp/), an open standard co-developed by JetBrains and Zed for vendor-neutral agent-editor communication[^6]. Any ACP-compliant agent can be integrated.
+
+#### ACP Configuration
+
+Third-party agents are configured in `~/.jetbrains/acp.json`[^6]:
+
+```json ~/.jetbrains/acp.json
+{
+  "default_mcp_settings": {
+    "use_custom_mcp": true,
+    "use_idea_mcp": false
+  },
+  "agent_servers": {
+    "My Agent": {
+      "command": "/path/to/agent",
+      "args": ["acp"],
+      "env": {
+        "API_KEY": "your-key"
+      }
+    }
+  }
+}
+```
+
+| Field | Description |
+|---|---|
+| `command` | Path to the agent executable (launched as subprocess) |
+| `args` | Command-line arguments passed at startup |
+| `env` | Environment variables for the agent process |
+| `use_custom_mcp` | Expose user-configured MCP servers to the agent (default: `true`) |
+| `use_idea_mcp` | Expose the integrated IntelliJ MCP Server (default: `false`) |
+| `idea_mcp_allowed_tools` | Restrict which tools from the IntelliJ MCP Server are exposed |
+
+Agents can also be installed from the **ACP Agent Registry** directly within the IDE without manual configuration[^6].
+
+<Note>
+  ACP agents communicate over stdin/stdout using JSON-RPC 2.0. No JetBrains AI subscription is required to use ACP agents[^6].
+</Note>
+
+---
+
+## Skills / SKILL.md Support
+
+JetBrains Air does not define its own skills system. However, agents running within Air may support their native skills formats. For example, Claude Agent supports `.claude/skills/<skill-name>/SKILL.md` for project-scoped skills and `~/.claude/skills/` for global skills[^4].
+
+---
+
+## Hooks
+
+JetBrains Air does not document a platform-level hooks or lifecycle events system as of the public preview. Individual agents (such as Claude Agent) may support their own hooks mechanisms through their native configuration files.
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the JetBrains Air platform.
+
+### Configuration File Paths
+
+| Purpose | Path |
+|---|---|
+| Local MCP config | `<project>/.air/mcp.json` |
+| Workspace MCP config | `<project>/.mcp.json` |
+| ACP agent config | `~/.jetbrains/acp.json` |
+| Claude Agent instructions | `<project>/CLAUDE.md` |
+
+### Installing MCP Server Extensions
+
+To register an MCP server, add an entry to the workspace `.mcp.json` in the project root or to `.air/mcp.json` for project-local scope:
+
+<CodeGroup>
+
+```json Workspace (.mcp.json)
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"]
+    }
+  }
+}
+```
+
+```json Local (.air/mcp.json)
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"]
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+**Key considerations:**
+
+- Config format is **JSON** using the `mcpServers` key
+- Merge carefully to avoid overwriting existing server entries
+- Workspace `.mcp.json` requires **Launch workspace MCP servers** to be enabled in Air settings[^3]
+- The `.air/mcp.json` file is project-local and not typically committed to version control
+- Global MCP servers can only be configured through the Settings UI
+
+### Installing ACP Agents
+
+To programmatically register a third-party agent, add an entry to `~/.jetbrains/acp.json` under `agent_servers`[^6]. The file must be valid JSON, and entries should be merged carefully to preserve existing agent configurations.
+
+### Installing Custom Instructions
+
+Custom instructions are agent-specific. For Claude Agent, write a `CLAUDE.md` file to the project root. For other agents, use their respective instruction file formats.
+
+<Warning>
+  JetBrains Air is currently in public preview and available only on macOS. Windows and Linux support is planned for later in 2026[^1]. Configuration file paths and formats may change before the stable release.
+</Warning>
+
+---
+
+## Footnotes
+
+[^1]: https://blog.jetbrains.com/air/2026/03/air-launches-as-public-preview-a-new-wave-of-dev-tooling-built-on-26-years-of-experience/
+[^2]: https://air.dev/
+[^3]: https://www.jetbrains.com/help/air/set-up.html
+[^4]: https://www.jetbrains.com/help/air/supported-agents.html
+[^5]: https://www.jetbrains.com/help/air/quick-start-with-air.html
+[^6]: https://www.jetbrains.com/help/ai-assistant/acp.html

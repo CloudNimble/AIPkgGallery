@@ -1,0 +1,202 @@
+---
+title: 'Clairvoyance'
+description: 'Platform specification for Clairvoyance, an AI workspace by Stardock'
+icon: 'eye'
+---
+
+## Overview
+
+[Clairvoyance](https://clairvoyanceai.com/) is a desktop AI workspace application by **Stardock** that orchestrates multiple AI providers as persistent "Staff" members within local workspaces.[^1][^2] Extensibility is provided through a `.cvextension` package format, a `.clairvoyance/` workspace knowledge folder, Neurons (structured knowledge graphs), Exhibits (generated interactive HTML apps), Canvases, scheduled tasks, and Staff recruitment (sub-agent spawning).[^3]
+
+<Warning>
+  Clairvoyance is in **alpha** (available to Stardock Object Desktop subscribers only as of early 2026). The extension system and platform APIs are not yet publicly documented in detail. This spec is based on the information available in the official documentation and press materials.[^1][^2][^3]
+</Warning>
+
+---
+
+## Configuration
+
+### File Locations
+
+Clairvoyance uses a local-first storage model. Notes and workspace data are stored in an application data directory, while workspace files remain in user-specified project folders.[^3]
+
+<Tabs>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Application data | `%APPDATA%/clairvoyance/` | Notes, settings, and internal state |
+    | Workspace knowledge | `<workspace>/.clairvoyance/` | Persistent reference material for Staff |
+    | Extensions | _(loaded via `.cvextension` files)_ | Custom sidebar panels and Command Bar icons |
+  </Tab>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Application data | _(platform-specific app data directory)_ | Notes, settings, and internal state |
+    | Workspace knowledge | `<workspace>/.clairvoyance/` | Persistent reference material for Staff |
+    | Extensions | _(loaded via `.cvextension` files)_ | Custom sidebar panels and Command Bar icons |
+
+    <Note>
+      macOS and Linux desktop apps are not yet available. Clairvoyance is currently Windows-only with cross-platform versions announced as coming soon.[^3]
+    </Note>
+  </Tab>
+</Tabs>
+
+### Workspace Architecture
+
+Each workspace points to a local folder. Staff members can read and modify files within that directory, analyze project structure, and reference documentation placed in the `.clairvoyance/` subfolder as persistent context.[^3]
+
+- **Notes** sync across devices when signed in (content only).
+- **Workspace files** remain local and require external sync (OneDrive, Dropbox, Git, etc.).
+- **Home workspace** serves as the default personal space.
+
+---
+
+## Custom Instructions
+
+### Neurons
+
+Neurons are Clairvoyance's structured knowledge system, providing persistent context that propagates to all Staff referencing the same knowledge base.[^3] Three tiers exist:
+
+| Tier | Purpose |
+|---|---|
+| System knowledge | Clairvoyance capabilities and built-in context |
+| Workspace knowledge | Project architecture, conventions, and decisions |
+| Personal knowledge | User preferences, workflows, and expertise |
+
+### Workspace Knowledge Folder
+
+The `.clairvoyance/` directory within a workspace folder serves as a persistent reference library. Staff automatically incorporate its contents as context when working within that workspace.[^3]
+
+---
+
+## AI Provider Integration
+
+Clairvoyance does not run AI models directly. It delegates to locally installed AI CLI tools via the **Agent Control Protocol (ACP)**, treating each CLI as a platform communicated with via API.[^2][^3]
+
+| Provider | CLI Required | Specialty |
+|---|---|---|
+| Claude | Claude Code CLI | Coding, analysis, writing |
+| GitHub Copilot | Copilot CLI | Code review, pair programming |
+| Google Gemini | Gemini CLI | Research, multimodal tasks |
+| OpenAI Codex | Codex CLI | Code generation |
+| Hosted AI | None (included) | Quick questions, no additional setup |
+
+<Note>
+  Each Staff member independently configures its provider, model, knowledge base, and permission level. The "Bring Your Own CLI" model means Clairvoyance can potentially support any AI CLI that follows the ACP conventions.[^3]
+</Note>
+
+### Interaction Modes
+
+- **Direct Mode** -- Chat interface with rich formatting, tables, code blocks, and artifact previews. ACP handles tool access behind the conversational UI.[^3]
+- **Terminal Mode** -- Full terminal view showing raw AI commands and output. Allows typing commands alongside the AI for transparency and debugging.[^3]
+
+---
+
+## Extensions
+
+Extensions are custom UI additions packaged as `.cvextension` files (renamed ZIP archives).[^3]
+
+### Extension Structure
+
+```
+my-extension.cvextension (ZIP)
+├── extension.yaml    # Metadata and configuration
+├── sidebar.html      # Sidebar UI (HTML/CSS/JS)
+└── icon.svg          # Command Bar icon
+```
+
+### Capabilities
+
+Extensions contribute:[^3]
+- **Command Bar icons** -- Custom entries in the vertical icon rail
+- **Sidebar panels** -- Custom HTML-based sidebar content
+- **Tab content** -- Custom tab-based views
+
+<Note>
+  Staff members can build extensions on request. The extension format is minimal (HTML + YAML manifest) and does not expose a plugin SDK or runtime API beyond the sidebar webview. No public extension registry or marketplace exists as of early 2026.[^3]
+</Note>
+
+---
+
+## Exhibits
+
+Exhibits are interactive HTML/CSS/JavaScript applications that Staff build on demand within the workspace.[^3] Examples include:
+
+- Financial calculators and trackers
+- Dashboards and data visualizations
+- Project timelines and Gantt charts
+- UI prototypes and mockups
+- Games and simulations
+- Educational tools and quizzes
+
+Exhibits are iterable through follow-up Staff requests and are stored locally within the workspace.
+
+---
+
+## Staff Recruitment (Sub-Agents)
+
+For complex multi-part tasks, Staff spawn temporary "recruits" that handle sub-tasks independently in parallel.[^3] Recruits:
+
+- Execute sub-tasks using their own provider connections
+- Report results back to the supervising Staff member
+- Automatically dismiss when their task completes
+- Are visible in the Staff panel's Recruits dropdown
+
+---
+
+## Scheduled Tasks
+
+Staff can execute recurring automated tasks on a schedule.[^3] Examples:
+
+- "Every Monday morning, check my project for open issues and create a summary report"
+- "Send a sentiment analysis of customer feedback every day at 9 AM"
+
+Scheduled tasks produce artifacts (notes, reports, exhibits) automatically.
+
+---
+
+## MCP Integration
+
+<Warning>
+  Clairvoyance does not support MCP natively. It uses the Agent Control Protocol (ACP) to communicate with AI provider CLIs. Individual providers accessed through Clairvoyance (e.g., Claude Code, Gemini CLI) may support MCP in their own right, but Clairvoyance itself does not expose MCP configuration or act as an MCP host.[^2][^3]
+</Warning>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AI-Pkg installer needs to know to programmatically install and configure packages for Clairvoyance.
+
+### Configuration File Paths
+
+| Scope | Path | Purpose |
+|---|---|---|
+| Workspace knowledge | `<workspace>/.clairvoyance/` | Persistent reference material for Staff context |
+| Application data | `%APPDATA%/clairvoyance/` (Windows) | Notes, settings, internal state |
+
+### Installing Extensions
+
+Extensions are `.cvextension` files (ZIP archives) containing `extension.yaml`, `sidebar.html`, and `icon.svg`. The installation mechanism is not publicly documented -- extensions appear to be loaded from within the application UI rather than a file-system convention.[^3]
+
+### Installing Workspace Knowledge
+
+Place Markdown files or documentation in the `<workspace>/.clairvoyance/` directory. Staff automatically incorporate these files as persistent context when working within that workspace.[^3]
+
+### Key Considerations
+
+- Clairvoyance is a **desktop application**, not a terminal agent or IDE extension
+- **Windows-only** as of early 2026; macOS and Linux announced but not yet available
+- **Alpha stage** -- APIs, file formats, and extension mechanisms may change significantly
+- No MCP support, no skills system, no `AGENTS.md` or `SKILL.md` conventions
+- AI execution is delegated to provider CLIs (Claude Code, Copilot, Gemini, Codex) via ACP
+- No public extension registry or package ecosystem exists
+- The `.cvextension` format is minimal (HTML sidebar + YAML manifest) with no documented SDK
+- Time-travel undo creates snapshots before every agent file write
+
+---
+
+## Footnotes
+
+[^1]: https://clairvoyanceai.com/
+[^2]: https://www.prnewswire.com/news-releases/stardock-announces-clairvoyance-a-new-application-that-turns-ai-agents-into-persistent-self-learning-staff-302686544.html
+[^3]: https://clairvoyanceai.com/docs

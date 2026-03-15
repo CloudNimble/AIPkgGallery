@@ -1,0 +1,454 @@
+---
+title: OpenCode
+description: Platform specification for OpenCode, the open-source terminal-native AI coding agent by Anomaly
+icon: terminal
+---
+
+[OpenCode](https://opencode.ai/) is an open-source, terminal-native AI coding agent developed by **Anomaly** that provides a rich TUI, web interface, and IDE extension. It is extensible through custom agents, MCP servers (local and remote), plugins, AGENTS.md instruction files, and JSON-based configuration.
+
+---
+
+## Configuration
+
+### File Locations
+
+OpenCode uses JSON/JSONC configuration files with a merge-based system. Configuration sources are loaded in order, with later sources overriding conflicting keys.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Global config | `~/.config/opencode/opencode.json` | User-wide settings (providers, models, permissions) |
+    | Project config | `<project>/opencode.json` | Project-specific overrides (highest precedence) |
+    | TUI config | `~/.config/opencode/tui.json` | Theme, keybinds, scroll settings |
+    | Agents (global) | `~/.config/opencode/agents/` | Global custom agent definitions (markdown) |
+    | Agents (project) | `<project>/.opencode/agents/` | Project-specific agent definitions |
+    | Plugins (global) | `~/.config/opencode/plugins/` | Global plugin files |
+    | Plugins (project) | `<project>/.opencode/plugins/` | Project-specific plugin files |
+    | Modes (global) | `~/.config/opencode/modes/` | Global custom mode definitions |
+    | Modes (project) | `<project>/.opencode/modes/` | Project-specific mode definitions |
+    | Data directory | `<project>/.opencode/` | SQLite database, sessions, local state |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Global config | `~/.config/opencode/opencode.json` | User-wide settings |
+    | Project config | `<project>\opencode.json` | Project-specific overrides |
+    | TUI config | `~/.config/opencode/tui.json` | Theme, keybinds, scroll settings |
+
+    <Note>WSL is recommended for the best experience on Windows.</Note>
+  </Tab>
+</Tabs>
+
+### Configuration Load Order
+
+Settings are resolved in the following order (earliest to latest, with later sources taking precedence):
+
+1. **Remote config** (`.well-known/opencode` endpoint for organizational defaults)
+2. **Global config** (`~/.config/opencode/opencode.json`)
+3. **Custom path** (`OPENCODE_CONFIG` environment variable)
+4. **Project config** (`opencode.json` in project root)
+5. **`.opencode/` directories** (agents, commands, plugins, etc.)
+6. **Inline config** (`OPENCODE_CONFIG_CONTENT` environment variable)
+
+### opencode.json Structure
+
+<CodeGroup>
+
+```json Basic Configuration
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "build",
+  "autoCompact": true,
+  "instructions": [
+    "docs/guidelines.md",
+    "packages/*/AGENTS.md"
+  ]
+}
+```
+
+```json Agent Configuration
+{
+  "agent": {
+    "reviewer": {
+      "model": "anthropic/claude-sonnet-4-5",
+      "prompt": "{file:./prompts/reviewer.md}",
+      "tools": {
+        "bash": false,
+        "edit": false,
+        "write": false,
+        "read": true,
+        "grep": true,
+        "glob": true
+      },
+      "permission": {
+        "bash": "deny"
+      },
+      "maxSteps": 50
+    }
+  }
+}
+```
+
+```json MCP Server Configuration
+{
+  "mcp": {
+    "github-server": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+      "environment": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GITHUB_TOKEN}"
+      },
+      "timeout": 5000
+    },
+    "remote-server": {
+      "type": "remote",
+      "url": "https://mcp.example.com",
+      "headers": {
+        "Authorization": "Bearer {env:API_KEY}"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Variable Substitution
+
+OpenCode supports variable substitution in configuration values:
+
+| Syntax | Description |
+|---|---|
+| `{env:VARIABLE_NAME}` | Replaced with the value of the environment variable |
+| `{file:path/to/file}` | Replaced with the contents of the file (relative/absolute paths, tilde expansion) |
+
+<Note>
+  Configuration files use a merge strategy -- later sources override only conflicting keys, preserving the rest. Changes to config files take effect on the next OpenCode launch.
+</Note>
+
+### The AGENTS.md File
+
+The `AGENTS.md` file provides OpenCode with custom instructions about your project. Its contents are included in the LLM context to shape behavior for your specific codebase. Use the `/init` command to auto-generate one by scanning your project.
+
+```markdown AGENTS.md
+# Project: My TypeScript App
+
+## Stack
+- TypeScript monorepo with pnpm workspaces
+- Next.js for the web application
+- PostgreSQL with Drizzle ORM
+
+## Conventions
+- Use strict TypeScript, no `any` types
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+- Tests use Vitest
+
+## Commands
+- Build: `pnpm build`
+- Test: `pnpm test`
+- Lint: `pnpm lint`
+```
+
+**File search order (first match in each category wins):**
+
+| Scope | Location | Fallback |
+|---|---|---|
+| Project-level | `<project>/AGENTS.md` | `<project>/CLAUDE.md` |
+| Global | `~/.config/opencode/AGENTS.md` | `~/.claude/CLAUDE.md` |
+
+OpenCode traverses up the directory tree looking for `AGENTS.md` files. It also supports Claude Code compatibility by falling back to `CLAUDE.md` files. This fallback can be disabled with the `OPENCODE_DISABLE_CLAUDE_CODE` environment variable.
+
+Additional instruction files can be specified in `opencode.json` using the `instructions` field, which supports glob patterns and remote URLs:
+
+```json
+{
+  "instructions": [
+    "CONTRIBUTING.md",
+    "docs/guidelines.md",
+    ".cursor/rules/*.md",
+    "https://example.com/team-rules.md"
+  ]
+}
+```
+
+<Warning>
+  Keep `AGENTS.md` focused and concise. All instruction files (AGENTS.md plus any files in the `instructions` array) are combined and included in the LLM context for every request.
+</Warning>
+
+---
+
+## MCP Servers
+
+OpenCode implements the Model Context Protocol (MCP) to extend its capabilities through external tools. MCP servers are configured in `opencode.json` and their tools automatically become available to the AI alongside built-in tools.
+
+### Server Types
+
+| Type | Description | Configuration |
+|---|---|---|
+| **local** | Runs a command on the local machine (stdio transport) | `command`, `environment`, `timeout` |
+| **remote** | Connects to an external HTTP endpoint | `url`, `headers`, `timeout` |
+
+### Adding MCP Servers
+
+<Tabs>
+  <Tab title="CLI">
+    Run `opencode mcp add` for an interactive setup that guides you through adding either a local or remote MCP server.
+
+    ```bash
+    # Add a server interactively
+    opencode mcp add
+
+    # List configured servers
+    opencode mcp list
+
+    # Authenticate with OAuth-enabled server
+    opencode mcp auth my-server
+
+    # Debug connection issues
+    opencode mcp debug my-server
+    ```
+  </Tab>
+  <Tab title="opencode.json (Manual)">
+    ```json
+    {
+      "mcp": {
+        "github": {
+          "type": "local",
+          "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+          "environment": {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GITHUB_TOKEN}"
+          },
+          "timeout": 5000
+        },
+        "sentry": {
+          "type": "remote",
+          "url": "https://mcp.sentry.dev/sse"
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### OAuth Authentication
+
+OpenCode handles OAuth automatically via Dynamic Client Registration (RFC 7591). Three approaches are supported:
+
+| Approach | Description |
+|---|---|
+| **Automatic** | No configuration needed; auth triggers on first use |
+| **Pre-registered** | Supply existing `clientId`, `clientSecret`, and `scope` |
+| **Disabled** | Set `"oauth": false` for API key-based servers |
+
+### Tool Management
+
+MCP server tools follow the same permission model as built-in tools. You can enable or disable specific MCP tools using glob patterns:
+
+```json
+{
+  "tools": {
+    "my-mcp-foo": false,
+    "my-mcp*": false
+  }
+}
+```
+
+<Info>
+  MCP servers add to your context window. Be selective about which servers you enable to avoid unnecessary token usage.
+</Info>
+
+---
+
+## Agents and Modes
+
+### Custom Agents
+
+Define custom agents in `opencode.json` or as markdown files in `.opencode/agents/` or `~/.config/opencode/agents/`:
+
+```json
+{
+  "agent": {
+    "security-reviewer": {
+      "model": "anthropic/claude-sonnet-4-5",
+      "prompt": "{file:./prompts/security.md}",
+      "tools": {
+        "bash": false,
+        "write": false,
+        "read": true,
+        "grep": true
+      },
+      "permission": {
+        "bash": "deny"
+      },
+      "temperature": 0.3,
+      "maxSteps": 30
+    }
+  }
+}
+```
+
+You can also run `opencode agent create` for an interactive setup.
+
+### Custom Modes
+
+Custom modes can be defined in `opencode.json` or as markdown files in `.opencode/modes/` or `~/.config/opencode/modes/`. Modes are customizable configurations that tailor the AI's behavior and available tools.
+
+---
+
+## Tool Permissions
+
+Tools support three permission levels configured in `opencode.json`:
+
+| Permission | Behavior |
+|---|---|
+| `allow` | Tool runs without user confirmation |
+| `deny` | Tool is blocked from execution |
+| `ask` | Tool requires explicit user approval before running |
+
+```json
+{
+  "permission": {
+    "bash": "ask",
+    "edit": "ask",
+    "webfetch": "ask"
+  }
+}
+```
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the OpenCode platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **Global config**: `~/.config/opencode/opencode.json`
+    - **Project config**: `<project>/opencode.json`
+    - **TUI config**: `~/.config/opencode/tui.json`
+    - **Global agents**: `~/.config/opencode/agents/`
+    - **Project agents**: `<project>/.opencode/agents/`
+    - **Global plugins**: `~/.config/opencode/plugins/`
+    - **Project plugins**: `<project>/.opencode/plugins/`
+    - **Project instructions**: `<project>/AGENTS.md`
+    - **Global instructions**: `~/.config/opencode/AGENTS.md`
+  </Tab>
+  <Tab title="Windows">
+    - **Global config**: `~/.config/opencode/opencode.json`
+    - **Project config**: `<project>\opencode.json`
+    - **Project instructions**: `<project>\AGENTS.md`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into the `mcp` key of `opencode.json`:
+
+```json
+{
+  "mcp": {
+    "package-server-name": {
+      "type": "local",
+      "command": ["npx", "-y", "@scope/mcp-server-package"],
+      "environment": {
+        "SOME_API_KEY": "{env:SOME_API_KEY}"
+      },
+      "timeout": 5000
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `mcp` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing MCP server entries
+- The `type` field must be either `local` or `remote`
+- For remote servers, use `url` and optionally `headers` instead of `command`
+- Environment variables can use the `{env:VAR_NAME}` substitution syntax
+- The `command` field is an array (not a string), containing the command and its arguments
+- Configuration can be placed in either the global or project config file
+
+### Installing Project Instructions
+
+To install project-level instructions, write an `AGENTS.md` file to the project root. If an `AGENTS.md` already exists, the installer should append to it.
+
+Alternatively, use the `instructions` field in `opencode.json` to reference additional instruction files without modifying `AGENTS.md`:
+
+```json
+{
+  "instructions": [
+    "docs/package-guidelines.md"
+  ]
+}
+```
+
+<Note>
+  OpenCode supports `CLAUDE.md` as a fallback for `AGENTS.md`. If the project already has a `CLAUDE.md` file, OpenCode will use it. However, `AGENTS.md` takes precedence when both exist.
+</Note>
+
+### Config File Format
+
+OpenCode uses JSON/JSONC for configuration. The installer must:
+
+1. Parse the existing JSON file (if present)
+2. Deep-merge new configuration (particularly the `mcp` map) into the existing structure
+3. Write the result back, preserving existing entries
+
+The `mcp` key is the primary integration point for MCP server packages. The `$schema` field (`"https://opencode.ai/config.json"`) should be preserved or added for IDE validation support.
+
+### Tool Permissions
+
+An installer should be aware of OpenCode's tool permission model when configuring MCP servers:
+
+| Permission | Behavior |
+|---|---|
+| `allow` | Tool runs without user confirmation |
+| `deny` | Tool is blocked from execution |
+| `ask` | Tool requires explicit user approval before running |
+
+MCP server tools can be selectively enabled or disabled using glob patterns in the `tools` configuration:
+
+```json
+{
+  "tools": {
+    "my-mcp-*": true
+  }
+}
+```
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows, use `opencode run`:
+
+```bash
+# Run a single prompt
+opencode run "Run the test suite and report results"
+
+# Run with a specific model
+opencode run --model anthropic/claude-sonnet-4-5 "Analyze this codebase"
+
+# Run with JSON output
+opencode run --format json "Summarize recent changes"
+
+# Run from a file
+opencode run --file ./instructions.md
+```
+
+### Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `OPENCODE_CONFIG` | Custom config file path |
+| `OPENCODE_CONFIG_CONTENT` | Inline JSON config content |
+| `OPENCODE_CONFIG_DIR` | Custom config directory |
+| `OPENCODE_DISABLE_AUTOUPDATE` | Skip auto-update checks |
+| `OPENCODE_EXPERIMENTAL` | Enable experimental features |
+| `OPENCODE_MODELS_URL` | Custom models configuration endpoint |
+| `OPENCODE_DISABLE_CLAUDE_CODE` | Disable CLAUDE.md fallback support |
+| `OPENCODE_ENABLE_EXA` | Enable web search tool |
+| `OPENCODE_SERVER_PASSWORD` | Enable basic auth for server mode |

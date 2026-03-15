@@ -1,0 +1,555 @@
+---
+title: 'Kilo Code'
+description: 'Platform specification for Kilo Code, the open-source AI coding agent VS Code extension'
+icon: 'code'
+---
+
+## Overview
+
+Kilo Code is an open-source AI coding agent extension for VS Code and JetBrains, forked from Cline and Roo Code, developed by Kilo AI (kilo.ai) [^1]. It supports 500+ AI models, custom modes, project-scoped rules, MCP server integration, and an Agent Skills system for portable, shareable task expertise [^2].
+
+---
+
+## Configuration
+
+### File Locations
+
+Kilo Code stores global settings in VS Code's extension global storage directory under `kilocode.kilo-code`. Project-level configuration uses files in the workspace root under `.kilocode/` [^3].
+
+| File | Path | Purpose |
+|---|---|---|
+| MCP settings (global) | `<globalStorage>/kilocode.kilo-code/settings/mcp_settings.json` | Global MCP server configuration [^4] |
+| MCP settings (project) | `<project-root>/.kilocode/mcp.json` | Project-level MCP server configuration [^4] |
+| Custom modes (global) | `<globalStorage>/kilocode.kilo-code/settings/custom_modes.yaml` | Global custom mode definitions [^5] |
+| Custom modes (project) | `<project-root>/.kilocodemodes` | Project-level custom mode definitions (YAML preferred, JSON supported) [^5] |
+| Rules (project) | `<project-root>/.kilocode/rules/*.md` | Project-level custom rules [^6] |
+| Rules (global) | `~/.kilocode/rules/*.md` | Global rules applied across all projects [^6] |
+| Mode-specific rules | `<project-root>/.kilocode/rules-{modeSlug}/*.md` | Rules scoped to a specific mode [^6] |
+| Skills (project) | `<project-root>/.kilocode/skills/` | Project-level skills [^7] |
+| Skills (global) | `~/.kilocode/skills/` | Global skills available to all projects [^7] |
+
+<Note>
+  The `<globalStorage>` base path varies by OS:
+  - **Linux:** `~/.config/Code/User/globalStorage/`
+  - **macOS:** `~/Library/Application Support/Code/User/globalStorage/`
+  - **Windows:** `%APPDATA%/Code/User/globalStorage/`
+
+  These paths also apply to VS Code forks like Cursor and Windsurf (with their respective config directories) [^4].
+</Note>
+
+### Settings Export/Import
+
+Kilo Code supports exporting and importing settings as JSON files via the Command Palette (`Kilo Code: Export Settings` / `Kilo Code: Import Settings`). Importing merges configurations -- it adds new API profiles and updates existing ones without deleting entries missing from the imported file. Only settings matching the internal schema are accepted [^3].
+
+---
+
+## Custom Instructions
+
+### Custom Instructions vs. Custom Rules
+
+Kilo Code distinguishes between two systems for guiding agent behavior [^8]:
+
+- **Custom Instructions** are IDE-wide, persist across all workspaces, and are configured through the Kilo Code UI (the notebook icon in the top menu bar). They can be set globally for all modes or per-mode [^8].
+- **Custom Rules** are project-specific, stored as files in the repository, and can be committed to version control for team sharing [^6].
+
+### Custom Rules
+
+Custom rules are Markdown files that provide project-specific and global behavioral constraints for the agent [^6].
+
+<Tabs>
+  <Tab title="Project Rules">
+    Project rules are stored in `.kilocode/rules/` within your workspace:
+
+    ```text Directory Structure
+    project/
+    ├── .kilocode/
+    │   ├── rules/
+    │   │   ├── formatting.md
+    │   │   ├── restricted_files.md
+    │   │   └── naming_conventions.md
+    ├── src/
+    ```
+
+    Rules can be managed through the built-in UI (accessible from the Kilo Code panel) or by editing files directly [^6].
+  </Tab>
+  <Tab title="Global Rules">
+    Global rules are stored in `~/.kilocode/rules/` and apply across all projects:
+
+    ```text Directory Structure
+    ~/.kilocode/
+    ├── rules/
+    │   ├── coding_standards.md
+    │   ├── security_guidelines.md
+    │   └── documentation_style.md
+    ```
+  </Tab>
+  <Tab title="Mode-Specific Rules">
+    Mode-specific rules use dedicated directories scoped to a mode slug:
+
+    ```text Directory Structure
+    project/
+    ├── .kilocode/
+    │   ├── rules/              # Generic rules (all modes)
+    │   │   └── general.md
+    │   ├── rules-code/         # Rules for Code mode only
+    │   │   └── code-standards.md
+    │   ├── rules-architect/    # Rules for Architect mode only
+    │   │   └── design-patterns.md
+    ```
+
+    Mode-specific rules are given priority over generic rules when both exist [^6].
+  </Tab>
+</Tabs>
+
+**Rules loading order [^6]:**
+
+1. Global rules from `~/.kilocode/rules/`
+2. Project rules from `.kilocode/rules/`
+3. Mode-specific rules from `.kilocode/rules-{modeSlug}/`
+4. Legacy fallback files (`.kilocoderules`, `.roorules`, `.clinerules`) are used only if no directory-based rules are found
+
+Project rules take precedence over global rules when directives conflict. Within each directory, later-loaded files override earlier ones [^6].
+
+<Note>
+  The legacy single-file patterns (`.kilocoderules`, `.kilocoderules-{mode}`) are deprecated. The `.kilocode/rules/` directory structure is the recommended approach [^6].
+</Note>
+
+---
+
+## Custom Modes
+
+Modes are specialized agent personas that tailor behavior, tool access, and expertise to specific tasks. Kilo Code ships with built-in modes (Code, Debug, Ask, Architect, Orchestrator) and supports user-defined custom modes [^5].
+
+### Mode Definition Format
+
+YAML is the preferred format for defining custom modes [^5]:
+
+<CodeGroup>
+
+```yaml .kilocodemodes (Project-Level)
+customModes:
+  - slug: docs-writer
+    name: Documentation Writer
+    description: Writing and editing technical documentation
+    roleDefinition: >
+      You are a technical writer specializing in clear,
+      comprehensive documentation.
+    whenToUse: Use this mode for writing and editing documentation files
+    customInstructions: Focus on clarity, completeness, and consistency
+    groups:
+      - read
+      - - edit
+        - fileRegex: \.md$
+          description: Markdown files only
+      - browser
+```
+
+```yaml custom_modes.yaml (Global)
+customModes:
+  - slug: security-reviewer
+    name: Security Reviewer
+    description: Review code for security vulnerabilities
+    roleDefinition: >
+      You are a security expert who reviews code for
+      vulnerabilities and best practices.
+    groups:
+      - read
+      - command
+      - mcp
+```
+
+</CodeGroup>
+
+### Mode Schema Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `slug` | string | Yes | Unique internal identifier for the mode [^5] |
+| `name` | string | Yes | Display name shown in the UI [^5] |
+| `description` | string | Yes | Short summary of the mode's purpose [^5] |
+| `roleDefinition` | string | Yes | Core identity and expertise definition [^5] |
+| `groups` | array | Yes | Allowed toolsets and file access permissions [^5] |
+| `customInstructions` | string | No | Behavioral guidelines or rules for the mode [^5] |
+| `whenToUse` | string | No | Guidance for automated mode selection [^5] |
+
+### Tool Groups
+
+The `groups` array controls which tools the mode can access [^5]:
+
+| Group | Description |
+|---|---|
+| `read` | Read files and directories |
+| `edit` | Edit and create files (supports file regex restrictions) |
+| `command` | Execute terminal commands |
+| `browser` | Use browser capabilities |
+| `mcp` | Use MCP server tools |
+
+Groups can be simple strings for unrestricted access, or tuples with file restrictions:
+
+```yaml
+groups:
+  - read                    # Unrestricted read access
+  - - edit                  # Restricted edit access
+    - fileRegex: \.tsx?$
+      description: TypeScript files only
+  - command
+```
+
+### Precedence
+
+Project modes (`.kilocodemodes`) completely override global modes (`custom_modes.yaml`) when they share the same slug -- all properties are replaced, not merged [^5]. Built-in modes can be overridden by creating a custom mode with a matching slug [^5].
+
+<Note>
+  Each mode features **Sticky Models** -- Kilo Code remembers and auto-selects the last model used with each mode, allowing different preferred models for different tasks [^5].
+</Note>
+
+---
+
+## Skills
+
+Skills are portable packages of domain expertise that extend the agent's capabilities, following the open Agent Skills specification [^7]. Unlike modes (which define an agent persona), skills provide focused task instructions that any mode can invoke [^7].
+
+### Skill Directory Structure
+
+```text
+.kilocode/
+├── skills/                    # Generic skills (all modes)
+│   ├── api-design/
+│   │   ├── SKILL.md           # Required: metadata + instructions
+│   │   ├── scripts/           # Optional: executable code
+│   │   ├── references/        # Optional: documentation
+│   │   └── assets/            # Optional: templates, resources
+│   └── testing-strategy/
+│       └── SKILL.md
+├── skills-code/               # Code mode-specific skills
+│   └── typescript-patterns/
+│       └── SKILL.md
+├── skills-architect/          # Architect mode-specific skills
+│   └── system-design/
+│       └── SKILL.md
+```
+
+Mode-specific skills (in `skills-{modeSlug}/`) override generic skills (in `skills/`) with the same name when operating in that mode [^7].
+
+### SKILL.md Format
+
+Each skill requires a `SKILL.md` file with YAML frontmatter and Markdown instructions [^7]:
+
+```yaml SKILL.md
+---
+name: api-design
+description: >
+  Design RESTful APIs following best practices including
+  resource naming, HTTP methods, status codes, and versioning
+---
+
+# API Design Guidelines
+
+## Resource Naming
+- Use plural nouns for collections (`/users`, `/orders`)
+- Use kebab-case for multi-word resources
+
+## HTTP Methods
+- GET for retrieval, POST for creation
+- PUT for full updates, PATCH for partial updates
+```
+
+### Frontmatter Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Lowercase with hyphens only (`^[a-z0-9-]+$`), max 64 characters, must match directory name [^9] |
+| `description` | string | Yes | What the skill does and when to use it, max 1024 characters [^9] |
+| `license` | string | No | SPDX license identifier [^9] |
+| `allowed-tools` | array | No | List of tools the skill can use [^9] |
+| `metadata` | object | No | Additional info (author, version, category) [^9] |
+| `compatibility` | string | No | Environment requirements [^9] |
+
+### How Skills Load
+
+<Steps>
+  <Step title="Discovery">
+    Skills are scanned from `.kilocode/skills/` (project) and `~/.kilocode/skills/` (global) when VS Code initializes. Only metadata (name, description, file path) is read at this stage [^7].
+  </Step>
+  <Step title="Matching">
+    When you submit a task, the agent evaluates your request against all available skill descriptions to determine if any skill applies [^7].
+  </Step>
+  <Step title="Activation">
+    If the agent determines a skill matches, it reads the full `SKILL.md` instructions into context and follows them, optionally loading referenced files or executing bundled scripts [^7].
+  </Step>
+</Steps>
+
+<Warning>
+  Adding or modifying skills requires reloading VS Code (`Cmd+Shift+P` / `Ctrl+Shift+P` then "Developer: Reload Window") for changes to take effect [^7].
+</Warning>
+
+**Priority:** Project skills override global skills with the same name [^7].
+
+---
+
+## MCP Servers
+
+Kilo Code supports the Model Context Protocol (MCP) for extending agent capabilities with external tools and services. Both global and project-level configurations are supported [^4].
+
+### Configuration Format
+
+<Tabs>
+  <Tab title="Global MCP">
+    Global MCP servers are configured in `mcp_settings.json` within the extension's global storage:
+
+    ```json mcp_settings.json
+    {
+      "mcpServers": {
+        "my-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "your-api-key"
+          },
+          "alwaysAllow": ["tool1", "tool2"],
+          "disabled": false
+        }
+      }
+    }
+    ```
+
+    **File location by OS [^4]:**
+    - **Linux:** `~/.config/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json`
+    - **macOS:** `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json`
+    - **Windows:** `%APPDATA%/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json`
+  </Tab>
+  <Tab title="Project MCP">
+    Project-level MCP servers are configured in `.kilocode/mcp.json` at the workspace root:
+
+    ```json .kilocode/mcp.json
+    {
+      "mcpServers": {
+        "project-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/project-specific-server"],
+          "env": {
+            "PROJECT_TOKEN": "token-value"
+          }
+        }
+      }
+    }
+    ```
+
+    This file can be committed to version control for team sharing [^4].
+  </Tab>
+</Tabs>
+
+### Transport Types
+
+| Transport | Use Case | Status |
+|---|---|---|
+| **STDIO** | Local servers via standard input/output | Active [^4] |
+| **Streamable HTTP** | Remote servers over HTTP/HTTPS | Active [^4] |
+| **SSE** | Server-Sent Events | Deprecated as of MCP spec 2025-03-26 [^4] |
+
+```json Streamable HTTP Example
+{
+  "mcpServers": {
+    "remote-server": {
+      "type": "streamable-http",
+      "url": "https://your-server-url.com/mcp",
+      "headers": {
+        "Authorization": "Bearer your-token"
+      },
+      "alwaysAllow": ["tool3"],
+      "disabled": false
+    }
+  }
+}
+```
+
+### MCP Server Configuration Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `command` | string | Command to start the server (e.g., `npx`, `node`, `python`) [^4] |
+| `args` | string[] | Arguments for the server command [^4] |
+| `env` | object | Environment variables passed to the server process [^4] |
+| `alwaysAllow` | string[] | Tool names to auto-approve without confirmation [^4] |
+| `disabled` | boolean | Whether the server is disabled [^4] |
+| `type` | string | Transport type (`streamable-http` for remote servers) [^4] |
+| `url` | string | URL for remote servers (Streamable HTTP transport) [^4] |
+| `headers` | object | HTTP headers for remote servers [^4] |
+
+### Auto-Approval
+
+MCP tool auto-approval is configured per-tool and disabled by default. The global "Use MCP servers" auto-approval setting must be enabled first, then individual tools can be allowed via Settings > Agent Behaviour > MCP Servers [^4].
+
+<Note>
+  Project-level MCP configuration takes precedence over global configuration when server names collide [^4].
+</Note>
+
+---
+
+## Orchestrator Mode (Subtasks)
+
+Orchestrator Mode allows breaking down complex projects into subtasks, each running in its own context with a different mode. Subtasks are managed via a LIFO stack -- when a subtask completes, control returns to the parent task automatically [^10].
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for Kilo Code.
+
+### Configuration File Paths
+
+| Platform | Global MCP Settings Path |
+|---|---|
+| **Linux** | `~/.config/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json` |
+| **macOS** | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json` |
+| **Windows** | `%APPDATA%/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json` |
+
+- **Project MCP:** `<project-root>/.kilocode/mcp.json`
+- **Project rules:** `<project-root>/.kilocode/rules/*.md`
+- **Mode-specific rules:** `<project-root>/.kilocode/rules-{modeSlug}/*.md`
+- **Custom modes:** `<project-root>/.kilocodemodes`
+- **Global rules:** `~/.kilocode/rules/`
+- **Project skills:** `<project-root>/.kilocode/skills/`
+- **Global skills:** `~/.kilocode/skills/`
+
+### Installing MCP Servers
+
+To programmatically register an MCP server, merge the server definition into the `mcpServers` object of the appropriate JSON file:
+
+<CodeGroup>
+
+```json Global (mcp_settings.json)
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "value"
+      },
+      "alwaysAllow": [],
+      "disabled": false
+    }
+  }
+}
+```
+
+```json Project (.kilocode/mcp.json)
+{
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Installing Skills
+
+To install a skill, create a directory under the appropriate skills path with a valid `SKILL.md` file:
+
+<CodeGroup>
+
+```bash Project Skill
+mkdir -p .kilocode/skills/my-skill
+cat > .kilocode/skills/my-skill/SKILL.md << 'EOF'
+---
+name: my-skill
+description: Description of what this skill does and when to use it
+---
+
+# Instructions
+
+Your skill instructions here.
+EOF
+```
+
+```bash Global Skill
+mkdir -p ~/.kilocode/skills/my-skill
+cat > ~/.kilocode/skills/my-skill/SKILL.md << 'EOF'
+---
+name: my-skill
+description: Description of what this skill does and when to use it
+---
+
+# Instructions
+
+Your skill instructions here.
+EOF
+```
+
+</CodeGroup>
+
+### Installing Custom Modes
+
+To install a custom mode, write or merge into the `.kilocodemodes` file at the project root (YAML preferred):
+
+```yaml .kilocodemodes
+customModes:
+  - slug: my-custom-mode
+    name: My Custom Mode
+    description: Specialized mode for a specific task
+    roleDefinition: You are a specialized assistant for...
+    groups:
+      - read
+      - edit
+      - command
+    customInstructions: Additional instructions for this mode.
+```
+
+If a `.kilocodemodes` file already exists, parse it (YAML or JSON), append the new mode to the `customModes` array (avoiding duplicate slugs), and write it back [^5].
+
+### Installing Project Rules
+
+To install project-level rules, create the `.kilocode/rules/` directory and add Markdown files:
+
+```bash
+mkdir -p .kilocode/rules
+cat > .kilocode/rules/my-package-rules.md << 'EOF'
+# Package-Specific Rules
+
+Your rules content here.
+EOF
+```
+
+Files are loaded in alphabetical order. Use numeric prefixes (e.g., `01-`, `02-`) to control ordering [^6].
+
+### Key Considerations
+
+- The `mcpServers` object is a flat map; each key is a unique server identifier. Merge carefully and do not overwrite existing entries [^4].
+- Project-level MCP configuration takes precedence over global configuration when server names collide [^4].
+- The global storage directory must exist before writing; create it if necessary.
+- The MCP settings file path varies by VS Code variant (Cursor, Windsurf, etc.) -- the editor's config directory replaces `Code` in the path.
+- Skills require a VS Code reload after installation to be discovered [^7].
+- The `name` field in `SKILL.md` frontmatter must exactly match the skill's directory name [^9].
+
+### Extension Detection
+
+To detect whether Kilo Code is installed:
+
+```bash
+code --list-extensions | grep kilocode.Kilo-Code
+```
+
+Or check for the extension directory `kilocode.kilo-code` in VS Code's extensions directory [^1].
+
+---
+
+## Footnotes
+
+[^1]: https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code
+[^2]: https://kilo.ai/
+[^3]: https://kilo.ai/docs/getting-started/settings
+[^4]: https://kilo.ai/docs/automate/mcp/using-in-kilo-code
+[^5]: https://kilo.ai/docs/customize/custom-modes
+[^6]: https://kilo.ai/docs/customize/custom-rules
+[^7]: https://kilo.ai/docs/customize/skills
+[^8]: https://kilo.ai/docs/customize/custom-instructions
+[^9]: https://agentskills.io/specification
+[^10]: https://kilo.ai/docs/code-with-ai/agents/using-modes

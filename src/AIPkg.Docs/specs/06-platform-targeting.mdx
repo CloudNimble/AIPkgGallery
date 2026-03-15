@@ -43,6 +43,52 @@ ai-{platform}-{variant}
 | `aider` | Aider | `ai` | `.aider/` | Stable |
 | `cline` | Cline | `ai` | `.cline/` | Stable |
 | `zed` | Zed AI | `ai` | `.zed/` | Stable |
+| `gemini` | Gemini (all) | `ai` | _(parent group only)_ | Stable |
+| `gemini-cli` | Gemini CLI | `gemini` | `.gemini/` | Stable |
+| `gemini-code-assist` | Gemini Code Assist | `gemini` | `.gemini/` | Stable |
+| `tabnine` | Tabnine | `ai` | `.tabnine/` | Stable |
+| `qodo` | Qodo | `ai` | `.qodo/` | Stable |
+| `codegpt` | CodeGPT | `ai` | _(IDE extension settings)_ | Stable |
+| `devin` | Devin | `ai` | `.devin/` | Stable |
+| `copilot-cli` | GitHub Copilot CLI | `copilot` | `.copilot/` | Stable |
+| `roo` | Roo Code | `ai` | `.roo/` | Stable |
+| `goose` | Goose | `ai` | `~/.config/goose/` | Stable |
+| `amp` | Amp | `ai` | `.amp/` | Stable |
+| `augment` | Augment Code | `ai` | `.augment/` | Stable |
+| `codex` | Codex CLI | `ai` | `.codex/` | Stable |
+| `amazon-q` | Amazon Q Developer | `ai` | `.amazonq/` | Stable |
+| `jetbrains` | JetBrains (all) | `ai` | _(parent group only)_ | Stable |
+| `jetbrains-ai` | JetBrains AI | `jetbrains` | `.aiassistant/` | Stable |
+| `jetbrains-air` | JetBrains Air | `jetbrains` | `.air/` | Stable |
+| `junie` | Junie | `jetbrains` | `.junie/` | Stable |
+| `sourcegraph-cody` | Sourcegraph Cody | `ai` | _(IDE extension settings)_ | Stable |
+| `chatgpt` | ChatGPT | `ai` | _(cloud-based)_ | Stable |
+| `kiro-cli` | Kiro | `ai` | `.kiro/` | Stable |
+| `openhands` | OpenHands | `ai` | `.openhands/` | Stable |
+| `replit` | Replit | `ai` | _(cloud-based)_ | Stable |
+| `trae` | Trae | `ai` | `.trae/` | Stable |
+| `warp` | Warp | `ai` | `.warp/` | Stable |
+| `kilo-code` | Kilo Code | `ai` | `.kilocode/` | Stable |
+| `qwen-code` | Qwen Code | `ai` | `.qwen/` | Stable |
+| `droid` | Droid | `ai` | `.factory/` | Stable |
+| `cortex-code` | Cortex Code | `ai` | `.snowflake/cortex/` | Stable |
+| `kimi-cli` | Kimi Code CLI | `ai` | `.kimi/` | Stable |
+| `crush` | Crush | `ai` | `.crush/` | Stable |
+| `iflow-cli` | iFlow CLI | `ai` | `.iflow/` | Stable |
+| `codebuddy` | CodeBuddy | `ai` | `.codebuddy/` | Stable |
+| `command-code` | Command Code | `ai` | `.commandcode/` | Stable |
+| `antigravity` | Antigravity | `ai` | `.agent/` | Stable |
+| `mcpjam` | MCPJam | `ai` | `.mcpjam/` | Stable |
+| `kode` | Kode | `ai` | `.kode/` | Stable |
+| `mistral-vibe` | Mistral Vibe | `ai` | `.vibe/` | Stable |
+| `mux` | Mux | `ai` | `.mux/` | Stable |
+| `openclaw` | OpenClaw | `ai` | `.openclaw/` | Stable |
+| `pi` | Pi | `ai` | `.pi/` | Stable |
+| `adal` | AdaL | `ai` | `.adal/` | Stable |
+| `neovate` | Neovate | `ai` | `.neovate/` | Stable |
+| `pochi` | Pochi | `ai` | `.pochi/` | Stable |
+| `qoder` | Qoder | `ai` | `.qoder/` | Stable |
+| `zencoder` | Zencoder | `ai` | `.zencoder/` | Stable |
 
 ### Claude Desktop Install Paths
 
@@ -72,6 +118,50 @@ opencode        →  lib/shared
 aider           →  lib/shared
 cline           →  lib/shared
 zed             →  lib/shared
+gemini-cli      →  gemini  →  lib/shared
+gemini-code-assist → gemini → lib/shared
+tabnine         →  lib/shared
+qodo            →  lib/shared
+codegpt         →  lib/shared
+devin           →  lib/shared
+copilot-cli     →  copilot →  lib/shared
+roo             →  lib/shared
+goose           →  lib/shared
+amp             →  lib/shared
+augment         →  lib/shared
+codex           →  lib/shared
+amazon-q        →  lib/shared
+jetbrains-ai    →  jetbrains →  lib/shared
+jetbrains-air   →  jetbrains →  lib/shared
+junie           →  jetbrains →  lib/shared
+sourcegraph-cody → lib/shared
+chatgpt         →  lib/shared
+kiro-cli        →  lib/shared
+openhands       →  lib/shared
+replit          →  lib/shared
+trae            →  lib/shared
+warp            →  lib/shared
+kilo-code       →  lib/shared
+qwen-code       →  lib/shared
+droid           →  lib/shared
+cortex-code     →  lib/shared
+kimi-cli        →  lib/shared
+crush           →  lib/shared
+iflow-cli       →  lib/shared
+codebuddy       →  lib/shared
+command-code    →  lib/shared
+antigravity     →  lib/shared
+mcpjam          →  lib/shared
+kode            →  lib/shared
+mistral-vibe    →  lib/shared
+mux             →  lib/shared
+openclaw        →  lib/shared
+pi              →  lib/shared
+adal            →  lib/shared
+neovate         →  lib/shared
+pochi           →  lib/shared
+qoder           →  lib/shared
+zencoder        →  lib/shared
 ```
 
 Each step in the chain maps to a directory inside `lib/`. For example, `claude-code` maps to `lib/claude-code/`, `claude` maps to `lib/claude/`, and the terminal step always maps to `lib/shared/`.
@@ -166,6 +256,17 @@ The server expands `claude-code` to `[claude-code, claude]` using the fallback g
 | `copilot`, `copilot-vscode`, `copilot-github` | Stable |
 | `cursor`, `windsurf`, `continue` | Stable |
 | `opencode`, `aider`, `cline`, `zed` | Stable |
+| `gemini`, `gemini-cli`, `gemini-code-assist` | Stable |
+| `tabnine`, `qodo`, `codegpt`, `devin` | Stable |
+| `copilot-cli` | Stable |
+| `roo`, `goose`, `amp`, `augment`, `codex` | Stable |
+| `amazon-q`, `sourcegraph-cody`, `chatgpt` | Stable |
+| `jetbrains`, `jetbrains-ai`, `jetbrains-air`, `junie` | Stable |
+| `kiro-cli`, `openhands`, `replit`, `trae`, `warp` | Stable |
+| `kilo-code`, `qwen-code`, `droid`, `cortex-code`, `kimi-cli` | Stable |
+| `crush`, `iflow-cli`, `codebuddy`, `command-code`, `antigravity` | Stable |
+| `mcpjam`, `kode`, `mistral-vibe`, `mux`, `openclaw` | Stable |
+| `pi`, `adal`, `neovate`, `pochi`, `qoder`, `zencoder` | Stable |
 | Any other moniker | Provisional until canonical registration |
 
 <Note>

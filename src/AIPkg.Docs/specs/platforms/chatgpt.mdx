@@ -1,0 +1,279 @@
+---
+title: "ChatGPT"
+sidebarTitle: "ChatGPT"
+description: "Platform specification for ChatGPT — Custom GPTs, Actions, MCP support, custom instructions, and desktop app configuration."
+icon: "comments"
+---
+
+ChatGPT is OpenAI's flagship conversational AI product, available as a web app, desktop apps (macOS/Windows), and mobile apps. It is extensible through Custom GPTs (with instructions, knowledge files, and Actions), GPT Actions (OpenAPI-based REST API integrations), Projects with per-project instructions, MCP server connectors via Developer Mode, and user-level Custom Instructions.
+
+---
+
+## Custom GPTs
+
+Custom GPTs are tailored versions of ChatGPT that embed instructions, reference files, tools, and workflows — all without writing code. They are the primary extension mechanism for the ChatGPT platform.
+
+Creating and publishing GPTs requires a **paid plan** (Plus, Pro, Team, Enterprise, or Edu). Free-tier users can use published GPTs but cannot create or modify them.
+
+### Publishing Options
+
+| Visibility | Description |
+|-----------|-------------|
+| **Only me** | Private — only visible to the creator |
+| **Anyone with the link** | Unlisted — shareable via URL but not discoverable in the Store |
+| **Public (GPT Store)** | Discoverable by all ChatGPT users; requires builder verification and a privacy policy URL if Actions are used |
+
+### Enterprise & Team Controls
+
+Workspace admins can control:
+- Who can create and share GPTs within the organization
+- Which external domains Actions are allowed to call
+- Whether GPTs can be published to the public Store or only the internal workspace Store
+
+---
+
+## GPT Actions
+
+GPT Actions (formerly known as Plugins) allow a Custom GPT to call external REST APIs using natural language. At their core, Actions leverage **Function Calling** to determine which API endpoint is relevant to a user's query and to generate the required JSON input.
+
+### How Actions Work
+
+1. The builder provides an **OpenAPI specification** (YAML or JSON) describing the external API's endpoints
+2. ChatGPT reads the spec's descriptions to decide when an endpoint is relevant to the user's question
+3. ChatGPT generates the necessary parameters and makes the HTTP request
+4. The response is returned to ChatGPT, which incorporates it into its reply
+
+### OpenAPI Schema
+
+Actions require an OpenAPI 3.x specification. ChatGPT relies heavily on the `description` fields to understand when and how to use each endpoint.
+
+<CodeGroup>
+```yaml Example Action Schema
+openapi: "3.1.0"
+info:
+  title: "Weather API"
+  description: "Retrieves current weather data for a given city. Use this when the user asks about weather conditions."
+  version: "1.0.0"
+servers:
+  - url: "https://api.example.com"
+paths:
+  /weather:
+    get:
+      operationId: "getWeather"
+      summary: "Get current weather for a city"
+      description: "Returns temperature, humidity, and conditions for the specified city name."
+      parameters:
+        - name: city
+          in: query
+          required: true
+          description: "The city name to look up weather for (e.g., 'San Francisco')"
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "Weather data returned successfully"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  temperature:
+                    type: number
+                  conditions:
+                    type: string
+```
+</CodeGroup>
+
+**Schema limits:**
+- Max **300 characters** per endpoint `description` / `summary` field
+- Max **700 characters** per parameter `description` field
+
+**Consequential actions flag:**
+
+```yaml
+x-openai-isConsequential: true   # Always prompt user for confirmation
+x-openai-isConsequential: false  # Show "Always allow" button
+# If omitted: GET defaults to false, all other methods default to true
+```
+
+### Authentication
+
+Actions support three authentication modes:
+
+<Tabs>
+  <Tab title="No Authentication">
+    Suitable for public APIs (e.g., public weather data). No credentials are required.
+  </Tab>
+  <Tab title="API Key">
+    The builder enters an API key in the GPT configuration UI. The key is sent as a Bearer token or custom header with every request. The key is stored securely by OpenAI and is not visible to end users.
+
+    ```
+    Authorization: Bearer sk-your-api-key
+    ```
+  </Tab>
+  <Tab title="OAuth 2.0">
+    For user-specific data (calendar, email, etc.). When the user first triggers the Action, they see a **"Sign in to [domain]"** button. ChatGPT performs the OAuth flow:
+
+    1. Redirects user to your `authorization_url`
+    2. Receives an access token (and optional refresh token)
+    3. Passes the token in the `Authorization` header on every subsequent request
+
+    **Requirements:**
+    - Must use the `state` parameter for security
+    - Authorization and API endpoints must share the same root domain
+    - `authorization_content_type` must be specified
+
+    You can mix OAuth-authenticated endpoints with unauthenticated endpoints in the same schema.
+  </Tab>
+</Tabs>
+
+<Warning>
+  If your GPT uses a custom Action that calls an external API, you must **verify the domain** and include a **Privacy Policy URL** before publishing to the GPT Store.
+</Warning>
+
+### Actions vs Apps
+
+OpenAI has introduced **Apps** as a newer integration mechanism for Business, Enterprise, and Edu workspaces:
+
+| Feature | Actions | Apps |
+|---------|---------|------|
+| Custom OpenAPI schema | Yes | Uses MCP protocol |
+| Public GPT Store | Yes | No (workspace-only) |
+| Write operations | Limited | Full (with confirmation modals) |
+| Authentication | API Key / OAuth | OAuth with MCP |
+| Availability | All paid plans | Business / Enterprise / Edu |
+
+Actions and Apps are **mutually exclusive** in the GPT editor — a single GPT cannot use both simultaneously.
+
+---
+
+## Custom Instructions
+
+ChatGPT provides multiple layers of personalization:
+
+### Instruction Hierarchy
+
+| Layer | Scope | How to Set | Character Limit |
+|-------|-------|-----------|----------------|
+| **User-level Custom Instructions** | All conversations (unless overridden) | Settings > Personalization > Custom Instructions | 1,500 chars per field |
+| **Project Instructions** | All chats within a specific Project | Project settings > Add instructions | — |
+| **Custom GPT Instructions** | All conversations with that GPT | GPT Builder > Configure > Instructions | — |
+| **In-chat instructions** | Single conversation only | Type instructions directly in the chat | — |
+
+### User-Level Custom Instructions
+
+The Custom Instructions settings provide two text fields:
+
+1. **"What would you like ChatGPT to know about you?"** — Background context (role, industry, preferences)
+2. **"How would you like ChatGPT to respond?"** — Output formatting, tone, style, constraints
+
+These instructions are injected into the context window at the start of every conversation. They sync across web, desktop, and mobile.
+
+---
+
+## MCP Support
+
+ChatGPT supports MCP via **Developer Mode**, which was announced in September 2025. This enables ChatGPT to connect to remote MCP servers for extensible tool integrations.
+
+<Warning>
+  Unlike Claude Desktop, which connects to local stdio-based MCP servers via a JSON configuration file, ChatGPT requires MCP servers to be **remote HTTPS endpoints** with **OAuth authentication**. There is no local MCP configuration file equivalent.
+</Warning>
+
+### Enabling Developer Mode
+
+<Steps>
+  <Step title="Enable in Settings">
+    **Individual accounts:** Go to Settings > Apps > Advanced settings > Developer mode.
+
+    **Workspace/Team accounts:** Workspace Settings > Permissions & Roles > Connected Data > Developer mode / Create custom MCP connectors.
+  </Step>
+  <Step title="Create a Connector">
+    Navigate to Settings > Connectors > Create. Provide a connector name, description, and the server URL (must end with `/sse/` for server-sent events streaming).
+  </Step>
+  <Step title="Configure Authentication">
+    MCP servers for ChatGPT should use **OAuth** with dynamic client registration. This is a requirement — API key auth is not supported for MCP connectors.
+  </Step>
+</Steps>
+
+### MCP Server Requirements
+
+| Aspect | ChatGPT | Claude Desktop |
+|--------|---------|----------------|
+| Transport | Remote HTTPS (SSE) | Local stdio |
+| Authentication | OAuth 2.0 required | None (local process) |
+| Configuration | Web UI (Settings > Connectors) | Local JSON file (`claude_desktop_config.json`) |
+| Write operations | Supported with confirmation modals | Supported |
+| Protocol | JSON-RPC 2.0 over SSE | JSON-RPC 2.0 over stdio |
+
+### MCP Server Protocol
+
+Your MCP server must handle these JSON-RPC methods:
+
+- **`initialize`** — Return protocol version, capabilities, and server info
+- **`initialized`** — Acknowledgment notification
+- **`tools/list`** — Return available tools with schemas
+- **`search`** and **`fetch`** — For deep research and knowledge integration (read-only compatibility schema)
+
+Tools should include the `readOnlyHint` annotation for read-only operations. Tools without this annotation are treated as write actions and trigger user confirmation modals.
+
+### Availability
+
+| Plan | MCP Access |
+|------|-----------|
+| Free | No |
+| Plus | Yes (beta) |
+| Pro | Yes (beta) |
+| Business | Yes (beta, admin must enable) |
+| Enterprise | Yes (beta, admin must enable) |
+| Edu | Yes (beta, admin must enable) |
+
+---
+
+## Installation Provider Notes
+
+<Info>
+  ChatGPT is a **hosted platform** — there is no local file-based configuration system comparable to Claude Code's `.claude/` directory, Cursor's `.cursor/` rules, or VS Code's `.github/copilot-instructions.md`. This significantly limits what an AIpkg installer can automate.
+</Info>
+
+### What Can Be Automated
+
+| Capability | Feasibility | Notes |
+|-----------|-------------|-------|
+| Custom GPT creation | **API possible** | Via the OpenAI API (Assistants/Responses API), not the ChatGPT UI directly |
+| GPT Action schemas | **Packageable** | OpenAPI YAML/JSON specs can be packaged and documented for manual import |
+| Project instructions | **Not automatable** | Must be set manually in the ChatGPT web UI |
+| Custom Instructions | **Not automatable** | Must be set manually in Settings |
+| MCP server deployment | **Partially automatable** | The server itself can be packaged; connector registration requires manual UI steps |
+| Knowledge files | **Packageable** | Files can be distributed but must be manually uploaded to GPTs or Projects |
+| Desktop app config | **Not automatable** | No documented config file format for the official app |
+
+### Recommended AIpkg Approach
+
+For ChatGPT-targeted packages, the most practical approach is to:
+
+1. **Package OpenAPI schemas** for GPT Actions in `lib/chatgpt/actions/`
+2. **Package knowledge files** (PDFs, reference docs) in `lib/chatgpt/knowledge/`
+3. **Package instruction templates** (markdown files with recommended system prompts) in `lib/chatgpt/instructions/`
+4. **Include a setup guide** that walks the user through manual import steps in the ChatGPT UI
+5. **For MCP integrations**, package the MCP server code with deployment instructions
+
+<Warning>
+  Because ChatGPT lacks a local file-based configuration system, AIpkg packages targeting the `chatgpt` platform moniker will primarily serve as **content bundles with setup documentation** rather than fully automated installations. The installer should clearly communicate which manual steps are required.
+</Warning>
+
+### Platform Moniker
+
+Per the [Platform Targeting](../06-platform-targeting) specification, ChatGPT would use:
+
+```
+chatgpt            → ai        (parent: root)
+chatgpt-desktop    → chatgpt   (desktop app variant)
+chatgpt-web        → chatgpt   (web interface variant)
+```
+
+### Desktop App Data Paths
+
+| OS | Official App Data Path |
+|----|----------------------|
+| macOS | `~/Library/Application Support/OpenAI/Atlas/` |
+| Windows | `%APPDATA%\OpenAI\Atlas\` |

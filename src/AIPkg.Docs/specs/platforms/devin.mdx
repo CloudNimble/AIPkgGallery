@@ -1,0 +1,481 @@
+---
+title: Devin
+description: Platform specification for Devin, the autonomous AI software engineer by Cognition Labs
+icon: robot
+---
+
+[Devin](https://devin.ai/) is an autonomous AI software engineer developed by **Cognition Labs** that can plan, code, test, and deliver complete software tasks inside a sandboxed cloud environment with a full shell, code editor, and browser.[^1] Unlike IDE-embedded copilots, Devin operates as an asynchronous agent: you assign it a task (via web UI, Slack, Linear, or API), and it works independently, producing pull requests and reporting back when done. Devin is extensible through **Playbooks** (reusable task templates), **Knowledge** (persistent context), **MCP servers** (Model Context Protocol integrations), and a **REST API** for programmatic session management.[^2]
+
+Cognition Labs acquired **Windsurf** (formerly Codeium) in July 2025, combining Devin's autonomous agent capabilities with Windsurf's AI-powered IDE to offer a complete AI coding product suite.[^3] As of March 2026, Cognition's combined enterprise ARR includes customers such as Goldman Sachs, Citi, Dell, Cisco, Ramp, Palantir, Nubank, and Mercado Libre.[^4]
+
+---
+
+## Configuration
+
+### Overview
+
+Devin does not use local configuration files in the traditional sense. Because Devin runs entirely in a cloud-based sandboxed environment, configuration is managed through three mechanisms:[^5]
+
+1. **Web UI settings** at [app.devin.ai](https://app.devin.ai) (Knowledge, Playbooks, Secrets, Repo Setup, MCP, Behavior)
+2. **Repository-level files** committed to your codebase (PR templates, `.devin/wiki.json`)
+3. **Shell configuration** within Devin's sandboxed VM (`~/.bashrc`, `.envrc`)
+
+### Settings (Web UI)
+
+All primary configuration is managed through the Devin web application at `app.devin.ai/settings`.[^5]
+
+| Setting Area | Path | Purpose |
+|---|---|---|
+| Knowledge | Settings > Knowledge | Persistent tips, docs, and instructions recalled across all sessions |
+| Repo Knowledge | Settings > Knowledge > Repo Knowledge | Auto-generated notes on repo structure and components |
+| Playbooks | Library > Playbooks | Reusable task templates shared across team |
+| Secrets | Settings > Secrets | API keys, tokens, passwords, and cookies stored securely |
+| MCP Marketplace | Settings > MCP Marketplace | Enable and configure MCP server integrations |
+| Behavior | Settings > Behavior | User-specific behavior customization (does not affect other users) |
+| Repo Setup | Workspace > Repo Setup | Per-repo pull commands, dependencies, linting, tests, and shell config |
+
+### Repository-Level Configuration Files
+
+| File | Path | Purpose |
+|---|---|---|
+| Devin PR template | `.github/PULL_REQUEST_TEMPLATE/devin_pr_template.md` | Devin-specific pull request format override |
+| Wiki configuration | `.devin/wiki.json` | Steers DeepWiki auto-documentation generation |
+| Environment variables | `.envrc` (with `direnv`) | Per-repo environment variables loaded automatically |
+
+<Note>
+Devin searches for PR templates in a specific priority order, checking `PULL_REQUEST_TEMPLATE/DEVIN_PR_TEMPLATE.md` (and lowercase variant) in the repo root, `docs/`, and `.github/` directories before falling back to the standard `PULL_REQUEST_TEMPLATE.md`.[^6]
+</Note>
+
+### Repo Setup Steps
+
+When you add a repository to Devin, the setup process includes eight sequential configuration steps:[^5]
+
+| Step | Purpose |
+|---|---|
+| Git Pull | Command to pull latest changes at session start |
+| Configure Secrets | Environment variables and API credentials via Secrets dashboard or `.env` files |
+| Install Dependencies | One-time dependency installation commands |
+| Maintain Dependencies | Commands run after git pull (e.g., `npm install`, `pip install -r requirements.txt`) |
+| Set up Lint | Linting commands Devin runs before committing |
+| Set up Tests | Test commands Devin evaluates pre-commit |
+| Run Local App | Instructions for running the app locally |
+| Additional Notes | Supplementary repo-specific guidance |
+
+### Shell Configuration
+
+Devin runs all commands using bash inside its sandboxed VM. The `~/.bashrc` file is the primary shell configuration location. Common patterns include custom functions for language version switching and PATH modifications:[^5]
+
+<CodeGroup>
+
+```bash ~/.bashrc Example
+# Add custom bin to PATH
+export PATH="$HOME/bin:$PATH"
+
+# Auto-switch Node version per repo
+custom_cd() {
+  builtin cd "$@"
+  if [ -f .nvmrc ]; then
+    nvm use
+  fi
+}
+alias cd=custom_cd
+```
+
+```json .devin/wiki.json Example
+{
+  "repo_notes": "This is a monorepo with three main packages: api, web, and shared.",
+  "pages": [
+    {
+      "title": "API Architecture",
+      "purpose": "Document the REST API endpoints and middleware stack",
+      "page_notes": ["Focus on authentication flow"]
+    },
+    {
+      "title": "Web Frontend",
+      "purpose": "Document the React component hierarchy",
+      "parent": "API Architecture"
+    }
+  ]
+}
+```
+
+</CodeGroup>
+
+---
+
+## Knowledge System
+
+Knowledge is a collection of persistent tips, documentation, and instructions that Devin recalls across all future sessions.[^7] Unlike Playbooks (which are task-specific), Knowledge provides general context about your organization, coding standards, and preferences.
+
+### Types of Knowledge
+
+| Type | Source | Description |
+|---|---|---|
+| Manual Knowledge | Added by users in Settings > Knowledge | Custom tips, style guides, project context |
+| Repo Knowledge | Auto-generated by Devin | Automatically scanned repo structure, architecture, and component notes |
+| Suggested Knowledge | Proposed by Devin during sessions | Devin suggests additions when it encounters something useful for future sessions |
+
+<Note>
+Use Knowledge for style guides and project-specific instructions that apply across all tasks. Use Playbooks for recurring task-specific workflows.[^7]
+</Note>
+
+### Devin Wiki (DeepWiki)
+
+Devin Wiki auto-generates comprehensive documentation for your repositories, including architecture diagrams and source links.[^8] Devin automatically indexes repositories every few hours, creating and updating wiki content. For any public GitHub repository, you can also access documentation by replacing `github.com` with `deepwiki.com` in the URL.[^9]
+
+The `.devin/wiki.json` file allows you to control wiki generation:[^10]
+
+- **`repo_notes`** (optional): Guides the structure and focus of auto-generated documentation
+- **`pages`** (optional): Explicit page definitions -- only specified pages will be generated
+  - `title` (required): Unique page title
+  - `purpose` (required): What the page should document
+  - `parent` (optional): Title of parent page for hierarchy
+  - `page_notes` (optional): Additional notes for the page
+
+---
+
+## Playbooks
+
+Playbooks function as reusable task templates -- essentially custom system prompts for repeated tasks.[^11] They can be shared across your organization and iterated on with the Playbook Compiler.
+
+### Creating Playbooks
+
+Playbooks can be created two ways:[^11]
+
+1. **Web UI**: Navigate to Library > Playbooks > "Create a new Playbook"
+2. **File upload**: Save a file with the `.devin.md` extension and drag-and-drop it when starting a session
+
+### Recommended Playbook Structure
+
+| Section | Purpose |
+|---|---|
+| Overview | Desired outcome and required steps |
+| Procedure | Imperative, action-verb-based steps (mutually exclusive and collectively exhaustive) |
+| Specifications | Postconditions describing what should be true upon completion |
+| Advice and Pointers | Preferred methods and corrections to Devin's typical approaches |
+| Forbidden Actions | Absolute prohibitions |
+| What's Needed From User | Required inputs outside Devin's control (tokens, credentials, etc.) |
+
+<CodeGroup>
+
+```markdown Example Playbook (.devin.md)
+# Library Integration Playbook
+
+## Overview
+Integrate the analytics SDK into the specified service module.
+
+## Procedure
+1. Navigate to the target service directory
+2. Install the analytics SDK via the project's package manager
+3. Write an initialization wrapper following the existing service patterns
+4. Add unit tests covering initialization and event tracking
+5. Run the full test suite and fix any failures
+6. Open a pull request with a clear summary
+
+## Specifications
+- All existing tests continue to pass
+- The analytics SDK initializes on service startup
+- Events are tracked for the three core user actions
+
+## Advice and Pointers
+- Follow the existing dependency injection pattern in `src/services/`
+- Prefer the SDK's batch mode for event submission
+
+## Forbidden Actions
+- Do not modify the CI/CD pipeline configuration
+- Do not add global state outside the service module
+```
+
+</CodeGroup>
+
+<Note>
+Run 2+ Devins in parallel with the same Playbook to quickly identify possible errors. If Devin needs help, chat with it, then update the Playbook so it succeeds without intervention next time.[^11]
+</Note>
+
+---
+
+## MCP Servers (Model Context Protocol)
+
+Devin supports MCP, enabling integration with hundreds of external tools and data sources.[^12] MCP servers can be enabled from the built-in Marketplace or added as custom configurations.
+
+### Supported Transport Methods
+
+| Transport | Status | Use Case |
+|---|---|---|
+| **stdio** | Supported | Local CLI-based servers using `npx`, `uvx`, or Docker |
+| **SSE** | Supported (legacy) | Remote servers using Server-Sent Events |
+| **HTTP** | Recommended | Remote servers using Streamable HTTP |
+
+### MCP Marketplace
+
+Navigate to **Settings > MCP Marketplace** to browse and enable pre-configured MCP servers.[^12] Many can be enabled with a single click. Available marketplace MCPs include integrations for:
+
+| Category | Examples |
+|---|---|
+| Monitoring | Datadog, Sentry, PagerDuty |
+| Project Management | Linear, Notion, Jira |
+| Design | Figma |
+| Databases | PostgreSQL, MySQL, MongoDB |
+| Deployment | Vercel |
+| Payments | Stripe, Square |
+
+### Custom MCP Server Configuration
+
+For MCPs not in the marketplace, use "Add Your Own" in the MCP settings. Configuration is done through the web UI form, specifying:[^12]
+
+- Server name, optional icon, and description
+- Transport type (stdio, SSE, or HTTP)
+- Transport-specific connection fields
+- Authentication method (None, Auth Header, or OAuth)
+
+### Authentication Methods
+
+| Method | Description |
+|---|---|
+| None | No authentication required |
+| Auth Header | Custom header key (defaults to `Authorization`) with bearer tokens |
+| OAuth | Redirects to a URL to complete the OAuth flow during sessions |
+
+<Warning>
+For OAuth-authenticated MCPs, Cognition strongly recommends using a service account rather than a personal account, as access is shared within your organization.[^12]
+</Warning>
+
+### Secrets for MCP
+
+Pass sensitive values through environment variables rather than hardcoding them in arguments. Store API keys and tokens as Secrets in Devin's Settings, then reference them in your MCP server configuration.[^12]
+
+### Devin as an MCP Server
+
+Devin also exposes its own MCP server that other AI clients can connect to, available at `https://mcp.devin.ai/mcp`:[^13]
+
+```json
+{
+  "mcpServers": {
+    "devin": {
+      "url": "https://mcp.devin.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer <DEVIN_API_KEY>"
+      }
+    }
+  }
+}
+```
+
+---
+
+## Integrations
+
+### Native Integrations
+
+| Integration | Purpose |
+|---|---|
+| **GitHub** | Repository access, pull request creation, code review, PR comment responses |
+| **GitLab** | Repository access and merge request capabilities |
+| **Bitbucket** | Repository access and pull request capabilities |
+| **Azure DevOps** | Repository and pipeline integration |
+| **Slack** | Tag @Devin to assign tasks, receive progress updates in threads |
+| **Microsoft Teams** | Same functionality as Slack for Teams environments |
+| **Jira** | Create/update issues and track workflows |
+| **Linear** | Assign tickets directly to Devin or use event-driven triggers |
+
+### Event-Driven Workflows
+
+Devin supports event-driven triggers for automated workflows.[^14] For example:
+
+- Automatically start a Devin session when a build fails
+- Begin work immediately when assigned a Linear ticket
+- Scan PRs merged in the last 24 hours and flag violations
+- Create Linear tickets for each violation and optionally open fix PRs
+
+### Devin Review
+
+Introduced in Devin 2.2, Devin Review runs an automated quality pass on every pull request, identifying logic errors, missing edge cases, and style violations before code reaches your team.[^15]
+
+---
+
+## API
+
+Devin exposes a full REST API (v3) for programmatic session management, removing the need for human-in-the-loop task creation.[^16]
+
+### Base URLs
+
+| Scope | Base URL | Purpose |
+|---|---|---|
+| Organization | `https://api.devin.ai/v3/organizations/{org_id}/` | Sessions, knowledge, playbooks, secrets |
+| Enterprise | `https://api.devin.ai/v3/enterprise/` | Analytics, audit logs, user management, billing |
+
+### Authentication
+
+API requests use service user credentials with a `cog_` prefix in the `Authorization: Bearer` header.[^16] Every v3 endpoint is gated by a specific permission assigned to the calling service user's role.
+
+### Key Endpoints
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/sessions` | `POST` | Create a new Devin session |
+| `/sessions/{devin_id}` | `GET` | Retrieve session details |
+| `/sessions/{devin_id}/messages` | `POST` | Send messages to active sessions (auto-resumes if suspended) |
+| `/secrets` | `GET/POST/DELETE` | Manage organization-level secrets |
+| `/queue` | `GET` | Monitor session queue health (enterprise) |
+| `/service-users` | `POST` | Provision new service users |
+
+### Session Creation Example
+
+<CodeGroup>
+
+```bash Create Session via API
+curl -X POST "https://api.devin.ai/v3/organizations/{org_id}/sessions" \
+  -H "Authorization: Bearer $DEVIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Fix the failing tests in the auth module",
+    "create_as_user_id": "user_abc123"
+  }'
+```
+
+```python Create Session (Python)
+import requests
+
+response = requests.post(
+    f"https://api.devin.ai/v3/organizations/{org_id}/sessions",
+    headers={"Authorization": f"Bearer {api_key}"},
+    json={
+        "prompt": "Fix the failing tests in the auth module",
+        "create_as_user_id": "user_abc123",
+        "session_secrets": {
+            "DATABASE_URL": "postgres://..."
+        }
+    }
+)
+```
+
+</CodeGroup>
+
+<Note>
+Sessions created via the API appear in the designated user's session list and consume their usage quota, identical to manually created sessions. The `session_secrets` parameter provides temporary secrets available only within that session.[^16]
+</Note>
+
+---
+
+## Pricing
+
+Devin uses **Agent Compute Units (ACUs)** as its billing unit -- a normalized measure of VM time, model inference, and networking bandwidth consumed per task.[^17]
+
+| Plan | Price | ACUs Included | ACU Rate | Concurrent Sessions | Key Features |
+|---|---|---|---|---|---|
+| **Core** | $20/month | ~9 ACUs | $2.25/ACU | Up to 10 | Devin IDE, Wiki, Search, API access |
+| **Team** | $500/month | 250 ACUs | $2.00/ACU | Unlimited | Advanced mode, early feature releases, research previews |
+| **Enterprise** | Custom | Custom | Custom | Unlimited | VPC deployment, SAML/OIDC SSO, teamspace isolation, custom Devins |
+
+<Info>
+Approximately 15 minutes of active Devin work equals 1 ACU. API usage consumes ACUs at the same rate as web UI sessions with no additional charges.[^17] Core plan ACUs roll over; Team plan subscription ACUs reset each billing cycle.[^18]
+</Info>
+
+<Warning>
+Failed tasks still consume ACUs, and real-world consumption is often higher than vendor examples suggest. Budget accordingly during initial adoption.[^19]
+</Warning>
+
+---
+
+## Devin 2.2 (February 2026)
+
+The most recent major release, Devin 2.2, was released on February 24, 2026 with the following improvements:[^15]
+
+| Feature | Description |
+|---|---|
+| **Desktop Support** | GUI desktop application interaction (browsers, Figma, Photoshop) enabled by default for new users |
+| **Devin Review** | Automated PR quality pass identifying logic errors, missing edge cases, and style violations |
+| **3x Faster Startup** | Session boot time reduced from ~45 seconds to ~15 seconds |
+| **v3 API GA** | v3 API exited beta as the primary API with RBAC and session attribution |
+
+---
+
+## Windsurf Relationship
+
+Cognition acquired Windsurf (formerly Codeium) in July 2025, shortly after Google hired away Windsurf's CEO and co-founders in a $2.4B reverse-acquihire.[^3] The acquisition brought $82M of ARR, 350+ enterprise customers, hundreds of thousands of daily active users, and Windsurf's engineering and GTM teams.[^4]
+
+Cognition's stated strategy is to invest in both products: **Windsurf** as the AI-powered IDE for interactive, decision-by-decision coding, and **Devin** as the autonomous agent for delegating complete tasks asynchronously.[^4] Following the acquisition, Cognition raised over $400M at a $10.2B valuation led by Founders Fund.[^20]
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Devin platform.
+
+### Configuration File Paths
+
+Devin does not use local configuration files in the traditional IDE sense. All primary configuration is managed through the Devin web application and API. The only repository-level configuration files are:
+
+| File | Path | Purpose |
+|---|---|---|
+| PR template | `.github/PULL_REQUEST_TEMPLATE/devin_pr_template.md` | Custom Devin-specific PR format |
+| Wiki config | `.devin/wiki.json` | Control DeepWiki auto-documentation behavior |
+| Environment | `.envrc` | Per-repo environment variables (via `direnv`) |
+
+### Installing MCP Server Extensions
+
+MCP servers are configured through the Devin web UI (Settings > MCP Marketplace) or via the Devin API. There is no local MCP configuration file to modify.[^12]
+
+For programmatic MCP setup, use the Devin v3 API to manage organization-level configuration. MCP supports three transport types (stdio, SSE, HTTP) with optional authentication via auth headers, OAuth, or no authentication.
+
+<Warning>
+MCP server configuration in Devin is organization-wide. There is no per-user or per-project MCP configuration file -- all MCP servers are managed centrally through the web UI or API.[^12]
+</Warning>
+
+### Installing Custom Instructions
+
+Devin provides two mechanisms for custom instructions, both managed through the web UI or API rather than local files:
+
+| Mechanism | Scope | How to Configure |
+|---|---|---|
+| **Knowledge** | All sessions, all repos | Settings > Knowledge (add via web UI or API) |
+| **Playbooks** | Specific task types | Library > Playbooks (create via web UI or upload `.devin.md` files) |
+
+For repository-specific context, the installer can:
+
+1. Commit a `.devin/wiki.json` to guide auto-documentation
+2. Commit a `.github/PULL_REQUEST_TEMPLATE/devin_pr_template.md` for PR formatting
+3. Use the Devin API to programmatically add Knowledge entries
+
+### Config File Format
+
+| File | Format | Notes |
+|---|---|---|
+| `.devin/wiki.json` | JSON | Controls DeepWiki generation; `repo_notes` and `pages` fields |
+| `.devin.md` | Markdown | Playbook files uploadable via drag-and-drop in web UI |
+| `devin_pr_template.md` | Markdown | Standard GitHub PR template format |
+| `.envrc` | Shell | `direnv`-compatible environment variable definitions |
+
+### Non-Interactive Considerations
+
+- **Cloud-only execution**: Devin runs entirely in Cognition's cloud. There is no local runtime or agent to configure on the developer's machine.[^1]
+- **No local config files**: Unlike IDE-based tools, Devin has no `~/.devin/` directory or local JSON/TOML settings file. Configuration is API-driven or web UI-driven.
+- **API-first automation**: Use the v3 REST API (`https://api.devin.ai/v3/`) for all programmatic configuration including session creation, secrets management, and knowledge updates.[^16]
+- **Secrets via API**: Organization secrets can be managed programmatically via `GET/POST/DELETE` on the `/v3/organizations/{org_id}/secrets` endpoints.[^16]
+- **Session secrets**: Temporary secrets for a single session can be passed via the `session_secrets` parameter during session creation, avoiding the need to store them permanently.[^16]
+- **Service users**: Programmatic access requires provisioning a service user with a `cog_`-prefixed API key and appropriate role-based permissions.[^16]
+
+---
+
+## Footnotes
+
+[^1]: https://devin.ai/
+[^2]: https://docs.devin.ai/
+[^3]: https://techcrunch.com/2025/07/14/cognition-maker-of-the-ai-coding-agent-devin-acquires-windsurf/
+[^4]: https://cognition.ai/blog/windsurf
+[^5]: https://docs.devin.ai/onboard-devin/repo-setup
+[^6]: https://docs.devin.ai/integrations/pr-templates
+[^7]: https://cognition.ai/blog/june-24-product-update
+[^8]: https://cognition.ai/blog/devin-2
+[^9]: https://cognition.ai/blog/deepwiki
+[^10]: https://docs.devin.ai/work-with-devin/deepwiki
+[^11]: https://docs.devin.ai/product-guides/creating-playbooks
+[^12]: https://docs.devin.ai/work-with-devin/mcp
+[^13]: https://mcp.devin.ai/
+[^14]: https://cognition.ai/blog/sept-24-product-update
+[^15]: https://cognition.ai/blog/introducing-devin-2-2
+[^16]: https://docs.devin.ai/api-reference/overview
+[^17]: https://devin.ai/pricing/
+[^18]: https://docs.devin.ai/admin/billing
+[^19]: https://www.eesel.ai/blog/cognition-ai-pricing
+[^20]: https://venturebeat.com/programming-development/cognition-follows-windsurf-acquisition-with-usd400m-fundraise-showing-strong

@@ -1,0 +1,371 @@
+---
+title: Augment Code
+description: Platform specification for Augment Code, the AI coding agent with deep codebase understanding by Augment
+icon: wand-magic-sparkles
+---
+
+## Overview
+
+[Augment Code](https://www.augmentcode.com/) is an AI-powered coding agent available as extensions for VS Code, JetBrains IDEs, Vim/Neovim, and as a CLI tool called Auggie. It supports extensibility through MCP servers (including Easy MCP one-click integrations), custom rules and guidelines, custom slash commands, and skills.
+
+---
+
+## Configuration
+
+### File Locations
+
+Augment Code uses different configuration mechanisms depending on whether you are using the IDE extension or the CLI.
+
+<Tabs>
+  <Tab title="VS Code">
+    | File / Location | Purpose |
+    |---|---|
+    | `.vscode/settings.json` | MCP servers and advanced settings via the `augment.advanced` key |
+    | `.augment-guidelines` | Legacy workspace guidelines (appended to agent/chat context) |
+    | `.augment/rules/` | Workspace-level rules files (Markdown) |
+    | `.augmentignore` | Files and directories to exclude from indexing (like `.gitignore`) |
+    | IDE Settings Panel | User guidelines, model selection, MCP server management |
+  </Tab>
+  <Tab title="JetBrains">
+    | File / Location | Purpose |
+    |---|---|
+    | `.augment-guidelines` | Legacy workspace guidelines |
+    | `.augment/rules/` | Workspace-level rules files (Markdown) |
+    | `.augmentignore` | Files and directories to exclude from indexing |
+    | IDE Settings Panel | User guidelines, model selection, MCP server management |
+  </Tab>
+  <Tab title="Auggie CLI">
+    | File | Path | Purpose |
+    |---|---|---|
+    | `settings.json` | `~/.augment/settings.json` | Primary CLI configuration (MCP servers, permissions, model preferences, auto-update) |
+    | User rules | `~/.augment/rules/` | Global rules applied to all projects |
+    | Hooks | `~/.augment/hooks/` | Shell scripts for lifecycle events |
+    | Skills | `~/.augment/skills/` | Agent skills (SKILL.md + supporting files) |
+    | Workspace rules | `.augment/rules/` | Project-level rules |
+    | Custom commands | `~/.augment/commands/` | User-level custom slash commands |
+    | Custom commands | `.augment/commands/` | Workspace-level custom slash commands |
+  </Tab>
+  <Tab title="Vim / Neovim">
+    | File / Location | Purpose |
+    |---|---|
+    | `.augment-guidelines` | Legacy workspace guidelines |
+    | `.augment/rules/` | Workspace-level rules files |
+    | `.augmentignore` | Files and directories to exclude from indexing |
+    | `g:augment_workspace_folders` | Vim variable to set workspace folders |
+  </Tab>
+</Tabs>
+
+### MCP Server Configuration
+
+<Tabs>
+  <Tab title="VS Code (settings.json)">
+    MCP servers are configured in VS Code's `settings.json` under the `augment.advanced` key. The `mcpServers` field uses an **array** format:
+
+    ```json
+    {
+      "augment.advanced": {
+        "mcpServers": [
+          {
+            "name": "my-mcp-server",
+            "command": "npx",
+            "args": ["-y", "@scope/mcp-server-package"],
+            "env": {
+              "API_KEY": "your-key-here"
+            }
+          },
+          {
+            "name": "another-server",
+            "command": "node",
+            "args": ["./path/to/server.js"]
+          }
+        ]
+      }
+    }
+    ```
+
+    <Note>
+      The VS Code `augment.advanced.mcpServers` uses an **array** format where each entry has a `name` field. This differs from the object-keyed format used by some other tools. The `${workspaceFolder}` variable is supported for dynamic path expansion.
+    </Note>
+  </Tab>
+  <Tab title="Auggie CLI (settings.json)">
+    MCP servers are configured in `~/.augment/settings.json` using an **object-keyed** format:
+
+    ```json
+    {
+      "mcpServers": {
+        "my-mcp-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "your-key-here"
+          }
+        }
+      }
+    }
+    ```
+
+    You can also manage MCP servers via CLI commands:
+
+    ```bash
+    # Add an MCP server
+    auggie mcp add my-server --command npx --args "-y @scope/mcp-package" --env API_KEY=value
+
+    # List configured MCP servers
+    auggie mcp list
+
+    # Remove an MCP server
+    auggie mcp remove my-server
+
+    # Check MCP server connectivity (in interactive mode)
+    /status
+    ```
+  </Tab>
+  <Tab title="Import from JSON">
+    In the Augment Settings Panel, you can import MCP servers from a JSON configuration. The import format uses the **object-keyed** structure:
+
+    ```json
+    {
+      "mcpServers": {
+        "server-name": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_TOKEN": "your-token-here"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Easy MCP
+
+Augment Code offers **Easy MCP**, a one-click integration system for popular developer tools. Instead of manually configuring servers, you can connect tools like CircleCI, MongoDB, Redis, Sentry, Stripe, and others with just an API token or OAuth approval. Access Easy MCP from the Augment Settings Panel.
+
+---
+
+## Custom Instructions
+
+Augment Code supports several layers of custom instructions, called **Rules & Guidelines**.
+
+### Augment Rules (Recommended)
+
+Rules are Markdown files that live in the `.augment/rules/` directory. Three types of rules are supported:
+
+| Type | Behavior |
+|---|---|
+| **Always** | Contents are included in every user prompt automatically |
+| **Manual** | Must be explicitly attached via `@` mention in the chat |
+| **Auto** | Agent automatically detects and attaches rules based on a description field in the frontmatter |
+
+```markdown .augment/rules/coding-standards.md
+---
+type: always
+---
+
+# Coding Standards
+
+- Use TypeScript strict mode with no `any` types
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+- Write unit tests for all new functions
+```
+
+**Placement locations:**
+
+| Scope | Location |
+|---|---|
+| Project-wide | `<project-root>/.augment/rules/` |
+| User-global | `~/.augment/rules/` |
+
+<Info>
+  User rules stored in `~/.augment/rules/` are always treated as the **Always** type and are automatically included in every prompt, regardless of any frontmatter configuration.
+</Info>
+
+### User Guidelines (IDE Settings)
+
+User Guidelines are defined in the Augment Settings Panel within your IDE. They are stored locally and apply to all future chats in that IDE instance. Guidelines defined in VS Code do not propagate to JetBrains and vice versa.
+
+### Legacy Workspace Guidelines
+
+The `.augment-guidelines` file at the project root is a legacy mechanism. Its contents are included in all Agent and Chat sessions on that codebase. Augment will automatically import legacy guidelines as Rules.
+
+```text .augment-guidelines
+This is a TypeScript monorepo using pnpm workspaces.
+
+To run tests: pnpm test
+To build: pnpm build
+
+Key modules:
+- packages/core: Core library
+- packages/cli: Command-line interface
+- apps/web: Next.js web application
+```
+
+### Character Limits
+
+| Scope | Limit |
+|---|---|
+| User Guidelines | 24,576 characters |
+| Workspace Guidelines + Rules | 49,512 characters |
+
+<Warning>
+  Keep rules and guidelines concise and focused. The combined workspace guidelines and rules are limited to approximately 49,500 characters. Use Auto-type rules to conditionally include detailed standards only when relevant.
+</Warning>
+
+---
+
+## Custom Slash Commands
+
+Custom commands are Markdown files stored in command directories:
+
+| Scope | Location |
+|---|---|
+| User commands | `~/.augment/commands/<name>.md` |
+| Workspace commands | `.augment/commands/<name>.md` |
+| Claude Code compatibility | `.claude/commands/<name>.md` |
+
+Commands in nested directories use colon-separated namespacing (e.g., `.augment/commands/frontend/component.md` becomes `/frontend:component`).
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Augment Code platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="VS Code">
+    - **MCP servers**: `.vscode/settings.json` (under `augment.advanced.mcpServers`)
+    - **Workspace rules**: `<project>/.augment/rules/`
+    - **Legacy guidelines**: `<project>/.augment-guidelines`
+    - **Ignore file**: `<project>/.augmentignore`
+  </Tab>
+  <Tab title="Auggie CLI">
+    - **Primary config**: `~/.augment/settings.json`
+    - **User rules**: `~/.augment/rules/`
+    - **User commands**: `~/.augment/commands/`
+    - **Workspace rules**: `<project>/.augment/rules/`
+    - **Workspace commands**: `<project>/.augment/commands/`
+    - **Legacy guidelines**: `<project>/.augment-guidelines`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, the approach differs between VS Code and CLI.
+
+<Tabs>
+  <Tab title="VS Code">
+    Merge the MCP server definition into `.vscode/settings.json` under the `augment.advanced.mcpServers` array:
+
+    ```json
+    {
+      "augment.advanced": {
+        "mcpServers": [
+          {
+            "name": "package-server-name",
+            "command": "npx",
+            "args": ["-y", "@scope/mcp-server-package"],
+            "env": {
+              "SOME_API_KEY": "value"
+            }
+          }
+        ]
+      }
+    }
+    ```
+
+    **Key considerations:**
+    - The `mcpServers` field is an **array**, not an object map -- each entry is identified by its `name` field
+    - When merging, check existing entries by `name` to avoid duplicates
+    - The `${workspaceFolder}` variable is supported for dynamic path expansion
+    - Restart VS Code or reload the window after modifying MCP server configuration
+  </Tab>
+  <Tab title="Auggie CLI">
+    Merge the MCP server definition into `~/.augment/settings.json` under the `mcpServers` object:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server-name": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "SOME_API_KEY": "value"
+          }
+        }
+      }
+    }
+    ```
+
+    Alternatively, use the CLI command:
+
+    ```bash
+    auggie mcp add package-server-name --command npx --args "-y @scope/mcp-server-package" --env SOME_API_KEY=value
+    ```
+
+    **Key considerations:**
+    - The CLI `mcpServers` field is an **object map** keyed by server name
+    - Merge carefully -- do not overwrite existing entries
+    - The CLI also supports `type`, `url`, and `headers` fields for remote MCP servers
+  </Tab>
+</Tabs>
+
+<Warning>
+  The VS Code extension and Auggie CLI use **different JSON formats** for MCP server configuration. The VS Code extension uses an array with `name` fields, while the CLI uses an object map keyed by server name. An installer must handle both formats appropriately.
+</Warning>
+
+### Installing Project Instructions
+
+To install project-level instructions, create a rules file in the `.augment/rules/` directory:
+
+```bash
+mkdir -p .augment/rules
+cat > .augment/rules/my-package-rules.md << 'EOF'
+---
+type: always
+---
+
+# My Package Instructions
+
+These instructions guide the agent when working with this codebase.
+EOF
+```
+
+Alternatively, append to the legacy `.augment-guidelines` file at the project root if one already exists.
+
+<Note>
+  The `.augment/rules/` directory is the recommended approach. Rules files are Markdown with optional YAML frontmatter specifying the type (`always`, `manual`, or `auto`). Multiple rules files can coexist in the directory.
+</Note>
+
+### Config File Format
+
+Augment Code uses JSON for configuration files:
+
+- **VS Code**: Standard VS Code `settings.json` format. The installer must parse existing JSON, merge into the `augment.advanced.mcpServers` array, and write back.
+- **CLI**: `~/.augment/settings.json` is a JSON file. The installer must parse existing JSON, deep-merge the `mcpServers` object, and write back preserving existing entries.
+
+### Authentication
+
+Augment Code uses its own authentication system (account-based login). There are no user-provided API keys for model access. Authentication is handled via `auggie login` (CLI) or the sign-in flow in the IDE extension.
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows using the CLI:
+
+```bash
+# Run a prompt and print the result
+auggie --print "Run the test suite and report results"
+
+# Minimal output for scripting
+auggie --print --quiet "Check if all new functions have tests"
+
+# Execute a custom command
+auggie command code-review
+
+# Disable specific tools for safety
+auggie --remove-tool web-fetch --print "Analyze this codebase"
+```

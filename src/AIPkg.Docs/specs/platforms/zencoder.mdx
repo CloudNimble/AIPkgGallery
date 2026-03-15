@@ -1,0 +1,264 @@
+---
+title: 'Zencoder'
+description: 'Platform specification for Zencoder, an AI coding agent'
+icon: 'brain'
+---
+
+[Zencoder](https://zencoder.ai/) is a commercial AI coding agent platform developed by **Zencoder AI**, available as IDE extensions for VS Code and JetBrains, a web-based Zenflow orchestration platform, and a CLI (ZenCLI).[^1] Extensibility is provided through Zen Rules (project-level instruction files), MCP server integration, a Zen Agents marketplace, Skills (`SKILL.md` capability packages), and a Universal AI Platform that embeds third-party CLIs like Claude Code and OpenAI Codex within the IDE.[^2][^3]
+
+---
+
+## Configuration
+
+### File Locations
+
+Zencoder uses a project-level directory structure for rules, skills, and Zenflow configuration. Most settings are managed through the IDE extension UI or the Zenflow web interface rather than standalone config files.[^4][^5]
+
+| File | Path | Purpose |
+|---|---|---|
+| Zen Rules | `<project>/.zencoder/rules/*.md` | Project-specific AI instruction files[^4] |
+| Project skills | `<project>/.zencoder/skills/<name>/SKILL.md` | Project-specific skill definitions[^6] |
+| Global skills | `~/.zencoder/skills/<name>/SKILL.md` | User-wide skill definitions[^6] |
+| Zenflow config | `<project>/.zenflow/settings.json` | Project-level lifecycle scripts and verification[^7] |
+| MCP servers | IDE `settings.json` (VS Code) or IDE settings (JetBrains) | MCP server definitions[^5] |
+
+<Note>
+  Zencoder is primarily a closed-source, cloud-connected platform. Unlike terminal-based agents with standalone config files, much of Zencoder's configuration lives within the IDE extension settings or the Zenflow web UI. The `.zencoder/` directory is the main project-level integration point.[^4][^5]
+</Note>
+
+---
+
+## Custom Instructions
+
+### Zen Rules
+
+Zen Rules are Zencoder's native system for providing project-level AI instructions. They are Markdown files with YAML frontmatter stored in `.zencoder/rules/` and are designed to be committed to version control for team sharing.[^4]
+
+```markdown .zencoder/rules/typescript-standards.md
+---
+description: "TypeScript coding standards for this project"
+globs: ["*.ts", "*.tsx"]
+alwaysApply: false
+---
+
+# TypeScript Standards
+
+- Use strict TypeScript, no `any` types
+- Prefer functional patterns over classes
+- All public functions must have JSDoc comments
+```
+
+### Frontmatter Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `description` | string | Brief description of what the rule covers[^4] |
+| `globs` | string[] | File patterns where the rule applies (comma-separated in VS Code)[^4] |
+| `alwaysApply` | boolean | When `true`, the rule is included in every request regardless of file context[^4] |
+
+### Three-Tier Context Hierarchy
+
+Zencoder resolves custom instructions from three sources:[^4]
+
+1. **Zen Rules** (project-level) -- Markdown files in `.zencoder/rules/`, applied conditionally via globs or always via `alwaysApply: true`
+2. **Instructions for AI** (personal/global) -- User-wide preferences configured through the Zencoder IDE menu (three-dot menu > Instructions for AI)
+3. **Repo Info** (generated context) -- Auto-generated repository analysis created by running the `/repo-info` agent, applied with `alwaysApply: true`
+
+### AGENTS.md
+
+Zencoder resolves agent instructions from `AGENTS.md` files, enabling project-level agent definitions compatible with the open standard.[^8]
+
+### Cross-Tool Compatibility
+
+Zencoder can read existing rule files from other AI coding tools without migration. You can configure Zencoder to search in rule folders used by Cursor, Windsurf, Cline, or Continue.[^4]
+
+<Note>
+  Zen Rules were introduced in VS Code extension version 2.16.0 and JetBrains plugin version 2.7.0.[^4]
+</Note>
+
+---
+
+## MCP Servers
+
+Zencoder acts as an MCP client and can connect to external MCP servers to extend agent capabilities with additional tools and data sources.[^5]
+
+### Supported Transports
+
+| Transport | Status |
+|---|---|
+| stdio | Supported[^5] |
+| Streamable HTTP | Coming soon (VS Code)[^5] |
+| SSE | Supported for remote servers[^5] |
+| OAuth2 | Coming soon[^5] |
+
+### Configuration
+
+MCP servers are configured through the IDE extension settings rather than a standalone config file.[^5]
+
+<Tabs>
+  <Tab title="VS Code">
+    MCP servers are defined in VS Code's `settings.json`. Navigate to the Zencoder settings, scroll to the **MCP Servers** section, and click "Edit in settings.json":[^5]
+
+    ```json
+    {
+      "zencoder.mcpServers": {
+        "my-server": {
+          "command": "uvx",
+          "args": ["mcp-server-time"]
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="JetBrains">
+    Open **File > Settings > Tools > Zencoder > MCP Servers** and add the server configuration. Click **Apply** to save, then reopen your project.[^5]
+  </Tab>
+  <Tab title="Agent Tools UI">
+    Use the Agent Tools UI for a visual approach: open the Zencoder menu (...) > **Agent tools** > **Add custom MCP**. Enter the server name and JSON configuration, then click **Install**.[^5]
+  </Tab>
+</Tabs>
+
+### MCP Library
+
+Zencoder includes a built-in MCP Library with 100+ pre-configured MCP servers that can be enabled with one click through the Agent Tools interface.[^5] Per-project MCP tool configuration is supported, allowing different MCP server setups for different repositories.[^5]
+
+---
+
+## Agents
+
+### Zen Agents
+
+Zen Agents are customizable AI agents that can be invoked for selected code or entire files directly in the IDE. Zencoder provides 20+ prebuilt agents and an open-source marketplace for community-contributed agent configurations.[^9][^10]
+
+Built-in agents include Coding Agent, Web Dev Agent, E2E Testing Agent, Research Agent, Ask Agent (Q&A), Repo-Info Agent, Unit Testing Agent, and Review Agent.[^8]
+
+### Agent Configuration Format
+
+Custom agent configurations are JSON files hosted in the [zenagents-library](https://github.com/zencoderai/zenagents-library) open-source repository. Each agent is defined with a name, description, instructions, and tool configurations.[^10]
+
+### CI/CD Agents
+
+Zencoder provides autonomous agents for CI/CD pipelines that can be triggered by webhooks, PR events, Jira ticket updates, or schedules. The Zencoder CLI is used to define agent behavior and generate webhook URLs for automation.[^11]
+
+---
+
+## Skills
+
+Zencoder supports the Agent Skills open standard for extending agent capabilities with reusable `SKILL.md` packages.[^6]
+
+### Skill Structure
+
+```
+.zencoder/skills/
+  my-skill/
+    SKILL.md          # Required: skill definition
+    scripts/          # Optional: automation scripts
+    resources/        # Optional: reference documentation
+```
+
+### SKILL.md Format
+
+```markdown .zencoder/skills/my-skill/SKILL.md
+---
+name: my-skill
+description: What this skill does and when to use it
+---
+
+Instructions for the agent when this skill is activated.
+```
+
+### Discovery Paths
+
+| Scope | Path |
+|---|---|
+| Project | `.zencoder/skills/<skill-name>/SKILL.md` |
+| Global | `~/.zencoder/skills/<skill-name>/SKILL.md` |
+
+### Built-in Skills
+
+Zencoder ships with built-in skills including Playwright (browser automation), Code Review, and Skill Creator (for authoring new skills).[^8]
+
+<Note>
+  Zencoder does not support the `allowed-tools` frontmatter field in `SKILL.md` files.[^6]
+</Note>
+
+---
+
+## Hooks and Lifecycle
+
+### Zenflow Verification Scripts
+
+Zenflow supports project-level lifecycle automation through `.zenflow/settings.json`. A verification script executes automatically after every agent interaction within a Zenflow task, acting as a continuous quality gate for running linters, type checkers, tests, or static analysis tools.[^7]
+
+<Warning>
+  Zenflow lifecycle hooks are specific to the Zenflow orchestration platform and do not apply to the standalone IDE extension or CLI. No user-configurable hooks system was found for the core Zencoder IDE extension at the time of writing.[^7]
+</Warning>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Zencoder platform.
+
+### Configuration File Paths
+
+| Purpose | Path |
+|---|---|
+| Project rules | `<project>/.zencoder/rules/<name>.md` |
+| Project skills | `<project>/.zencoder/skills/<skill-name>/SKILL.md` |
+| Global skills | `~/.zencoder/skills/<skill-name>/SKILL.md` |
+| Project instructions | `<project>/AGENTS.md` |
+| MCP servers | IDE settings (VS Code `settings.json` or JetBrains settings) |
+| Zenflow config | `<project>/.zenflow/settings.json` |
+
+### Installing Skills
+
+To install a skill, create a directory containing a `SKILL.md` file at one of the skill paths:
+
+- **Project scope**: `<project>/.zencoder/skills/<skill-name>/SKILL.md`
+- **Global scope**: `~/.zencoder/skills/<skill-name>/SKILL.md`
+
+Skills are auto-discovered by Zencoder at runtime. No additional registration step is required.[^6]
+
+Skills can also be installed via the Vercel Skills CLI:[^6]
+
+```bash
+npx skills add vercel-labs/agent-skills -a zencoder
+```
+
+### Installing Custom Instructions
+
+Write Zen Rules as Markdown files with YAML frontmatter (`description`, `globs`, `alwaysApply`) to `<project>/.zencoder/rules/`. Alternatively, write an `AGENTS.md` file to the project root for cross-platform compatibility.[^4][^8]
+
+### Installing MCP Server Extensions
+
+MCP servers are configured through IDE settings, not standalone config files. Programmatic installation requires modifying VS Code's `settings.json` or JetBrains settings files. There is no dedicated CLI command for adding MCP servers.[^5]
+
+<Warning>
+  Because MCP configuration lives in IDE settings rather than a project-level config file, automated MCP server installation for Zencoder is more complex than for agents that use `.mcp.json` or similar project-root files. The installer must locate and modify the IDE's settings file.[^5]
+</Warning>
+
+### Skill Install Paths (Vercel Skills)
+
+The Vercel Skills project uses the following install paths for Zencoder:[^6]
+
+| Scope | Path |
+|---|---|
+| Project | `.zencoder/skills/` |
+| Global | `~/.zencoder/skills/` |
+
+---
+
+## Footnotes
+
+[^1]: https://zencoder.ai/
+[^2]: https://zencoder.ai/product/universal-ai-platform
+[^3]: https://zencoder.ai/zenflow
+[^4]: https://docs.zencoder.ai/rules-context/zen-rules
+[^5]: https://docs.zencoder.ai/features/integrations-and-mcp
+[^6]: https://github.com/vercel-labs/skills
+[^7]: https://docs.zencoder.ai/zenflow/project-configuration
+[^8]: https://docs.zencoder.ai/llms-full.txt
+[^9]: https://docs.zencoder.ai/features/ai-agents
+[^10]: https://github.com/zencoderai/zenagents-library
+[^11]: https://zencoder.ai/product/zen-agents-ci

@@ -1,0 +1,664 @@
+---
+title: 'Droid'
+description: 'Platform specification for Droid by Factory AI, the autonomous software engineering agent'
+icon: 'robot'
+---
+
+## Overview
+
+[Droid](https://factory.ai/) is an autonomous software engineering agent by **Factory AI** that executes coding tasks from natural language instructions across any IDE or terminal.[^1] Extensibility is via MCP servers, **Skills** (`SKILL.md` workflow definitions), **Custom Droids** (subagent `.md` files), **Hooks** (lifecycle event handlers), **Custom Slash Commands**, and **AGENTS.md** project instruction files.
+
+---
+
+## Configuration
+
+### File Locations
+
+Droid uses a hierarchical configuration system with JSON settings files, YAML project configuration, and Markdown instruction files.[^2][^3]
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User settings | `~/.factory/settings.json` | Personal global settings for all projects |
+    | Local settings override | `~/.factory/settings.local.json` | Machine-specific overrides (gitignored) |
+    | Legacy config | `~/.factory/config.json` | Legacy configuration (merged, lower priority) |
+    | User MCP config | `~/.factory/mcp.json` | Personal MCP server definitions |
+    | User instructions | `~/.factory/AGENTS.md` | Global instructions applied to all projects |
+    | User droids | `~/.factory/droids/<name>.md` | Personal custom droid subagents |
+    | User skills | `~/.factory/skills/<name>/SKILL.md` | Personal skills available across projects |
+    | User commands | `~/.factory/commands/<name>.md` | Personal custom slash commands |
+    | Project config | `<project>/.droid.yaml` | Review Droid behavior and guidelines |
+    | Project settings | `<project>/.factory/settings.json` | Shared project settings (committed to repo) |
+    | Project settings override | `<project>/.factory/settings.local.json` | Personal project overrides (gitignored) |
+    | Project MCP | `<project>/.factory/mcp.json` | Project-scoped MCP server definitions |
+    | Project instructions | `<project>/AGENTS.md` | Project-level agent instructions |
+    | Directory instructions | `<project>/src/AGENTS.md` | Directory-level overrides (for monorepos) |
+    | Project droids | `<project>/.factory/droids/<name>.md` | Project-specific custom droid subagents |
+    | Project skills | `<project>/.factory/skills/<name>/SKILL.md` | Project-specific skills |
+    | Project commands | `<project>/.factory/commands/<name>.md` | Project-specific custom slash commands |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User settings | `%USERPROFILE%\.factory\settings.json` | Personal global settings for all projects |
+    | Local settings override | `%USERPROFILE%\.factory\settings.local.json` | Machine-specific overrides |
+    | User MCP config | `%USERPROFILE%\.factory\mcp.json` | Personal MCP server definitions |
+    | Project settings | `<project>\.factory\settings.json` | Shared project settings |
+    | Project settings override | `<project>\.factory\settings.local.json` | Personal project overrides |
+    | Project MCP | `<project>\.factory\mcp.json` | Project-scoped MCP server definitions |
+    | Project instructions | `<project>\AGENTS.md` | Project-level agent instructions |
+  </Tab>
+</Tabs>
+
+### settings.json Structure
+
+The `settings.json` file controls Droid behavior and integrations. If the file does not exist, it is created with defaults on first run.[^2]
+
+<CodeGroup>
+
+```json Basic Configuration
+{
+  "model": "opus",
+  "autonomyMode": "normal",
+  "commandAllowlist": ["ls", "pwd", "dir"],
+  "commandDenylist": ["rm -rf", "mkfs"],
+  "enableDroidShield": true,
+  "hooksDisabled": false,
+  "includeCoAuthoredByDroid": true
+}
+```
+
+```json Custom Models (BYOK)
+{
+  "customModels": [
+    {
+      "model": "my-model-id",
+      "displayName": "My Custom Model",
+      "baseUrl": "https://api.example.com/v1",
+      "apiKey": "${MY_API_KEY}",
+      "provider": "openai"
+    }
+  ]
+}
+```
+
+```json Hooks Configuration
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Execute",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$FACTORY_PROJECT_DIR/.factory/hooks/block-dangerous.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Create",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$FACTORY_PROJECT_DIR/.factory/hooks/auto-format.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+</CodeGroup>
+
+### settings.local.json Overrides
+
+You can create a `settings.local.json` alongside `settings.json` in any `.factory/` folder. Local overrides merge on top of the corresponding `settings.json` at the same level.[^2]
+
+<Note>
+  Add `settings.local.json` to `.gitignore` to keep machine-specific preferences out of version control. Both `settings.json` and legacy `config.json` are loaded and merged, with `settings.json` taking priority.[^2]
+</Note>
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):[^2]
+
+1. **Project local settings** (`.factory/settings.local.json`)
+2. **Shared project settings** (`.factory/settings.json`)
+3. **User local settings** (`~/.factory/settings.local.json`)
+4. **User settings** (`~/.factory/settings.json`)
+5. **Legacy config** (`~/.factory/config.json`)
+
+---
+
+## Custom Instructions (AGENTS.md)
+
+`AGENTS.md` is a Markdown file that lives in your repository (or home directory) and acts as a briefing packet for AI coding agents. It complements `README.md` by providing detailed context agents need without cluttering human-focused documentation.[^4]
+
+### Discovery Hierarchy
+
+Droid searches for `AGENTS.md` in this priority order:[^4]
+
+1. `./AGENTS.md` in the current working directory
+2. Nearest parent directory up to repo root
+3. `AGENTS.md` in relevant subfolders
+4. Personal override at `~/.factory/AGENTS.md`
+
+Multiple files can coexist, with closer proximity taking precedence.
+
+### Recommended Sections
+
+| Section | Purpose |
+|---|---|
+| Build & Test | Exact compilation and testing commands |
+| Architecture Overview | Summary of major modules and data flow |
+| Security | API keys, auth flows, sensitive data handling |
+| Git Workflows | Branching strategy, commit conventions, PR requirements |
+| Conventions & Patterns | Folder structure, naming patterns, code style |
+
+```markdown AGENTS.md
+# Project: My App
+
+## Build & Test
+- Build: `pnpm build`
+- Test: `pnpm test`
+- Lint: `pnpm lint`
+
+## Conventions
+- Use TypeScript strict mode
+- Prefer functional patterns over classes
+- When working on React components (*.tsx), follow `.factory/rules/react.md`
+```
+
+### Rules Files
+
+You can organize rules by file type by creating separate rules files and referencing them contextually in `AGENTS.md`. Each rule should be specific, actionable, scoped, and justified.[^5]
+
+<Note>
+  Keep `AGENTS.md` under 150 lines for efficiency. Use concrete, copy-paste-ready commands and link to external docs rather than duplicating content.[^4]
+</Note>
+
+---
+
+## .droid.yaml (Review Droid Configuration)
+
+The `.droid.yaml` file at the project root customizes Review Droid behavior for automated code review.[^3]
+
+```yaml .droid.yaml
+review:
+  guidelines:
+    - path: "**/*.ts"
+      guideline: "Ensure all functions have explicit return types"
+    - path: "src/api/**"
+      guideline: "All API endpoints must validate input parameters"
+      context_document_path: "docs/api-standards.md"
+  auto_review:
+    enabled: true
+    draft: false
+    bot: false
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT REVIEW"
+    ignore_labels:
+      - "skip-review"
+  file_summaries: true
+  tips: true
+  github_action_repair: true
+  path_filters:
+    - "!dist/**"
+    - "!*.generated.*"
+```
+
+---
+
+## MCP Servers
+
+Droid connects to external tools and data sources through the Model Context Protocol. MCP servers can be configured at two scope levels.[^6]
+
+| Scope | Storage | Who can access |
+|---|---|---|
+| **User** | `~/.factory/mcp.json` | You, across all projects |
+| **Project** | `.factory/mcp.json` | All collaborators (committed to repo) |
+
+User config takes priority over project config when both define the same server.[^6]
+
+### Transport Types
+
+| Type | Description | Use Case |
+|---|---|---|
+| **http** | Remote MCP endpoints | Cloud services and APIs (recommended) |
+| **stdio** | Local process over standard I/O | Tools needing direct system access |
+
+### Configuration
+
+<Tabs>
+  <Tab title="CLI (droid mcp add)">
+    ```bash
+    # Add a remote HTTP server
+    droid mcp add linear https://mcp.linear.app/mcp --type http
+
+    # Add with authentication header
+    droid mcp add twelvelabs-mcp https://mcp.twelvelabs.io \
+      --type http --header "x-api-key: YOUR_KEY"
+
+    # Add a local stdio server with env vars
+    droid mcp add clickup "npx -y @hauptsache.net/clickup-mcp" \
+      --env CLICKUP_API_KEY=your_key
+
+    # Remove a server
+    droid mcp remove linear
+    ```
+  </Tab>
+  <Tab title="Interactive (/mcp)">
+    Type `/mcp` within Droid to open the interactive MCP manager. From here you can:[^6]
+
+    - Browse 40+ pre-configured servers from the built-in registry
+    - View available tools per server
+    - Enable or disable servers
+    - Authenticate via OAuth
+    - Add from registry with "Add from Registry"
+  </Tab>
+  <Tab title="JSON (.factory/mcp.json)">
+    ```json
+    {
+      "mcpServers": {
+        "linear": {
+          "type": "http",
+          "url": "https://mcp.linear.app/mcp",
+          "disabled": false
+        },
+        "playwright": {
+          "type": "stdio",
+          "command": "npx",
+          "args": ["-y", "@playwright/mcp@latest"],
+          "disabled": false,
+          "disabledTools": []
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### MCP Server Fields
+
+| Field | Type | Purpose |
+|---|---|---|
+| `type` | `"stdio"` or `"http"` | Server architecture |
+| `url` | string | Endpoint URL (HTTP servers only) |
+| `headers` | object | HTTP headers (HTTP servers only) |
+| `command` | string | Executable command (stdio servers only) |
+| `args` | string[] | Command arguments (stdio servers only) |
+| `env` | object | Environment variables (stdio servers only) |
+| `disabled` | boolean | Temporarily disable without deletion |
+| `disabledTools` | string[] | Disable specific tools from a server |
+
+<Note>
+  OAuth tokens are stored globally in your system keyring (or fallback file), not per-project. If you authenticate with a server in one project, you are authenticated everywhere that server is configured.[^6] Droid automatically reloads when the configuration file changes.
+</Note>
+
+<Warning>
+  Project servers cannot be removed via CLI or the `/mcp` UI. To remove project-scoped servers, edit `.factory/mcp.json` directly.[^6]
+</Warning>
+
+---
+
+## Custom Droids (Subagents)
+
+Custom droids are reusable subagents defined in Markdown with YAML frontmatter. Each droid carries its own system prompt, model preference, and tooling policy.[^7]
+
+### File Locations
+
+| Scope | Path | Behavior |
+|---|---|---|
+| Project | `<repo>/.factory/droids/<name>.md` | Shared with team, committed to repo |
+| Personal | `~/.factory/droids/<name>.md` | Private, follows you across workspaces |
+
+Project definitions override personal ones when names match. The CLI scans these folders for top-level files only.[^7]
+
+### Droid File Format
+
+```markdown security-reviewer.md
+---
+name: security-reviewer
+description: Reviews code changes for security vulnerabilities
+model: inherit
+tools:
+  - Read
+  - LS
+  - Grep
+  - Glob
+---
+
+You are a security-focused code reviewer.
+
+## Instructions
+1. Scan changed files for common vulnerability patterns
+2. Check for hardcoded secrets or credentials
+3. Verify input validation on all user-facing endpoints
+
+## Output Format
+Summary: [one-line summary]
+Findings: [list of issues found]
+```
+
+### Frontmatter Fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Lowercase letters, digits, `-`, `_`. Determines the `subagent_type` identifier |
+| `description` | No | Up to 500 characters. Displayed in UI listings |
+| `model` | No | `inherit` (parent session's model), specific model ID, or `custom:` prefix |
+| `reasoningEffort` | No | `low`, `medium`, or `high` (only for compatible models) |
+| `tools` | No | Omit for all tools, category string, or array of tool IDs |
+
+### Tool Categories
+
+| Category | Included Tools | Use Case |
+|---|---|---|
+| `read-only` | Read, LS, Grep, Glob | Safe analysis |
+| `edit` | Create, Edit, ApplyPatch | Code modifications |
+| `execute` | Execute | Shell commands |
+| `web` | WebSearch, FetchUrl | Internet research |
+| `mcp` | Dynamic (if configured) | Protocol-based tools |
+
+<Note>
+  Custom Droids must be enabled via `/settings` then Experimental then Custom Droids, or by adding `"enableCustomDroids": true` to `~/.factory/settings.json`.[^7] TodoWrite is automatically included for all droids.
+</Note>
+
+---
+
+## Skills
+
+Skills are reusable capabilities that extend Droid with structured workflows. They are defined as directories containing a `SKILL.md` or `skill.mdx` file with YAML frontmatter and optional supporting files (scripts, schemas, checklists).[^8]
+
+### Skill Locations
+
+| Scope | Path | Purpose |
+|---|---|---|
+| Workspace | `<repo>/.factory/skills/<skill-name>/SKILL.md` | Shared team skills in git |
+| Personal | `~/.factory/skills/<skill-name>/SKILL.md` | Private cross-project skills |
+| Legacy | `<repo>/.agent/skills/` | Backward compatibility |
+
+### Skill File Format
+
+```yaml SKILL.md
+---
+name: deploy-check
+description: Validates deployment readiness before releasing
+user-invocable: true
+disable-model-invocation: false
+---
+
+# Deploy Readiness Check
+
+## Instructions
+1. Run the full test suite
+2. Verify no TODO or FIXME comments in changed files
+3. Check that all environment variables are documented
+4. Validate database migrations are reversible
+
+## Success Criteria
+- All tests pass
+- No blocking issues found
+- Migration rollback verified
+```
+
+### Frontmatter Fields
+
+| Field | Required | Default | Purpose |
+|---|---|---|---|
+| `name` | No | Directory name | Display identifier (lowercase, hyphens/numbers) |
+| `description` | Recommended | -- | Guidance for when to use this skill |
+| `user-invocable` | No | `true` | Set `false` to hide from `/` menu |
+| `disable-model-invocation` | No | `false` | Set `true` to prevent automatic agent invocation |
+
+### Access Control
+
+| Configuration | User `/invoke` | Agent Auto-invoke |
+|---|---|---|
+| Default | Yes | Yes |
+| `disable-model-invocation: true` | Yes | No |
+| `user-invocable: false` | No | Yes |
+
+Invoke skills directly with `/skill-name`, or let Droid load them automatically when relevant to the conversation.[^8]
+
+---
+
+## Custom Slash Commands
+
+Custom slash commands let you automate routine actions or prompts. They support two formats:[^9]
+
+| Format | File Extensions | Behavior |
+|---|---|---|
+| Markdown | `.md`, `.mdx` | Content injected into conversation as system notification |
+| Executable | Any (with shebang) | Script runs, output (up to 64 KB) posted to conversation |
+
+### Command Locations
+
+| Scope | Path | Behavior |
+|---|---|---|
+| Workspace | `<repo>/.factory/commands/` | Shared, overrides personal commands |
+| Personal | `~/.factory/commands/` | Private, available across projects |
+
+Filenames are slugified: `Code Review.mdx` becomes `/code-review`.[^9]
+
+### Markdown Command Example
+
+```markdown .factory/commands/review-checklist.md
+---
+description: Run through the standard code review checklist
+argument-hint: <pr-number>
+---
+
+Review PR $ARGUMENTS against this checklist:
+- [ ] Tests added for new functionality
+- [ ] No hardcoded secrets
+- [ ] Error handling is comprehensive
+- [ ] Documentation updated if needed
+```
+
+<Note>
+  The `$ARGUMENTS` variable expands to everything typed after the command name. If `$ARGUMENTS` is not used in the file, the body is sent unchanged.[^9]
+</Note>
+
+---
+
+## Hooks System
+
+Hooks are user-defined shell commands that execute at various points in Droid's lifecycle, providing deterministic control over behavior.[^10]
+
+### Hook Events
+
+| Event | When it fires | Matcher filters on |
+|---|---|---|
+| `PreToolUse` | Before tool calls (can block them) | Tool name (pipe-separated or `*`) |
+| `PostToolUse` | After tool calls complete | Tool name |
+| `UserPromptSubmit` | User submits a prompt | -- |
+| `Notification` | Droid sends a notification | -- |
+| `Stop` | Droid finishes responding | -- |
+| `SubagentStop` | Sub-droid tasks complete | -- |
+| `PreCompact` | Before compact operations | -- |
+| `SessionStart` | Session begins or resumes | -- |
+| `SessionEnd` | Session ends | -- |
+
+### Hook Configuration
+
+Hooks are stored in `settings.json` (user or project level):[^10]
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Execute",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$FACTORY_PROJECT_DIR/.factory/hooks/block-rm.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Create",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$FACTORY_PROJECT_DIR/.factory/hooks/auto-format.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Hook Exit Codes
+
+| Exit Code | Effect |
+|---|---|
+| `0` | Action proceeds normally |
+| `2` | Action is **blocked** (stderr sent to Droid as feedback) |
+| Any other | Action proceeds; stderr is logged |
+
+### Common Use Cases
+
+- **Auto-formatting**: Run prettier on `.ts` files, gofmt on `.go` files after every file edit
+- **Notifications**: Customize desktop alerts when Droid is awaiting input
+- **Logging**: Track all executed commands for compliance or debugging
+- **Feedback**: Provide automated feedback when Droid produces non-conforming code
+- **Custom permissions**: Block modifications to production files or sensitive directories
+
+<Warning>
+  Hooks execute automatically with your credentials. Malicious hook code can exfiltrate data. Always review hook implementations before registration.[^10] Use absolute paths in hook commands and access the project directory via the `$FACTORY_PROJECT_DIR` environment variable.
+</Warning>
+
+<Note>
+  Set `"hooksDisabled": true` in `settings.json` to globally disable all hooks without removing configurations.[^2]
+</Note>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Droid platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **User settings**: `~/.factory/settings.json`
+    - **User instructions**: `~/.factory/AGENTS.md`
+    - **User MCP config**: `~/.factory/mcp.json`
+    - **User skills**: `~/.factory/skills/<name>/SKILL.md`
+    - **User droids**: `~/.factory/droids/<name>.md`
+    - **User commands**: `~/.factory/commands/<name>.md`
+    - **Project settings**: `<project>/.factory/settings.json`
+    - **Local settings**: `<project>/.factory/settings.local.json`
+    - **Project instructions**: `<project>/AGENTS.md`
+    - **Project config**: `<project>/.droid.yaml`
+    - **Project MCP**: `<project>/.factory/mcp.json`
+    - **Project skills**: `<project>/.factory/skills/<name>/SKILL.md`
+    - **Project droids**: `<project>/.factory/droids/<name>.md`
+    - **Project commands**: `<project>/.factory/commands/<name>.md`
+  </Tab>
+  <Tab title="Windows">
+    - **User settings**: `%USERPROFILE%\.factory\settings.json`
+    - **User instructions**: `%USERPROFILE%\.factory\AGENTS.md`
+    - **User MCP config**: `%USERPROFILE%\.factory\mcp.json`
+    - **Project settings**: `<project>\.factory\settings.json`
+    - **Project instructions**: `<project>\AGENTS.md`
+    - **Project MCP**: `<project>\.factory\mcp.json`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, an installer has two options:
+
+<Tabs>
+  <Tab title="CLI Command">
+    ```bash
+    # Add a stdio server
+    droid mcp add my-server \
+      "npx -y @scope/mcp-server-package" \
+      --env API_KEY=value
+
+    # Add an HTTP server
+    droid mcp add my-server https://mcp.example.com \
+      --type http --header "Authorization: Bearer token"
+    ```
+  </Tab>
+  <Tab title="JSON (.factory/mcp.json)">
+    Write or merge into `<project>/.factory/mcp.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "type": "stdio",
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "value"
+          }
+        }
+      }
+    }
+    ```
+
+    For user-scoped installation, merge into `~/.factory/mcp.json` instead.
+  </Tab>
+</Tabs>
+
+### Installing Skills
+
+Skills from the Vercel Skills project use these install paths:
+
+- **Project scope**: `.factory/skills/<skill-name>/SKILL.md`
+- **User scope**: `~/.factory/skills/<skill-name>/SKILL.md`
+
+Each skill directory should contain at minimum a `SKILL.md` file with YAML frontmatter and markdown instructions. Supporting files (scripts, schemas, checklists) are placed alongside in the same directory.[^8]
+
+### Installing Custom Droids
+
+Custom droid `.md` files should be placed in:
+
+- **Project scope**: `.factory/droids/<name>.md`
+- **User scope**: `~/.factory/droids/<name>.md`
+
+Ensure `"enableCustomDroids": true` is set in `settings.json` for custom droids to be loaded.[^7]
+
+### Installing Project Instructions
+
+To install project-level instructions, write or append to `<project>/AGENTS.md`. Droid merges `AGENTS.md` files hierarchically from all levels (global, project root, subdirectories), so appending to an existing file is safe.[^4]
+
+### Config File Format
+
+Droid uses standard JSON for `settings.json` and `mcp.json` files. The `apiKey` field in custom models supports environment variable references using `${VAR_NAME}` syntax.[^2] The installer must:
+
+1. Parse the existing JSON file (if it exists)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back, preserving existing entries
+
+Settings changes are detected automatically via file watching and take effect immediately.[^2]
+
+---
+
+## Footnotes
+
+[^1]: https://factory.ai/
+[^2]: https://docs.factory.ai/cli/configuration/settings
+[^3]: https://docs.factory.ai/onboarding/configuring-your-factory/droid-yaml-configuration
+[^4]: https://docs.factory.ai/cli/configuration/agents-md
+[^5]: https://docs.factory.ai/guides/power-user/rules-conventions
+[^6]: https://docs.factory.ai/cli/configuration/mcp
+[^7]: https://docs.factory.ai/cli/configuration/custom-droids
+[^8]: https://docs.factory.ai/cli/configuration/skills
+[^9]: https://docs.factory.ai/cli/configuration/custom-slash-commands
+[^10]: https://docs.factory.ai/cli/configuration/hooks-guide

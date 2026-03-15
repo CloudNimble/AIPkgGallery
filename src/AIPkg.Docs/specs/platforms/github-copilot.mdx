@@ -1,0 +1,409 @@
+---
+title: GitHub Copilot
+description: Platform specification for GitHub Copilot, the AI-powered coding assistant by GitHub (Microsoft)
+icon: github
+---
+
+## Overview
+
+[GitHub Copilot](https://github.com/features/copilot) is an AI coding assistant by **GitHub** (Microsoft). Extensibility is via MCP servers (`.vscode/mcp.json`), **Custom Agents** (`.github/agents/*.agent.md`), **Agent Skills** (`.github/skills/*/SKILL.md`), **Hooks** (`.github/hooks/*.json`), and a layered **Custom Instructions** system (`.github/copilot-instructions.md` + path-specific `*.instructions.md`).
+
+---
+
+## Configuration
+
+### Custom Instructions
+
+GitHub Copilot supports a layered instruction system with multiple file types at different scopes.
+
+<Tabs>
+  <Tab title="Repository Instructions">
+    The primary instruction file is `.github/copilot-instructions.md` in the repository root. Its contents are automatically included in all Copilot Chat requests within the workspace.
+
+    ```markdown .github/copilot-instructions.md
+    This is a TypeScript monorepo using pnpm workspaces.
+
+    - Use strict TypeScript with no `any` types
+    - Prefer functional React components with hooks
+    - Use date-fns instead of moment.js (moment is deprecated)
+    - All API routes must validate input with Zod schemas
+    - Write tests using Vitest, not Jest
+    ```
+
+    <Note>
+      Custom instructions are enabled by default. You can verify they are being used by checking the **References** list in a Copilot Chat response -- the instruction file will appear as a reference.
+    </Note>
+  </Tab>
+  <Tab title="Path-Specific Instructions">
+    Create `*.instructions.md` files in `.github/instructions/` with YAML frontmatter specifying an `applyTo` glob pattern. These instructions apply only to matching files.
+
+    ```markdown .github/instructions/frontend.instructions.md
+    ---
+    applyTo: "src/components/**/*.tsx"
+    ---
+    - Use Tailwind CSS utility classes, never inline styles
+    - All components must export a Props type
+    - Prefer composition over inheritance
+    ```
+
+    ```markdown .github/instructions/api.instructions.md
+    ---
+    applyTo: "src/api/**/*.ts"
+    excludeAgent: "code-review"
+    ---
+    - All endpoints must include OpenAPI documentation
+    - Use middleware for authentication checks
+    - Return consistent error response shapes
+    ```
+
+    The `excludeAgent` property controls which Copilot agents use a given instructions file. Set `excludeAgent: "code-review"` to hide instructions from Copilot code review, or `excludeAgent: "copilot-coding-agent"` to exclude them from the coding agent.
+  </Tab>
+  <Tab title="Personal / Global Instructions">
+    Personal instructions apply across all repositories for your own usage:
+
+    | Location | Scope |
+    |---|---|
+    | `$HOME/.copilot/copilot-instructions.md` | Personal global instructions |
+    | `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` env var | Comma-separated list of directories containing instruction files |
+
+    Personal instructions take the highest priority, followed by repository instructions, then organization instructions.
+  </Tab>
+  <Tab title="AGENTS.md">
+    Copilot also reads `AGENTS.md` files for cross-agent compatibility. If both `AGENTS.md` and `.github/copilot-instructions.md` exist at the repository root, instructions from both files are used.
+
+    Copilot also reads `CLAUDE.md` and `GEMINI.md` files when present, providing compatibility with other AI agent instruction formats.
+  </Tab>
+</Tabs>
+
+### File Locations
+
+<Tabs>
+  <Tab title="Repository Files">
+    | File / Directory | Purpose |
+    |---|---|
+    | `.github/copilot-instructions.md` | Repository-wide custom instructions for Copilot |
+    | `.github/instructions/*.instructions.md` | Path-specific instructions with `applyTo` globs |
+    | `.github/agents/*.agent.md` | Custom agent definitions |
+    | `.github/skills/[name]/SKILL.md` | Agent skill packages |
+    | `.github/hooks/*.json` | Workflow hooks (deterministic commands at agent lifecycle points) |
+    | `.github/workflows/` | GitHub Actions workflows (used by coding agent) |
+    | `AGENTS.md` | Cross-agent instructions (also supports nested files in subdirectories) |
+    | `.vscode/mcp.json` | MCP server configuration (workspace-scoped) |
+    | `.vscode/settings.json` | VS Code Copilot settings (workspace-scoped) |
+  </Tab>
+  <Tab title="User-Level Files">
+    | File / Directory | Purpose |
+    |---|---|
+    | `$HOME/.copilot/copilot-instructions.md` | Personal global instructions |
+    | `$HOME/.copilot/skills/[name]/SKILL.md` | Personal agent skills |
+    | VS Code user `mcp.json` | User-level MCP server configuration (via `MCP: Open User Configuration` command) |
+    | VS Code user `settings.json` | User-level Copilot settings |
+  </Tab>
+</Tabs>
+
+### VS Code Settings
+
+Copilot behavior can be configured through VS Code settings:
+
+```json settings.json
+{
+  "github.copilot.enable": {
+    "*": true,
+    "markdown": false,
+    "plaintext": false
+  },
+  "github.copilot.advanced": {
+    "authProvider": "github-enterprise"
+  },
+  "chat.agent.maxRequests": 50,
+  "chat.mcp.discovery.enabled": true
+}
+```
+
+---
+
+## Custom Agents
+
+Define specialized agent personas in `.github/agents/`:
+
+```markdown .github/agents/test-agent.md
+---
+name: "test-agent"
+description: "Specialized agent for writing and improving tests"
+---
+
+You are a test engineering specialist. When assigned an issue:
+
+1. Analyze the code under test
+2. Write comprehensive unit and integration tests
+3. Ensure edge cases are covered
+4. Run the test suite and verify all tests pass
+5. Report coverage metrics in the PR description
+```
+
+Custom agents are invoked via `@agent-name` in chat and are also available to the cloud-hosted coding agent.
+
+---
+
+## Agent Skills
+
+Agent Skills are portable capability packages that extend Copilot with specialized knowledge and workflows. They work across Copilot in VS Code, Copilot CLI, and the Copilot coding agent.
+
+### Skill Structure
+
+```
+.github/skills/
+  deploy-preview/
+    SKILL.md           # Skill instructions (required)
+    templates/          # Optional bundled resources
+      deploy-config.yaml
+    scripts/
+      verify-deploy.sh
+```
+
+```markdown .github/skills/deploy-preview/SKILL.md
+---
+name: "deploy-preview"
+description: "Deploy a preview environment for the current branch"
+---
+
+## Deploy Preview
+
+When asked to deploy a preview:
+
+1. Read the deployment configuration from `templates/deploy-config.yaml`
+2. Run the deploy script: `bash scripts/verify-deploy.sh`
+3. Report the preview URL back to the user
+```
+
+### Progressive Loading
+
+Skills use a three-level loading system for efficiency:
+
+1. **Discovery**: Copilot reads the skill name and description from YAML frontmatter
+2. **Instructions Loading**: The full SKILL.md body is loaded into context when relevant
+3. **Resource Access**: Additional files in the skill directory are accessed on demand
+
+### Storage Locations
+
+| Scope | Location |
+|---|---|
+| Repository | `.github/skills/[skill-name]/SKILL.md` |
+| Personal (global) | `~/.copilot/skills/[skill-name]/SKILL.md` |
+
+---
+
+## MCP Servers
+
+GitHub Copilot supports the Model Context Protocol (MCP) for extending agent capabilities with external tools and data sources. MCP support in VS Code reached general availability in July 2025.
+
+### Configuration
+
+<Tabs>
+  <Tab title="Workspace (.vscode/mcp.json)">
+    Create `.vscode/mcp.json` in your project to share MCP server configurations with your team:
+
+    ```json .vscode/mcp.json
+    {
+      "servers": {
+        "github": {
+          "type": "http",
+          "url": "https://api.githubcopilot.com/mcp"
+        },
+        "playwright": {
+          "command": "npx",
+          "args": ["-y", "@microsoft/mcp-server-playwright"]
+        },
+        "my-api": {
+          "command": "node",
+          "args": ["./tools/mcp-server.js"],
+          "env": {
+            "API_KEY": "${input:my-api-key}"
+          }
+        }
+      },
+      "inputs": [
+        {
+          "id": "my-api-key",
+          "type": "promptString",
+          "description": "API key for my-api server",
+          "password": true
+        }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab title="User Profile">
+    Run `MCP: Open User Configuration` from the VS Code Command Palette to configure MCP servers available across all workspaces.
+  </Tab>
+  <Tab title="Dev Containers">
+    MCP servers can be configured in `devcontainer.json` for containerized development environments.
+  </Tab>
+</Tabs>
+
+### Server Types
+
+| Type | Description | Configuration |
+|---|---|---|
+| **stdio** | Local MCP servers communicating over standard I/O | `command` and `args` fields |
+| **http** | Remote MCP servers using HTTP streaming | `url` field |
+
+### GitHub MCP Server
+
+GitHub provides an official MCP server available in two modes:
+
+| Mode | Description |
+|---|---|
+| **Remote** (recommended) | Hosted by GitHub at `https://api.githubcopilot.com/mcp` |
+| **Local** | Self-hosted on your machine for custom setups or specific security requirements |
+
+The GitHub MCP server is available to all GitHub users regardless of plan. Individual tools inherit the access requirements of their corresponding GitHub features.
+
+### MCP with Coding Agent
+
+The Copilot coding agent can use tools from local and remote MCP servers. However, remote MCP servers that use OAuth for authentication are not currently supported by the coding agent.
+
+<Warning>
+  GitHub Copilot supports MCP **tools** but does not currently support MCP **resources**. Direct resource integration (as used in Claude Desktop) is not available.
+</Warning>
+
+### Enterprise MCP Policy
+
+Enterprises and organizations can enable or disable MCP usage via the **"MCP servers in Copilot"** policy. The policy is disabled by default for enterprise/organization plans. Copilot Free, Pro, and Pro+ users are not governed by this policy.
+
+---
+
+## Hooks
+
+Hooks are deterministic shell commands that run at strategic points in the agent workflow. They are configured as JSON files in `.github/hooks/`.
+
+### Hook Types
+
+| Hook | Trigger |
+|---|---|
+| `sessionStart` | When an agent session begins |
+| `sessionEnd` | When an agent session ends |
+| `userPromptSubmitted` | When the user sends a prompt |
+| `preToolUse` | Before a tool is executed (can approve or deny) |
+| `postToolUse` | After a tool completes |
+| `agentStop` | When the agent stops |
+| `subagentStop` | When a sub-agent stops |
+| `errorOccurred` | When an error occurs |
+
+```json .github/hooks/lint-check.json
+{
+  "event": "postToolUse",
+  "command": "npm run lint -- --quiet",
+  "description": "Run linter after code changes"
+}
+```
+
+<Info>
+  The `preToolUse` hook is the most powerful -- it can approve or deny tool executions before they happen, enabling hard policy gates at execution time.
+</Info>
+
+---
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the GitHub Copilot platform.
+
+### Configuration File Paths
+
+| File | Path | Purpose |
+|---|---|---|
+| Repository instructions | `<repo>/.github/copilot-instructions.md` | Project-wide Copilot instructions |
+| Path-specific instructions | `<repo>/.github/instructions/*.instructions.md` | Scoped instructions with `applyTo` globs |
+| Custom agents | `<repo>/.github/agents/*.agent.md` | Agent persona definitions |
+| Agent skills | `<repo>/.github/skills/[name]/SKILL.md` | Skill capability packages |
+| Hooks | `<repo>/.github/hooks/*.json` | Agent lifecycle hooks |
+| MCP servers (workspace) | `<repo>/.vscode/mcp.json` | Workspace-scoped MCP server configuration |
+| MCP servers (user) | User profile `mcp.json` | User-scoped MCP server configuration |
+| Personal instructions | `$HOME/.copilot/copilot-instructions.md` | Global personal instructions |
+| Personal skills | `$HOME/.copilot/skills/[name]/SKILL.md` | Global personal skills |
+| AGENTS.md | `<repo>/AGENTS.md` | Cross-agent instructions (also read by Copilot) |
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "SOME_API_KEY": "${input:some-api-key}"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "id": "some-api-key",
+      "type": "promptString",
+      "description": "API key for the MCP server",
+      "password": true
+    }
+  ]
+}
+```
+
+**Key considerations:**
+
+- The `servers` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing server entries
+- Use `inputs` for secrets to avoid hardcoding API keys
+- VS Code provides IntelliSense for the `mcp.json` schema
+- For remote servers, use `"type": "http"` with a `"url"` field instead of `command`/`args`
+- Include `.vscode/mcp.json` in source control to share configurations with the team
+
+### Installing Custom Instructions
+
+To install project-level instructions, write to `.github/copilot-instructions.md`. If the file already exists, append to it.
+
+For path-specific instructions, create a new `*.instructions.md` file in `.github/instructions/` with appropriate `applyTo` frontmatter. Each file is independent, so adding a new file does not conflict with existing ones.
+
+<Note>
+  Unlike Goose's `.goosehints`, Copilot instruction files use Markdown format with optional YAML frontmatter. The `applyTo` field supports glob patterns (e.g., `"src/**/*.ts"`). All matching instruction files are combined -- there is no override behavior.
+</Note>
+
+### Installing Agent Skills
+
+To install a skill, create a directory under `.github/skills/[skill-name]/` containing at minimum a `SKILL.md` file with YAML frontmatter (`name` and `description` fields). Additional resources (templates, scripts, examples) can be placed alongside it.
+
+### Installing Hooks
+
+To install a hook, create a JSON file in `.github/hooks/` with an `event` field specifying the lifecycle event and a `command` field with the shell command to execute.
+
+### Config File Formats
+
+| File | Format | Merge Strategy |
+|---|---|---|
+| `copilot-instructions.md` | Markdown | Append to existing content |
+| `*.instructions.md` | Markdown + YAML frontmatter | Add new files (no merge needed) |
+| `mcp.json` | JSON | Deep-merge `servers` and `inputs` objects |
+| `*.agent.md` | Markdown + YAML frontmatter | Add new files (no merge needed) |
+| `SKILL.md` | Markdown + YAML frontmatter | One per skill directory |
+| `*.json` (hooks) | JSON | Add new files (no merge needed) |
+
+### VS Code Extension Installation
+
+To programmatically install the Copilot extension:
+
+```bash
+# Install via VS Code CLI
+code --install-extension GitHub.copilot
+
+# Verify installation
+code --list-extensions | grep GitHub.copilot
+```
+
+### Non-Interactive Considerations
+
+- Copilot requires GitHub authentication, which typically involves an interactive browser-based OAuth flow
+- For CI/CD or automated environments, use the Copilot coding agent (assign issues on GitHub.com) or the GitHub CLI with `gh copilot`
+- MCP server configurations in `.vscode/mcp.json` take effect when VS Code opens the workspace -- no restart is needed
+- Instruction files (`.github/copilot-instructions.md`, `.github/instructions/*.instructions.md`) are picked up automatically with no restart required

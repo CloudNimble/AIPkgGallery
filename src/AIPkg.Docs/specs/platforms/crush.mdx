@@ -1,0 +1,420 @@
+---
+title: 'Crush'
+description: 'Platform specification for Crush, an AI coding agent'
+icon: 'hammer'
+---
+
+## Overview
+
+[Crush](https://github.com/charmbracelet/crush) is a terminal-based AI coding agent built in Go by **Charmbracelet**, the successor to the OpenCode project.[^1] Extensibility is via JSON configuration files, MCP servers (stdio, HTTP, and SSE transports), context files (`CRUSH.md` / `AGENTS.md`), the Agent Skills open standard (`SKILL.md` workflow definitions), and a `.crushignore` file for context exclusion.[^2]
+
+---
+
+## Configuration
+
+### File Locations
+
+Crush uses a hierarchical JSON configuration system that merges settings from multiple sources. Configuration can be added locally to a project or globally.[^2]
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Project config (dotfile) | `<project>/.crush.json` | Project-specific settings (highest precedence) |
+    | Project config | `<project>/crush.json` | Project-specific settings |
+    | Global config | `~/.config/crush/crush.json` | User-wide settings (read-only, never modified by Crush) |
+    | Data config | `~/.local/share/crush/crush.json` | Ephemeral state (model selections, recent models) |
+    | Project instructions | `<project>/CRUSH.md` | Project-level custom instructions |
+    | Project ignore | `<project>/.crushignore` | Files excluded from Crush context |
+    | Project skills | `<project>/.crush/skills/` | Project-specific skills |
+    | Global skills | `~/.config/crush/skills/` | User-wide skills |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | Project config (dotfile) | `<project>\.crush.json` | Project-specific settings (highest precedence) |
+    | Project config | `<project>\crush.json` | Project-specific settings |
+    | Global config | `%LOCALAPPDATA%\crush\crush.json` | User-wide settings |
+    | Data config | `%LOCALAPPDATA%\crush\crush.json` | Ephemeral state |
+    | Project instructions | `<project>\CRUSH.md` | Project-level custom instructions |
+    | Global skills | `%LOCALAPPDATA%\crush\skills\` | User-wide skills |
+  </Tab>
+</Tabs>
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):[^3]
+
+1. **`.crush.json`** (project-local dotfile)
+2. **`crush.json`** (project-local)
+3. **`~/.config/crush/crush.json`** (global, Unix) or `%LOCALAPPDATA%\crush\crush.json` (global, Windows)
+
+<Note>
+  The project-level configs (`.crush.json`, `crush.json`) and the global config (`~/.config/crush/crush.json`) are read-only -- Crush never modifies them. Ephemeral data such as user model selections and recent models are written to the data directory config at `~/.local/share/crush/crush.json`.[^3]
+</Note>
+
+### crush.json Structure
+
+All configuration files reference the schema via the `$schema` field.[^2]
+
+<CodeGroup>
+
+```json Basic Configuration
+{
+  "$schema": "https://charm.land/crush.json",
+  "options": {
+    "initialize_as": "AGENTS.md",
+    "disabled_tools": ["bash", "sourcegraph"],
+    "skills_paths": [
+      "~/.config/crush/skills",
+      "./project-skills"
+    ]
+  }
+}
+```
+
+```json Custom Provider
+{
+  "$schema": "https://charm.land/crush.json",
+  "providers": {
+    "my-provider": {
+      "type": "openai-compat",
+      "base_url": "https://api.example.com/v1",
+      "api_key": "$MY_API_KEY"
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Environment Variable Resolution
+
+Crush supports two types of variable resolution in configuration values:[^3]
+
+| Syntax | Description |
+|---|---|
+| `$VAR` or `${VAR}` | Simple variable substitution |
+| `$(command)` | Command substitution (e.g., `$(echo $API_KEY)`) |
+
+Crush also supports a `CRUSH_` prefix convention for environment variables, allowing provider-specific credentials without affecting other tools.[^3]
+
+### Path Override Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `CRUSH_GLOBAL_CONFIG` | Override global config file path |
+| `CRUSH_GLOBAL_DATA` | Override data directory path |
+| `CRUSH_SKILLS_DIR` | Override global skills directory path |
+
+---
+
+## Custom Instructions
+
+### Context Files
+
+Crush automatically loads context files from the current working directory to provide project-specific instructions to the agent. Crush searches for context files across multiple naming conventions for cross-tool compatibility.[^4][^5]
+
+**Supported context file names (searched in order):**
+
+| File | Notes |
+|---|---|
+| `CRUSH.md` / `crush.md` / `Crush.md` / `crush.local.md` | Crush-native instruction files |
+| `AGENTS.md` / `agents.md` / `Agents.md` | Agent Skills open standard |
+| `CLAUDE.md` / `CLAUDE.local.md` | Claude Code compatibility |
+| `GEMINI.md` / `gemini.md` | Gemini CLI compatibility |
+| `.github/copilot-instructions.md` | GitHub Copilot compatibility |
+| `.cursorrules` / `.cursor/rules/` | Cursor compatibility |
+
+<Note>
+  Global `CRUSH.md` support (e.g., `~/.config/crush/CRUSH.md`) is not yet available but has been requested as a feature.[^6]
+</Note>
+
+### Project Initialization
+
+Running project initialization (via `Ctrl+P` in the TUI) causes Crush to analyze the codebase and generate a context file with discovered build commands, code patterns, and conventions. The default output filename is `AGENTS.md`, but this can be customized with the `initialize_as` option:[^2]
+
+```json
+{
+  "$schema": "https://charm.land/crush.json",
+  "options": {
+    "initialize_as": "CRUSH.md"
+  }
+}
+```
+
+### .crushignore
+
+Crush respects `.gitignore` by default. A `.crushignore` file (using `.gitignore` syntax) can be placed in the project root to exclude additional files from Crush's context that you still want in version control.[^2]
+
+---
+
+## MCP Servers
+
+Crush implements the Model Context Protocol to extend its capabilities through external tools and context providers. MCP servers are configured in the `mcp` key of `crush.json` and support three transport types.[^2][^7]
+
+### Transport Types
+
+| Type | Description | Required Fields |
+|---|---|---|
+| **stdio** | Local process over standard I/O | `command`, `args` (optional) |
+| **http** | Streamable HTTP endpoint | `url` |
+| **sse** | Server-Sent Events | `url` |
+
+### MCP Configuration
+
+<CodeGroup>
+
+```json stdio Server
+{
+  "$schema": "https://charm.land/crush.json",
+  "mcp": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/path/to/mcp-server.js"],
+      "timeout": 120,
+      "disabled": false,
+      "disabled_tools": ["some-tool-name"],
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}
+```
+
+```json http Server
+{
+  "$schema": "https://charm.land/crush.json",
+  "mcp": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "timeout": 120,
+      "disabled": false,
+      "disabled_tools": ["create_issue", "create_pull_request"],
+      "headers": {
+        "Authorization": "Bearer $GH_PAT"
+      }
+    }
+  }
+}
+```
+
+```json sse Server
+{
+  "$schema": "https://charm.land/crush.json",
+  "mcp": {
+    "streaming-service": {
+      "type": "sse",
+      "url": "https://example.com/mcp/sse",
+      "timeout": 120,
+      "disabled": false,
+      "headers": {
+        "API-Key": "$(echo $API_KEY)"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### MCP Server Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | string | Transport type: `"stdio"`, `"http"`, or `"sse"` |
+| `command` | string | Command to run (stdio only) |
+| `args` | string[] | Arguments array (stdio only) |
+| `url` | string | Server URL (http/sse only) |
+| `headers` | object | HTTP headers with env var expansion (http/sse only) |
+| `env` | object | Environment variables (stdio only) |
+| `timeout` | number | Timeout in seconds |
+| `disabled` | boolean | Disable the server without removing config |
+| `disabled_tools` | string[] | Array of tool names to disable from this server |
+
+<Warning>
+  When a project-level `.crush.json` defines MCP servers, global MCP servers (from `~/.config/crush/crush.json`) may appear connected but their tools may not be registered. This is a known issue.[^8]
+</Warning>
+
+---
+
+## Skills
+
+Crush supports the Agent Skills open standard for extending agent capabilities with reusable skill packages. Skills are folders containing a `SKILL.md` file with instructions that Crush can discover and activate on demand.[^2][^9]
+
+### Skill Locations
+
+| Scope | Path (Unix) | Path (Windows) |
+|---|---|---|
+| Project | `<project>/.crush/skills/<name>/` | `<project>\.crush\skills\<name>\` |
+| Global | `~/.config/crush/skills/<name>/` | `%LOCALAPPDATA%\crush\skills\<name>\` |
+| Custom | Configured via `skills_paths` in `crush.json` | Configured via `skills_paths` in `crush.json` |
+
+### Configuring Skills Paths
+
+Additional skill directories can be specified in `crush.json`:[^2]
+
+```json
+{
+  "$schema": "https://charm.land/crush.json",
+  "options": {
+    "skills_paths": [
+      "~/.config/crush/skills",
+      "./project-skills"
+    ]
+  }
+}
+```
+
+The global skills directory path can also be overridden via the `CRUSH_SKILLS_DIR` environment variable.[^2]
+
+<Note>
+  Skills are automatically loaded on demand so they do not clutter up the context window. You can get started with example skills from the `anthropics/skills` repository.[^2]
+</Note>
+
+---
+
+## Agents
+
+Crush maintains two built-in agent types that are automatically configured based on the loaded configuration:[^10]
+
+| Agent | Model | Capabilities |
+|---|---|---|
+| **Coder** (primary) | Large model | Full tool access, MCP servers, LSP integration |
+| **Task** (delegated) | Large model | Read-only tools only (glob, grep, ls, sourcegraph, view), no MCPs or LSPs |
+
+The Coder agent can spawn specialized Task agents for delegated subtasks via the agent tool, creating a hierarchical execution model where sub-agents operate with restricted permissions and their costs roll up to the parent session.[^10]
+
+<Note>
+  Custom agent definitions beyond the built-in Coder and Task agents are not currently supported through configuration. The agent system is managed internally by Crush's coordinator.[^10]
+</Note>
+
+---
+
+## Hooks and Lifecycle
+
+Crush does not expose a user-configurable hooks or lifecycle events system. Internally, the agent lifecycle uses streaming callbacks for tool execution (`OnToolInputStart`, `OnToolCall`, `OnToolResult`), and cleanup hooks are invoked during `CancelAll()` for resource teardown. These are internal implementation details and are not configurable by end users.[^10]
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Crush platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **Project config**: `<project>/.crush.json` or `<project>/crush.json`
+    - **Global config**: `~/.config/crush/crush.json`
+    - **Data config**: `~/.local/share/crush/crush.json`
+    - **Project instructions**: `<project>/CRUSH.md`
+    - **Project ignore**: `<project>/.crushignore`
+    - **Project skills**: `<project>/.crush/skills/<name>/SKILL.md`
+    - **Global skills**: `~/.config/crush/skills/<name>/SKILL.md`
+  </Tab>
+  <Tab title="Windows">
+    - **Project config**: `<project>\.crush.json` or `<project>\crush.json`
+    - **Global config**: `%LOCALAPPDATA%\crush\crush.json`
+    - **Data config**: `%LOCALAPPDATA%\crush\crush.json`
+    - **Project instructions**: `<project>\CRUSH.md`
+    - **Project skills**: `<project>\.crush\skills\<name>\SKILL.md`
+    - **Global skills**: `%LOCALAPPDATA%\crush\skills\<name>\SKILL.md`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into the `mcp` key of `crush.json`:
+
+```json
+{
+  "$schema": "https://charm.land/crush.json",
+  "mcp": {
+    "package-server": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "$API_KEY"
+      }
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- The `mcp` object is a flat map; each key is a unique server identifier
+- Merge carefully -- do not overwrite existing MCP server entries
+- The `type` field must be `"stdio"`, `"http"`, or `"sse"`
+- Environment variables in values use `$VAR`, `${VAR}`, or `$(command)` substitution syntax
+- Headers (for http/sse) also support environment variable expansion
+- Configuration can be placed in either the project or global config file
+- Crush does not currently have a CLI subcommand for adding MCP servers programmatically (unlike `claude mcp add`); direct JSON manipulation is required[^11]
+
+### Installing Project Instructions
+
+To install project-level instructions, write or append to `<project>/CRUSH.md`. If a `CRUSH.md` already exists, the installer should append to it.
+
+Crush loads multiple context files simultaneously (including `AGENTS.md`, `CLAUDE.md`, and others), so appending to an existing file is safe.
+
+### Installing Skills
+
+To install a skill, create a directory containing a `SKILL.md` file at one of the skill paths:
+
+<Steps>
+  <Step title="Choose scope">
+    Place the skill in either the project path (`<project>/.crush/skills/<skill-name>/`) or the global path (`~/.config/crush/skills/<skill-name>/`).
+  </Step>
+  <Step title="Create SKILL.md">
+    Write a `SKILL.md` file inside the skill directory with the skill instructions.
+  </Step>
+  <Step title="Verify discovery">
+    Skills are automatically loaded on demand. No additional registration step is required.
+  </Step>
+</Steps>
+
+### Config File Format
+
+Crush uses standard JSON for all configuration files. The installer must:
+
+1. Parse the existing JSON file (if it exists)
+2. Deep-merge new configuration into the existing structure
+3. Write the result back, preserving existing entries
+
+The `mcp` key is the primary integration point for MCP server packages. The `$schema` field (`"https://charm.land/crush.json"`) should be preserved or added for validation support.
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows, use `crush run`:[^2]
+
+```bash
+# Run a single prompt non-interactively
+crush run "Run the test suite and report results"
+
+# Browse sessions
+crush session list
+
+# Inspect a session (with JSON output for machines)
+crush session <id> --json
+```
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/charmbracelet/crush
+[^2]: https://github.com/charmbracelet/crush/blob/main/README.md
+[^3]: https://deepwiki.com/charmbracelet/crush/2.2-configuration
+[^4]: https://github.com/charmbracelet/crush/blob/main/CRUSH.md
+[^5]: https://github.com/charmbracelet/crush/discussions/912
+[^6]: https://github.com/charmbracelet/crush/issues/1643
+[^7]: https://github.com/charmbracelet/crush/issues/718
+[^8]: https://github.com/charmbracelet/crush/issues/870
+[^9]: https://github.com/charmbracelet/crush/issues/1972
+[^10]: https://deepwiki.com/charmbracelet/crush/4-ai-and-llm-integration
+[^11]: https://github.com/charmbracelet/crush/issues/1145

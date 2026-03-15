@@ -1,0 +1,276 @@
+---
+title: Codex CLI
+description: Platform specification for Codex CLI, OpenAI's open-source terminal coding agent built in Rust
+icon: terminal
+---
+
+[Codex CLI](https://github.com/openai/codex) is an open-source terminal coding agent developed by **OpenAI**, built in Rust under the Apache 2.0 license. It is extensible through AGENTS.md instruction files, MCP server integration (both as client and server), and TOML-based layered configuration with named profiles.
+
+---
+
+## Configuration
+
+### File Locations
+
+Codex CLI uses TOML configuration files with a layered resolution system. The `CODEX_HOME` environment variable overrides the default home directory.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User config | `~/.codex/config.toml` | Primary user-level configuration |
+    | Project config | `<project>/.codex/config.toml` | Project-level overrides (trusted projects only) |
+    | System config | `/etc/codex/config.toml` | System-wide defaults (Unix only) |
+    | AGENTS.md | `~/.codex/AGENTS.md` | Global custom instructions |
+    | Sessions | `~/.codex/sessions/` | Local conversation transcripts |
+  </Tab>
+  <Tab title="Windows">
+    | File | Path | Purpose |
+    |---|---|---|
+    | User config | `%USERPROFILE%\.codex\config.toml` | Primary user-level configuration |
+    | Project config | `<project>\.codex\config.toml` | Project-level overrides (trusted projects only) |
+    | AGENTS.md | `%USERPROFILE%\.codex\AGENTS.md` | Global custom instructions |
+  </Tab>
+</Tabs>
+
+### Configuration Precedence
+
+Settings are resolved in the following order (highest to lowest):
+
+1. **CLI flags** (`--model`, `--sandbox`, `-c key=value`)
+2. **Profile overrides** (`--profile <name>` selects a named profile from config.toml)
+3. **Project config files** (`.codex/config.toml` layers from project root to current directory; closest wins)
+4. **User config** (`~/.codex/config.toml`)
+5. **System config** (`/etc/codex/config.toml`)
+6. **Built-in defaults**
+
+<Note>
+  Project-level configuration files are only loaded for **trusted projects**. Use `codex` in the project directory and confirm trust when prompted, or configure trusted paths in your user config.
+</Note>
+
+### config.toml Structure
+
+<CodeGroup>
+
+```toml AGENTS.md Tuning
+project_doc_max_bytes = 65536
+project_doc_fallback_filenames = ["TEAM_GUIDE.md", ".agents.md"]
+project_root_markers = [".git", ".hg", ".sl"]
+```
+
+```toml MCP Servers
+[mcp_servers.my-server]
+transport = "stdio"
+command = "npx"
+args = ["-y", "@scope/mcp-server-package"]
+timeout = 60
+
+[mcp_servers.remote-server]
+transport = "http"
+url = "https://mcp.example.com/stream"
+timeout = 30
+```
+
+```toml Shell Environment Policy
+[shell_environment_policy]
+include_only = ["PATH", "HOME", "USER", "LANG", "TERM"]
+```
+
+</CodeGroup>
+
+---
+
+## Custom Instructions
+
+### AGENTS.md
+
+Codex reads `AGENTS.md` files before doing any work. By layering global guidance with project-specific overrides, you can start each task with consistent expectations across repositories.
+
+### Discovery Order
+
+Codex builds an instruction chain when it starts (once per run):
+
+<Steps>
+  <Step title="Global Scope">
+    In your Codex home directory (`~/.codex/` or `$CODEX_HOME`), Codex looks for `AGENTS.override.md` first. If not found, it reads `AGENTS.md`. Only the first non-empty file at this level is used.
+  </Step>
+  <Step title="Project Scope">
+    Starting at the project root (typically the Git root), Codex walks down to your current working directory. In each directory along the path, it checks:
+    1. `AGENTS.override.md`
+    2. `AGENTS.md`
+    3. Any fallback names listed in `project_doc_fallback_filenames`
+  </Step>
+</Steps>
+
+### AGENTS.md Example
+
+```markdown AGENTS.md
+# Project Conventions
+
+This is a TypeScript monorepo managed with pnpm.
+
+## Build & Test
+- Build: `pnpm build`
+- Test: `pnpm test`
+- Lint: `pnpm lint`
+
+## Code Style
+- Use strict TypeScript, no `any` types
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+
+## File Structure
+- `packages/core/` - Core library
+- `packages/cli/` - CLI interface
+- `apps/web/` - Next.js application
+```
+
+### Scaffolding
+
+Run the `/init` slash command inside Codex to generate an `AGENTS.md` scaffold in the current directory. Review and edit the generated file, then commit it to your repository.
+
+### Configuration Knobs
+
+| Key | Default | Description |
+|---|---|---|
+| `project_doc_max_bytes` | `65536` | Maximum bytes to read from each AGENTS.md file |
+| `project_doc_fallback_filenames` | `[]` | Additional filenames to try when AGENTS.md is missing at a directory level |
+| `project_root_markers` | `[".git"]` | Directories that signal a project root; set to `[]` to use cwd as root |
+
+<Warning>
+  If your AGENTS.md content is truncated, increase `project_doc_max_bytes` or split large files across nested directories so that critical guidance is preserved at each level.
+</Warning>
+
+---
+
+## MCP Integration
+
+Codex connects to external tools through Model Context Protocol servers. Servers are launched automatically when a session starts.
+
+```toml ~/.codex/config.toml
+[mcp_servers.github]
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+
+[mcp_servers.remote-tools]
+transport = "http"
+url = "https://mcp.example.com/stream"
+timeout = 30
+```
+
+**Managing MCP servers via CLI:**
+
+```bash
+# Add a stdio server
+codex mcp add my-server -- npx -y @scope/mcp-server
+
+# Add a remote HTTP server
+codex mcp add remote-server --url https://mcp.example.com/stream
+
+# List configured servers
+codex mcp list
+
+# Remove a server
+codex mcp remove my-server
+
+# OAuth login for authenticated servers
+codex mcp login my-server
+```
+
+Codex can also run as an MCP server itself, allowing other agents to use Codex as a tool.
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Codex CLI platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **User config**: `~/.codex/config.toml`
+    - **Project config**: `<project>/.codex/config.toml`
+    - **Global instructions**: `~/.codex/AGENTS.md`
+    - **Project instructions**: `<project>/AGENTS.md`
+  </Tab>
+  <Tab title="Windows">
+    - **User config**: `%USERPROFILE%\.codex\config.toml`
+    - **Project config**: `<project>\.codex\config.toml`
+    - **Global instructions**: `%USERPROFILE%\.codex\AGENTS.md`
+    - **Project instructions**: `<project>\AGENTS.md`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, add a TOML table entry under `[mcp_servers]` in `config.toml`:
+
+```toml
+[mcp_servers.package-server-name]
+transport = "stdio"
+command = "npx"
+args = ["-y", "@scope/mcp-server-package"]
+timeout = 60
+```
+
+Alternatively, use the CLI:
+
+```bash
+codex mcp add package-server-name -- npx -y @scope/mcp-server-package
+```
+
+**Key considerations:**
+
+- Config format is **TOML**, not YAML or JSON
+- Each MCP server is a separate `[mcp_servers.<name>]` table; merge carefully to avoid overwriting existing entries
+- For remote servers, use `url` instead of `command`/`args` and set `transport = "http"`
+- Codex reads config at session start; changes require starting a new session
+- The `codex mcp add` CLI command is the safest way to register servers without manual TOML editing
+
+### Installing Project Instructions
+
+To install project-level instructions, write an `AGENTS.md` file to the project root. If an `AGENTS.md` already exists, the installer should append to it (or use `AGENTS.override.md` to take precedence without modifying the existing file).
+
+<Note>
+  Codex uses only the **first non-empty** instruction file at each directory level (checking `AGENTS.override.md` first, then `AGENTS.md`, then fallback filenames). To guarantee your instructions take effect, use `AGENTS.override.md` which always wins.
+</Note>
+
+### Config File Format
+
+Codex CLI uses **TOML** format for configuration. The installer must:
+
+1. Parse the existing `config.toml` file (if present)
+2. Deep-merge new configuration (particularly `[mcp_servers]` tables) into the existing structure
+3. Write the result back, preserving existing entries and comments where possible
+
+### Authentication
+
+Codex CLI authenticates via `codex login`, which supports:
+- Browser-based OAuth flow (default)
+- Device code flow (`--device-auth`)
+- API key via stdin (`--with-api-key`)
+
+For automated setups, pipe an API key: `echo "sk-..." | codex login --with-api-key`
+
+### Non-Interactive Execution
+
+For CI/CD or automated workflows, use `codex exec`:
+
+```bash
+# Run a one-shot task
+codex exec "run the test suite and report failures"
+
+# Read prompt from stdin
+echo "fix all lint errors" | codex exec -
+
+# Output the final message to a file
+codex exec -o result.txt "summarize the codebase"
+
+# Emit JSON events for programmatic consumption
+codex exec --json "analyze dependencies"
+
+# Skip Git repository check
+codex exec --skip-git-repo-check "process these files"
+```

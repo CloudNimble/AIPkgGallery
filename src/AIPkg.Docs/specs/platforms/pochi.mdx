@@ -1,0 +1,342 @@
+---
+title: 'Pochi'
+description: 'Platform specification for Pochi, an AI coding agent'
+icon: 'dog'
+---
+
+[Pochi](https://getpochi.com/) is an AI coding agent developed by **TabbyML**, available as a VS Code extension (research preview), a CLI tool, and via Slack and GitHub integrations[^1]. Extensibility is provided through JSONC configuration files, custom instructions (`README.pochi.md` / `AGENTS.md`), MCP server integration, custom agents, and the Agent Skills open standard (`SKILL.md` workflow definitions)[^2].
+
+---
+
+## Configuration
+
+### File Locations
+
+Pochi uses a hierarchical JSONC (JSON with Comments) configuration system with global and workspace-level settings[^1].
+
+| File | Path | Purpose |
+|---|---|---|
+| Global config | `~/.pochi/config.jsonc` | User-wide defaults across all projects |
+| Workspace config | `<project>/.pochi/config.jsonc` | Project-specific overrides |
+| Global instructions | `~/.pochi/README.pochi.md` | User-wide custom instructions |
+| Project instructions | `<project>/README.pochi.md` or `<project>/AGENTS.md` | Project-specific custom instructions |
+| Project skills | `<project>/.pochi/skills/<name>/SKILL.md` | Project-specific skills |
+| Global skills | `~/.pochi/skills/<name>/SKILL.md` | User-wide skills |
+| Project agents | `<project>/.pochi/agents/<name>.md` | Project-specific custom agents |
+| Global agents | `~/.pochi/agents/<name>.md` | User-wide custom agents |
+
+### Settings Precedence
+
+Workspace configuration (`.pochi/config.jsonc`) takes precedence over and merges with the global configuration (`~/.pochi/config.jsonc`)[^1].
+
+### Configuration Schema
+
+All configuration files can reference the JSON schema for editor autocompletion[^1]:
+
+```jsonc .pochi/config.jsonc
+{
+  "$schema": "https://getpochi.com/config.schema.json"
+  // Configuration options here
+}
+```
+
+---
+
+## Custom Instructions
+
+### Rules Files
+
+Pochi recognizes two equivalent filenames for project-level custom instructions[^3]:
+
+| File | Notes |
+|---|---|
+| `README.pochi.md` | Pochi-native instruction file |
+| `AGENTS.md` | Agent Skills open standard (treated identically) |
+
+### Discovery Order
+
+Pochi searches for rules in the following order[^3]:
+
+1. **Workspace level**: `README.pochi.md` or `AGENTS.md` in the project root directory
+2. **Global level**: `~/.pochi/README.pochi.md` for user-wide preferences
+
+### Content Format
+
+Rules files use Markdown-formatted plain text, similar to `CLAUDE.md` or Cursor's rules. They can include coding conventions, testing frameworks, commands, and development practices[^3].
+
+<Note>
+  Users can view currently active rules through the toolbar's token usage popover, providing transparency about which guidelines are influencing the agent[^3].
+</Note>
+
+---
+
+## MCP Integration
+
+Pochi implements the Model Context Protocol to extend its capabilities through external tools and services. MCP servers are configured in the `mcpServers` key of `config.jsonc`[^4].
+
+### Configuration Format
+
+<CodeGroup>
+
+```jsonc stdio Server
+{
+  "$schema": "https://getpochi.com/config.schema.json",
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "env": {
+        "HOME": "/home/user"
+      }
+    }
+  }
+}
+```
+
+```jsonc HTTP / SSE Server
+{
+  "$schema": "https://getpochi.com/config.schema.json",
+  "mcpServers": {
+    "prod-readonly": {
+      "url": "http://localhost:3333/mcp",
+      "disabled": false,
+      "headers": {
+        "Authorization": "Bearer $TOKEN"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Per-Task MCP Scoping
+
+Pochi supports scoping MCP servers on a per-task basis. Only selected servers are loaded into context, contribute tool definitions, and influence model reasoning. Servers disabled in global settings are not shown in the task selector[^4].
+
+<Note>
+  MCP servers can be toggled on or off at the server level, and individual tools within a server can be selectively enabled or disabled through the Pochi settings panel[^4].
+</Note>
+
+### CLI Integration
+
+MCP settings can be opened via the VS Code command `"Pochi: Open MCP Server Settings"`[^4].
+
+---
+
+## Skills
+
+Pochi supports the Agent Skills open standard for extending agent capabilities with reusable instruction sets[^5].
+
+### Skill Locations
+
+| Scope | Path |
+|---|---|
+| Project | `<project>/.pochi/skills/<skill-name>/SKILL.md` |
+| Global | `~/.pochi/skills/<skill-name>/SKILL.md` |
+
+### SKILL.md Format
+
+```markdown .pochi/skills/my-skill/SKILL.md
+---
+name: my-skill
+description: What this skill does and when to use it.
+---
+
+Step-by-step instructions for the skill go here.
+```
+
+### Installing Skills
+
+Skills can be installed from the community registry using the CLI[^5][^6]:
+
+```bash
+# Install to project scope
+npx skills add <skill-source> --agent pochi
+
+# Install specific skills only
+npx skills add <skill-source> --agent pochi --skill pdf --skill xlsx
+```
+
+### Usage
+
+Skills are invoked in two ways[^5]:
+
+- **Automatic discovery**: Pochi analyzes prompts and suggests relevant skills based on context
+- **Slash commands**: Users type a slash command followed by the skill name for explicit activation
+
+---
+
+## Custom Agents
+
+Pochi supports custom agent definitions for specialized workflows. Agents are Markdown files with YAML frontmatter[^7].
+
+### Agent File Format
+
+```markdown .pochi/agents/reviewer.md
+---
+name: reviewer
+description: "Review diffs for correctness, security, and simplicity"
+tools: ["Read", "Grep"]
+---
+
+Review instructions and system prompt go here.
+```
+
+### Frontmatter Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | No | Unique identifier; defaults to filename without extension |
+| `description` | string | Yes | Brief explanation of agent purpose |
+| `tools` | list/string | No | Permitted tools; inherits all tools if omitted |
+
+### Agent Locations
+
+| Scope | Path |
+|---|---|
+| Project | `<project>/.pochi/agents/<name>.md` |
+| Global | `~/.pochi/agents/<name>.md` |
+
+### Invocation
+
+Users mention the custom agent's name in prompts, and Pochi contextually decides whether to deploy it[^7].
+
+---
+
+## Permissions
+
+Pochi provides five configurable permission categories that can be managed through Auto-Approve settings[^8]:
+
+| Permission | Description |
+|---|---|
+| **Read** | Read file content for analysis |
+| **Write** | Create files, edit code, generate boilerplate |
+| **Execute** | Run builds, tests, manage dependencies |
+| **Use MCP** | Interact with databases, APIs, and external services |
+| **Retry** | Automatically retry failed commands and operations |
+
+<Note>
+  All permissions are enabled by default. Users can customize them at any time through the Auto-Approve settings interface[^8].
+</Note>
+
+---
+
+## Hooks and Lifecycle
+
+Pochi does not currently expose a user-configurable hooks or lifecycle events system. Browser sessions are automatically scoped to their parent task and cleaned up when a task tab is closed[^9].
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Pochi platform.
+
+### Installation Methods
+
+Pochi can be installed via three methods[^10]:
+
+```bash
+# Curl
+curl -fsSL https://getpochi.com/install.sh | bash
+
+# Homebrew
+brew install tabbyml/pochi/pochi
+
+# NPM
+npm install -g @getpochi/cli
+```
+
+The VS Code extension is available from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=TabbyML.pochi) or [OpenVSX](https://open-vsx.org/extension/TabbyML/pochi)[^11].
+
+### Configuration File Paths
+
+| Purpose | Path |
+|---|---|
+| Global config | `~/.pochi/config.jsonc` |
+| Workspace config | `<project>/.pochi/config.jsonc` |
+| Project instructions | `<project>/README.pochi.md` or `<project>/AGENTS.md` |
+| Global instructions | `~/.pochi/README.pochi.md` |
+| Project skills | `<project>/.pochi/skills/<name>/SKILL.md` |
+| Global skills | `~/.pochi/skills/<name>/SKILL.md` |
+| Project agents | `<project>/.pochi/agents/<name>.md` |
+| Global agents | `~/.pochi/agents/<name>.md` |
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge an entry into the `mcpServers` key in `config.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://getpochi.com/config.schema.json",
+  "mcpServers": {
+    "package-server-name": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"]
+    }
+  }
+}
+```
+
+**Key considerations:**
+
+- Config format is **JSONC** (`.pochi/config.jsonc`), not plain JSON
+- Merge carefully to avoid overwriting existing server entries
+- For remote servers, use `"url"` with optional `"headers"` instead of `command`/`args`
+- The `"disabled"` field can be set to `true` to register a server without activating it
+
+### Installing Skills
+
+To install a skill, write a `SKILL.md` file into the appropriate scope directory:
+
+- **Project scope:** `<project>/.pochi/skills/<skill-name>/SKILL.md`
+- **User scope:** `~/.pochi/skills/<skill-name>/SKILL.md`
+
+Alternatively, use `npx skills add <source> --agent pochi` for automated installation[^6].
+
+### Installing Custom Instructions
+
+Write a `README.pochi.md` or `AGENTS.md` file to the project root. If one already exists, append to it rather than overwriting[^3].
+
+### Installing Custom Agents
+
+Write a Markdown file with YAML frontmatter to `<project>/.pochi/agents/<agent-name>.md` or `~/.pochi/agents/<agent-name>.md`. The frontmatter must include a `description` field[^7].
+
+### Vercel Skills Install Path
+
+The Vercel Skills CLI uses `--agent pochi` (or `-a pochi`) and installs to `.pochi/skills/` (project) or `~/.pochi/skills/` (global)[^6].
+
+### Non-Interactive Execution
+
+The CLI supports non-interactive execution for CI/CD workflows[^10]:
+
+```bash
+# Run a single prompt
+pochi -p "Run the test suite and report results"
+
+# Pipe input
+echo "Your prompt" | pochi
+
+# Specify model
+pochi --model groq/llama3-8b-8192 -p "Your prompt"
+```
+
+<Warning>
+  Pochi is currently in research preview. Features and configuration formats may change between releases[^11].
+</Warning>
+
+---
+
+## Footnotes
+
+[^1]: https://docs.getpochi.com/
+[^2]: https://docs.getpochi.com/workflows/
+[^3]: https://docs.getpochi.com/rules/
+[^4]: https://docs.getpochi.com/mcp/
+[^5]: https://docs.getpochi.com/skills/
+[^6]: https://github.com/vercel-labs/skills
+[^7]: https://docs.getpochi.com/custom-agent/
+[^8]: https://docs.getpochi.com/permissions/
+[^9]: https://docs.getpochi.com/developer-updates/
+[^10]: https://docs.getpochi.com/cli/
+[^11]: https://marketplace.visualstudio.com/items?itemName=TabbyML.pochi

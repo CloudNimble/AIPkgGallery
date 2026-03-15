@@ -1,0 +1,175 @@
+---
+title: "Platform Specs"
+sidebarTitle: "Platform Specs"
+description: "Extensibility reference for AI coding platforms — configuration file locations, MCP server setup, custom instructions, agent/skill systems, and programmatic installation."
+icon: "grid-2"
+---
+
+This section documents the extensibility surface of each AI coding platform that AIPkg targets. Each spec focuses on what an installer needs to know: config file locations, MCP server configuration, custom instructions/rules, agent/skill systems, hooks, and programmatic installation.
+
+---
+
+## Platforms with Full Specs
+
+These platforms have detailed spec files documenting their extensibility surface and installation provider requirements.
+
+| Moniker | Platform | Spec | MCP Support | Custom Instructions | Custom Agents/Skills |
+|---------|----------|------|:-----------:|:-------------------:|:--------------------:|
+| `claude-code` | Claude Code | [Spec](platforms/claude-code) | Native | CLAUDE.md | Skills (SKILL.md) |
+| `claude-desktop` | Claude Desktop + Cowork | [Spec](platforms/claude-desktop) | Native | claude.md (Cowork) | Plugins, Skills (Cowork) |
+| `copilot` | GitHub Copilot | [Spec](platforms/github-copilot) | Native | copilot-instructions.md | Agents, Skills |
+| `copilot-cli` | GitHub Copilot CLI | [Spec](platforms/copilot-cli) | Native | AGENTS.md, copilot-instructions.md | Skills, Agents, Plugins |
+| `cursor` | Cursor | [Spec](platforms/cursor) | Native | .cursor/rules/*.mdc | Custom Modes |
+| `windsurf` | Windsurf | [Spec](platforms/windsurf) | Native | .windsurf/rules/*.md | — |
+| `continue` | Continue | [Spec](platforms/continue) | Native | .continue/rules/*.md, .continuerules | Prompts |
+| `cline` | Cline | [Spec](platforms/cline) | Native | .clinerules | — |
+| `roo` | Roo Code | [Spec](platforms/cline) | Native | .roo/rules/*.md | Custom Modes |
+| `opencode` | OpenCode | [Spec](platforms/opencode) | Native | AGENTS.md | — |
+| `aider` | Aider | [Spec](platforms/aider) | Third-party | CONVENTIONS.md | — |
+| `zed` | Zed | [Spec](platforms/zed) | Native | .zed/rules/*.md | — |
+| `goose` | Goose | [Spec](platforms/goose) | Native (Extensions) | .goosehints | Recipes |
+| `amp` | Amp | [Spec](platforms/amp) | Native | AGENT.md | Skills, Toolboxes |
+| `augment` | Augment Code | [Spec](platforms/augment-code) | Native | Rules (settings.json) | — |
+| `codex` | Codex CLI | [Spec](platforms/codex-cli) | — | AGENTS.md | — |
+| `amazon-q` | Amazon Q Developer | [Spec](platforms/amazon-q) | — | — | — |
+| `jetbrains-ai` | JetBrains AI | [Spec](platforms/jetbrains-ai) | Native | .junie/guidelines/*.md | — |
+| `jetbrains-air` | JetBrains Air | [Spec](platforms/jetbrains-air) | Native | Agent-specific (CLAUDE.md, etc.) | Multi-agent (ACP) |
+| `sourcegraph-cody` | Sourcegraph Cody | [Spec](platforms/sourcegraph-cody) | — | — | — |
+| `chatgpt` | ChatGPT | [Spec](platforms/chatgpt) | Native | Custom GPTs | Actions |
+| `gemini-cli` | Gemini CLI | [Spec](platforms/gemini-cli) | Native | GEMINI.md | Skills, Subagents, Extensions |
+| `gemini-code-assist` | Gemini Code Assist | [Spec](platforms/gemini-code-assist) | Native | Rules, GEMINI.md, styleguide.md | — |
+| `tabnine` | Tabnine | [Spec](platforms/tabnine) | Native | `.tabnine/guidelines/*.md` | Custom Commands |
+| `qodo` | Qodo | [Spec](platforms/qodo) | Native | `best_practices.md`, `.pr_agent.toml` | Agent TOML configs |
+| `codegpt` | CodeGPT | [Spec](platforms/codegpt) | Native | IDE settings | Custom AI Agents |
+| `devin` | Devin | [Spec](platforms/devin) | Native | Knowledge, Playbooks | — |
+| `kiro-cli` | Kiro | [Spec](platforms/kiro-cli) | Native | Steering files (*.md) | Skills, Subagents |
+| `openhands` | OpenHands | [Spec](platforms/openhands) | Native | — | Skills, Custom Agents |
+| `replit` | Replit | [Spec](platforms/replit) | Native | replit.md | Skills |
+| `trae` | Trae | [Spec](platforms/trae) | Native | .trae/rules/*.md | Skills, Custom Agents |
+| `warp` | Warp | [Spec](platforms/warp) | Native | AGENTS.md | Skills, Workflows |
+| `junie` | Junie | [Spec](platforms/junie) | Native | .junie/guidelines.md | Skills |
+| `kilo-code` | Kilo Code | [Spec](platforms/kilo-code) | Native | Rules (*.md) | Skills |
+| `qwen-code` | Qwen Code | [Spec](platforms/qwen-code) | Native | QWEN.md | Sub-agents |
+| `droid` | Droid | [Spec](platforms/droid) | Native | AGENTS.md | Skills, Custom Droids |
+| `cortex-code` | Cortex Code | [Spec](platforms/cortex-code) | Native | AGENTS.md | Skills, Subagents |
+| `kimi-cli` | Kimi Code CLI | [Spec](platforms/kimi-cli) | Native | AGENTS.md | Skills, Custom Agents |
+| `crush` | Crush | [Spec](platforms/crush) | Native | CRUSH.md / AGENTS.md | Skills |
+| `iflow-cli` | iFlow CLI | [Spec](platforms/iflow-cli) | Native | IFLOW.md | Skills, SubAgents |
+| `codebuddy` | CodeBuddy | [Spec](platforms/codebuddy) | Native | CODEBUDDY.md | Skills |
+| `command-code` | Command Code | [Spec](platforms/command-code) | Native | AGENTS.md | Skills |
+| `antigravity` | Antigravity | [Spec](platforms/antigravity) | Native | GEMINI.md / Rules (*.md) | Skills |
+| `mcpjam` | MCPJam | [Spec](platforms/mcpjam) | Native | — | Skills |
+| `kode` | Kode | [Spec](platforms/kode) | Native | AGENTS.md | Skills, Custom Agents |
+| `mistral-vibe` | Mistral Vibe | [Spec](platforms/mistral-vibe) | Native | AGENTS.md | Skills, Custom Agents |
+| `mux` | Mux | [Spec](platforms/mux) | Native | AGENTS.md | Skills, Agent Definitions |
+| `openclaw` | OpenClaw | [Spec](platforms/openclaw) | Native | AGENTS.md | Skills, Hooks |
+| `pi` | Pi | [Spec](platforms/pi) | Native | AGENTS.md | Skills, Extensions |
+| `adal` | AdaL | [Spec](platforms/adal) | Native | AGENTS.md | Skills, Plugins |
+| `neovate` | Neovate | [Spec](platforms/neovate) | Native | AGENTS.md | Skills, Subagents |
+| `pochi` | Pochi | [Spec](platforms/pochi) | Native | README.pochi.md / AGENTS.md | Skills, Custom Agents |
+| `qoder` | Qoder | [Spec](platforms/qoder) | Native | .qoder/rules/*.md | Skills, Subagents |
+| `zencoder` | Zencoder | [Spec](platforms/zencoder) | Native | Zen Rules (*.md) | Skills, Zen Agents |
+
+---
+
+## Vercel Skills Supported Agents
+
+The [Vercel Skills](https://github.com/vercel-labs/skills) project maintains a list of AI coding agents that support the `AGENTS.md` convention. These are platforms that may benefit from AIPkg support. Platforms already covered by full specs above are marked accordingly.
+
+| Moniker | Platform | Has Spec |
+|---------|----------|:--------:|
+| `adal` | AdaL | Yes |
+| `amp` | Amp | Yes |
+| `antigravity` | Antigravity | Yes |
+| `augment` | Augment | Yes |
+| `claude-code` | Claude Code | Yes |
+| `cline` | Cline | Yes |
+| `codebuddy` | CodeBuddy | Yes |
+| `codex` | Codex | Yes |
+| `command-code` | Command Code | Yes |
+| `continue` | Continue | Yes |
+| `cortex` | Cortex Code | Yes |
+| `crush` | Crush | Yes |
+| `cursor` | Cursor | Yes |
+| `droid` | Droid | Yes |
+| `gemini-cli` | Gemini CLI | Yes |
+| `github-copilot` | GitHub Copilot | Yes |
+| `goose` | Goose | Yes |
+| `iflow-cli` | iFlow CLI | Yes |
+| `junie` | Junie | Yes |
+| `kilo` | Kilo Code | Yes |
+| `kimi-cli` | Kimi Code CLI | Yes |
+| `kiro-cli` | Kiro CLI | Yes |
+| `kode` | Kode | Yes |
+| `mcpjam` | MCPJam | Yes |
+| `mistral-vibe` | Mistral Vibe | Yes |
+| `mux` | Mux | Yes |
+| `neovate` | Neovate | Yes |
+| `openclaw` | OpenClaw | Yes |
+| `opencode` | OpenCode | Yes |
+| `openhands` | OpenHands | Yes |
+| `pi` | Pi | Yes |
+| `pochi` | Pochi | Yes |
+| `qoder` | Qoder | Yes |
+| `qwen-code` | Qwen Code | Yes |
+| `replit` | Replit | Yes |
+| `roo` | Roo Code | Yes |
+| `trae` | Trae | Yes |
+| `trae-cn` | Trae CN | Yes |
+| `warp` | Warp | Yes |
+| `windsurf` | Windsurf | Yes |
+| `zencoder` | Zencoder | Yes |
+
+<Note>
+  All Vercel Skills-listed platforms now have full specs. The Vercel Skills list is maintained externally and may change independently of AIPkg's canonical moniker table. Platforms targeting the `ai` root moniker will work with any agent that supports the `AGENTS.md` convention.
+</Note>
+
+---
+
+## AIPkg Capability Support
+
+The [Metadata Schema](../08-metadata-schema) defines nine package capabilities that an `.aipkg` can declare. The table below maps which capabilities each platform can consume.
+
+| Capability | Description | Platforms Supporting It |
+|------------|-------------|------------------------|
+| `skill` | AI skill files (SKILL.md) | Most platforms via Agent Skills open standard |
+| `command` | Slash commands | Claude Code, Copilot, Cursor, Kode, Neovate, Pochi, Qoder, Droid |
+| `agent` | AI agent definitions | Copilot, Gemini CLI, Kiro, Trae, Droid, Kode, Mistral Vibe, Mux, Pochi, Qoder, Kimi CLI |
+| `prompt` | System prompts / templates | Continue (Prompts), Pi (Prompt Templates) |
+| `mcp-server` | MCP server configuration | All platforms with Native MCP support |
+| `lsp-server` | Language Server Protocol server | Claude Code, Copilot, Cursor, Windsurf, Zed |
+| `config` | Platform configuration files | All platforms with config file systems |
+| `hook` | Lifecycle hooks | Claude Code, Copilot, OpenClaw, Kode, Neovate (plugins) |
+| `theme` | UI theme or styling | Cursor, Windsurf, Zed |
+
+<Warning>
+  This capability matrix is a first approximation based on the platform specs. Each platform's individual spec should be consulted for detailed support information. Some capabilities may be partially supported or require platform-specific adaptations.
+</Warning>
+
+---
+
+## Platforms Needing Specs
+
+All previously identified platforms now have spec files or have been documented within existing specs:
+
+- **GitHub Copilot CLI** — Now has its own spec at [copilot-cli](platforms/copilot-cli)
+- **JetBrains Air** — Now has its own spec at [jetbrains-air](platforms/jetbrains-air)
+- **Claude Cowork** — Documented within the [Claude Desktop](platforms/claude-desktop) spec (Cowork is a mode within Claude Desktop, not a separate product)
+
+---
+
+## Plugin Ecosystems to Research
+
+<Note>
+  Several platforms maintain their own plugin/extension marketplaces and ecosystems that may interact with or complement AIPkg packages. These need further research to understand how AIPkg can integrate with or distribute through them:
+
+  - **Vercel Skills** — Open standard for agent skills (`SKILL.md`) with a CLI installer and growing registry
+  - **Windsurf MCP Marketplace** — Built-in MCP server marketplace within the Cascade panel
+  - **Goose Extensions** — Extension registry for Goose plugins
+  - **Zencoder Zen Agents Marketplace** — Open-source agent library (`zencoderai/zenagents-library`)
+  - **AdaL Plugin Marketplace** — Built-in `/plugin marketplace` for discovering and installing skills
+  - **ChatGPT GPT Store** — Public marketplace for Custom GPTs and Actions
+  - **VS Code Marketplace** — Extension distribution for Copilot, Cursor, Windsurf, Cline, Roo, Kilo Code, etc.
+  - **JetBrains Marketplace** — Plugin distribution for JetBrains AI, Junie, and Air
+  - **npm / PyPI** — Many MCP servers and CLI agents are distributed as packages
+</Note>

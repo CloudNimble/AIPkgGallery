@@ -1,0 +1,657 @@
+---
+title: 'Kiro'
+description: 'Platform specification for Kiro, Amazon''s spec-driven AI IDE'
+icon: 'code'
+---
+
+## Overview
+
+Kiro is an agentic AI IDE built on VS Code by **Amazon Web Services**, focused on spec-driven development that transforms natural-language prompts into requirements, design documents, and implementation tasks.[^1] Extensibility is via **MCP servers**, **steering files** (persistent markdown instructions), **agent hooks** (lifecycle and file-event triggers), **custom subagents**, and **agent skills** (portable instruction packages following the open `agentskills.io` standard).[^2][^3][^4][^5]
+
+---
+
+## Configuration
+
+### File Locations
+
+Kiro uses a hierarchical configuration system with JSON settings files, markdown steering files, and hook definitions.
+
+<Tabs>
+  <Tab title="IDE">
+    | File | Path | Purpose |
+    |---|---|---|
+    | MCP config (workspace) | `.kiro/settings/mcp.json` | Project-scoped MCP server definitions |
+    | MCP config (user) | `~/.kiro/settings/mcp.json` | Global MCP server definitions |
+    | Steering (workspace) | `.kiro/steering/*.md` | Project-specific instructions and conventions |
+    | Steering (global) | `~/.kiro/steering/*.md` | Instructions applied across all projects |
+    | Hooks | `.kiro/hooks/*.kiro.hook` | Automated event-driven agent triggers |
+    | Subagents (workspace) | `.kiro/agents/*.md` | Project-scoped custom subagents |
+    | Subagents (global) | `~/.kiro/agents/*.md` | Global custom subagents |
+    | Skills (workspace) | `.kiro/skills/<name>/SKILL.md` | Project-scoped agent skills |
+    | Skills (global) | `~/.kiro/skills/<name>/SKILL.md` | Global agent skills |
+  </Tab>
+  <Tab title="CLI">
+    | File | Path | Purpose |
+    |---|---|---|
+    | CLI settings | `~/.kiro/settings/cli.json` | Global CLI behavior settings |
+    | MCP config (workspace) | `.kiro/settings/mcp.json` | Project-scoped MCP server definitions |
+    | MCP config (user) | `~/.kiro/settings/mcp.json` | Global MCP server definitions |
+    | Steering (workspace) | `.kiro/steering/*.md` | Project-specific instructions |
+    | Steering (global) | `~/.kiro/steering/*.md` | Global instructions |
+    | Custom agents (workspace) | `.kiro/agents/*.json` | Project-scoped agents (JSON format) |
+    | Custom agents (global) | `~/.kiro/agents/*.json` | Global agents (JSON format) |
+    | Skills (workspace) | `.kiro/skills/<name>/SKILL.md` | Project-scoped agent skills |
+    | Skills (global) | `~/.kiro/skills/<name>/SKILL.md` | Global agent skills |
+  </Tab>
+</Tabs>
+
+### CLI Settings (`cli.json`)
+
+CLI settings are stored at `~/.kiro/settings/cli.json`. Key settings relevant to extensibility:[^6]
+
+```json
+{
+  "chat.defaultModel": "string",
+  "chat.defaultAgent": "string",
+  "chat.enableThinking": true,
+  "mcp.initTimeout": 30000,
+  "mcp.noInteractiveTimeout": 10000,
+  "knowledge.defaultIncludePatterns": ["**/*.ts", "**/*.py"],
+  "knowledge.defaultExcludePatterns": ["node_modules/**"],
+  "knowledge.maxFiles": 1000,
+  "knowledge.chunkSize": 512,
+  "telemetry.enabled": false
+}
+```
+
+### Configuration Priority
+
+Settings are resolved in the following order (highest to lowest):[^7]
+
+1. **Agent config** (inline `mcpServers` in agent JSON -- CLI only)
+2. **Workspace settings** (`.kiro/settings/`)
+3. **Global user settings** (`~/.kiro/settings/`)
+
+<Note>
+  When the same MCP server is defined across multiple levels, the highest-priority configuration completely overrides lower ones. For steering files, workspace instructions take precedence over global when conflicts exist.[^8][^9]
+</Note>
+
+---
+
+## Custom Instructions (Steering)
+
+Steering gives Kiro persistent knowledge about your workspace through markdown files. Instead of explaining conventions in every chat, steering files ensure Kiro consistently follows your established patterns, libraries, and standards.[^8]
+
+### Steering File Format
+
+Steering files are Markdown (`.md`) with optional YAML frontmatter controlling inclusion behavior:[^8]
+
+<CodeGroup>
+
+```markdown Always Included (default)
+---
+inclusion: always
+---
+
+## Code Conventions
+- Use TypeScript strict mode
+- Prefer functional patterns over classes
+- All public APIs must have JSDoc comments
+```
+
+```markdown File Match (conditional)
+---
+inclusion: fileMatch
+fileMatchPattern: "components/**/*.tsx"
+---
+
+## React Component Standards
+- Use functional components with hooks
+- Co-locate styles with components
+- Export via named exports only
+```
+
+```markdown Auto (context-aware)
+---
+inclusion: auto
+name: api-design
+description: "REST API design patterns and endpoint conventions"
+---
+
+## API Design Rules
+- Use kebab-case for URL paths
+- Always version APIs with /v1/ prefix
+```
+
+```markdown Manual (on-demand)
+---
+inclusion: manual
+---
+
+## Deployment Checklist
+- Run integration tests
+- Update changelog
+- Tag release commit
+```
+
+</CodeGroup>
+
+### Inclusion Modes
+
+| Mode | Frontmatter | Behavior |
+|---|---|---|
+| `always` | `inclusion: always` | Loaded into every interaction automatically[^8] |
+| `fileMatch` | `inclusion: fileMatch` + `fileMatchPattern` | Auto-included when working with matching files; supports glob patterns and arrays[^8] |
+| `auto` | `inclusion: auto` + `name` + `description` | Automatically included when the request matches the description; also available as a slash command[^8] |
+| `manual` | `inclusion: manual` | Referenced on-demand using `#steering-file-name` in chat or via `/` slash commands[^8] |
+
+### Foundation Steering Files
+
+Kiro can auto-generate three foundational steering files that are always included by default:[^8]
+
+- **`product.md`** -- Product purpose, target users, key features, and business objectives
+- **`tech.md`** -- Chosen frameworks, libraries, development tools, and technical constraints
+- **`structure.md`** -- File organization, naming conventions, import patterns, and architectural decisions
+
+### AGENTS.md Support
+
+Kiro supports the `AGENTS.md` standard. These files can be placed at the workspace root or in `~/.kiro/steering/` and are always included in every interaction.[^8]
+
+### File References in Steering
+
+Steering files can reference live workspace files to keep documentation synchronized with actual code:[^8]
+
+```markdown
+Refer to the API schema: #[[file:api/openapi.yaml]]
+Follow the button pattern: #[[file:components/ui/button.tsx]]
+```
+
+<Warning>
+  In the CLI, steering files are not automatically included in custom agents. You must explicitly add them via glob patterns in the agent configuration: `{"resources": ["file://.kiro/steering/**/*.md"]}`[^9]
+</Warning>
+
+---
+
+## MCP Servers
+
+Kiro connects to external tools and data sources through the Model Context Protocol. MCP servers can be configured at workspace or user scope.[^10]
+
+### Configuration Structure
+
+<CodeGroup>
+
+```json Local Server (stdio)
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@scope/mcp-server-package"],
+      "env": {
+        "API_KEY": "${API_KEY}"
+      },
+      "disabled": false,
+      "autoApprove": ["tool_name"],
+      "disabledTools": ["dangerous_tool"]
+    }
+  }
+}
+```
+
+```json Remote Server (Streamable HTTP)
+{
+  "mcpServers": {
+    "remote-api": {
+      "url": "https://mcp.example.com/sse",
+      "headers": {
+        "Authorization": "Bearer ${AUTH_TOKEN}"
+      },
+      "disabled": false,
+      "autoApprove": ["*"],
+      "disabledTools": []
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### MCP Configuration Schema
+
+**Local server fields:**[^10]
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `command` | string | Yes | Command to run the MCP server |
+| `args` | string[] | Yes | Arguments to pass to the command |
+| `env` | object | No | Environment variables; supports `${VAR}` expansion |
+| `disabled` | boolean | No | Whether the server is disabled (default: `false`) |
+| `autoApprove` | string[] | No | Tool names to auto-approve; use `"*"` for all |
+| `disabledTools` | string[] | No | Tool names to exclude from the agent |
+
+**Remote server fields:**[^10]
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `url` | string | Yes | HTTPS endpoint (HTTP accepted for localhost) |
+| `headers` | object | No | Headers to pass during connection |
+| `disabled` | boolean | No | Whether the server is disabled (default: `false`) |
+| `autoApprove` | string[] | No | Tool names to auto-approve; use `"*"` for all |
+| `disabledTools` | string[] | No | Tool names to exclude from the agent |
+
+### Configuration File Locations
+
+| Scope | Path | Behavior |
+|---|---|---|
+| Workspace | `.kiro/settings/mcp.json` | Applies to the current project only |
+| User | `~/.kiro/settings/mcp.json` | Applies globally across all workspaces |
+
+When both files exist, workspace settings take precedence over user-level settings.[^10]
+
+<Note>
+  Use environment variable references (e.g., `${API_TOKEN}`) instead of hardcoding sensitive values. Never commit configuration files with credentials to version control.[^10]
+</Note>
+
+---
+
+## Custom Agents and Subagents
+
+Kiro supports custom subagents that can be automatically selected based on task context or explicitly invoked. The configuration format differs between IDE and CLI.[^11][^12]
+
+<Tabs>
+  <Tab title="IDE (Markdown)">
+    In the IDE, custom subagents are defined as markdown files with YAML frontmatter:[^11]
+
+    ```markdown
+    ---
+    name: code-reviewer
+    description: Expert code review assistant
+    tools: ["read", "@context7"]
+    model: claude-sonnet-4
+    includeMcpJson: false
+    includePowers: false
+    ---
+
+    You are a senior code reviewer. Focus on:
+    1. Security vulnerabilities
+    2. Performance issues
+    3. Code style consistency
+    ```
+
+    **Frontmatter fields:**
+
+    | Attribute | Required | Description |
+    |---|---|---|
+    | `name` | Yes | Agent identifier (derived from filename if omitted) |
+    | `description` | No | Purpose description; used for automatic agent selection |
+    | `tools` | No | Available tools: categories (`read`, `write`, `shell`, `web`, `spec`), MCP (`@server`), specific (`@server/tool`), or wildcard (`*`) |
+    | `model` | No | LLM model to use (defaults to current chat model) |
+    | `includeMcpJson` | No | Enable all configured MCP tools (default: `false`) |
+    | `includePowers` | No | Enable all Powers MCP tools (default: `false`) |
+  </Tab>
+  <Tab title="CLI (JSON)">
+    In the CLI, custom agents are JSON files where the filename (without `.json`) becomes the agent name:[^12]
+
+    ```json
+    {
+      "name": "backend-agent",
+      "description": "Backend API development specialist",
+      "prompt": "You are a backend development expert.",
+      "model": "claude-sonnet-4",
+      "tools": ["read", "write", "shell", "@database"],
+      "mcpServers": {
+        "database": {
+          "command": "npx",
+          "args": ["-y", "@bytebase/dbhub"],
+          "env": { "DSN": "${DATABASE_URL}" }
+        }
+      },
+      "resources": [
+        "file://.kiro/steering/**/*.md",
+        "skill://api-design"
+      ],
+      "hooks": {
+        "preToolUse": [
+          {
+            "matcher": "write",
+            "command": "./scripts/validate-schema.sh"
+          }
+        ]
+      },
+      "allowedTools": ["read", "write", "@database/*"],
+      "availableAgents": ["test-runner", "docs-writer"],
+      "trustedAgents": ["test-runner"]
+    }
+    ```
+
+    The CLI agent JSON supports `prompt` as inline text or `file://` URIs to reference external files.[^12]
+  </Tab>
+</Tabs>
+
+### Agent Scopes
+
+| Scope | IDE Path | CLI Path | Behavior |
+|---|---|---|---|
+| Global | `~/.kiro/agents/*.md` | `~/.kiro/agents/*.json` | Available from any directory |
+| Workspace | `.kiro/agents/*.md` | `.kiro/agents/*.json` | Project-specific; only available in that workspace |
+
+If both locations define an agent with the same name, the workspace agent takes precedence.[^11][^12]
+
+---
+
+## Agent Skills
+
+Agent Skills are modular instruction packages following the open `agentskills.io` standard. Skills teach the agent new capabilities using progressive disclosure -- only loading full instructions when relevant.[^5]
+
+### Skill Directory Structure
+
+```
+skill-name/
+├── SKILL.md           # Required: frontmatter + instructions
+├── scripts/           # Optional: executable code
+├── references/        # Optional: documentation files
+└── assets/            # Optional: templates and resources
+```
+
+### SKILL.md Format
+
+```yaml
+---
+name: deploy-aws
+description: "AWS deployment workflow using CDK and CloudFormation"
+license: MIT
+compatibility: "Requires AWS CLI v2 and Node.js 18+"
+metadata:
+  author: team-name
+  version: "1.0.0"
+---
+
+## Deployment Steps
+
+1. Run `cdk synth` to generate CloudFormation template
+2. Review the diff with `cdk diff`
+3. Deploy with `cdk deploy --require-approval broadening`
+4. Verify stack outputs and update environment configs
+```
+
+**Frontmatter schema:**[^5]
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Must match folder name. Lowercase, numbers, hyphens only (max 64 chars) |
+| `description` | Yes | When to use this skill. Kiro matches this against requests (max 1024 chars) |
+| `license` | No | License reference or bundled file name |
+| `compatibility` | No | Environment requirements (e.g., required tools, network access) |
+| `metadata` | No | Additional key-value data like author or version |
+
+### Skill Scopes
+
+| Scope | Path | Behavior |
+|---|---|---|
+| Workspace | `.kiro/skills/<name>/SKILL.md` | Project-specific; overrides global skills with matching names |
+| Global | `~/.kiro/skills/<name>/SKILL.md` | Available across all workspaces |
+
+### Skills vs. Steering vs. Powers
+
+| Mechanism | Format | Activation | Best for |
+|---|---|---|---|
+| **Steering** | Kiro-specific markdown | `always`, `auto`, `fileMatch`, `manual` modes | Project standards and conventions |
+| **Powers** | MCP server + docs bundle | Dynamic, keyword-based context activation | Integrations needing both tools and guidance |
+| **Skills** | Portable `agentskills.io` packages | On-demand; progressive disclosure | Reusable workflows to share or import |
+
+<Note>
+  Skills use progressive disclosure: at startup, Kiro only loads the name and description. Full instructions, scripts, and references load on-demand when the agent determines the skill is relevant or when you explicitly invoke it via `/skill-name`.[^5]
+</Note>
+
+---
+
+## Hooks System
+
+Hooks are automated triggers that execute agent prompts or shell commands when specific events occur. The IDE and CLI have different hook formats.[^3][^13]
+
+<Tabs>
+  <Tab title="IDE Hooks">
+    IDE hooks are stored as `.kiro.hook` JSON files in `.kiro/hooks/`:[^14][^15]
+
+    ```json
+    {
+      "enabled": true,
+      "name": "Auto-generate Tests",
+      "description": "Generate unit tests when source files are created",
+      "version": "1",
+      "when": {
+        "type": "fileCreated",
+        "patterns": ["src/**/*.ts"]
+      },
+      "then": {
+        "type": "askAgent",
+        "prompt": "Generate comprehensive unit tests for the newly created file: {{filePath}}"
+      }
+    }
+    ```
+
+    **IDE hook event types:**[^4]
+
+    | Event | Trigger |
+    |---|---|
+    | `fileCreated` | New files matching patterns are created |
+    | `fileSaved` | Files matching patterns are saved |
+    | `fileDeleted` | Files matching patterns are deleted |
+    | `promptSubmit` | User submits a prompt |
+    | `agentStop` | Agent completes its turn |
+    | `preToolUse` | Before a tool is invoked (can block) |
+    | `postToolUse` | After a tool is invoked |
+    | `preTaskExecution` | Before a spec task begins |
+    | `postTaskExecution` | After a spec task completes |
+    | `manual` | Manually triggered via UI |
+
+    **Action types:**
+
+    | Type | Description |
+    |---|---|
+    | `askAgent` | Sends a prompt to the AI agent |
+    | `runCommand` | Executes a shell command or script |
+  </Tab>
+  <Tab title="CLI Hooks">
+    CLI hooks are defined in the agent configuration JSON file under the `hooks` field:[^13]
+
+    ```json
+    {
+      "hooks": {
+        "agentSpawn": [
+          { "command": "./scripts/setup-env.sh" }
+        ],
+        "userPromptSubmit": [
+          { "command": "./scripts/log-prompt.sh" }
+        ],
+        "preToolUse": [
+          {
+            "matcher": "write",
+            "command": "./scripts/validate-write.sh",
+            "timeout_ms": 5000
+          }
+        ],
+        "postToolUse": [
+          {
+            "matcher": "@mcp.*sql.*",
+            "command": "./scripts/audit-sql.sh"
+          }
+        ],
+        "stop": [
+          { "command": "./scripts/cleanup.sh" }
+        ]
+      }
+    }
+    ```
+
+    **CLI hook event types:**[^13]
+
+    | Event | Trigger | Matcher Support |
+    |---|---|---|
+    | `agentSpawn` | Agent activation | No |
+    | `userPromptSubmit` | User submits prompt | No |
+    | `preToolUse` | Before tool execution | Yes |
+    | `postToolUse` | After tool execution | Yes |
+    | `stop` | Agent finishes responding | No |
+
+    **Tool matcher syntax:**[^13]
+
+    | Pattern | Matches |
+    |---|---|
+    | `"write"` or `"fs_write"` | File write tools (canonical or alias) |
+    | `"shell"` or `"execute_bash"` | Shell command tools |
+    | `"@serverName"` | All tools from an MCP server |
+    | `"@serverName/toolName"` | Specific MCP server tool |
+    | `"@builtin"` | All built-in tools |
+    | `"*"` | All tools |
+    | `"@mcp.*sql.*"` | Regex pattern matching |
+  </Tab>
+</Tabs>
+
+### Hook Exit Codes (CLI)
+
+| Exit Code | Effect |
+|---|---|
+| `0` | Success; STDOUT captured |
+| `2` | `preToolUse` only: blocks tool execution; STDERR returned to the LLM |
+| Other | Failure; STDERR shown as warning |
+
+### Hook Input Format (CLI)
+
+CLI hooks receive JSON via STDIN with context about the triggering event:[^13]
+
+```json
+{
+  "hook_event_name": "PreToolUse",
+  "cwd": "/path/to/project",
+  "tool_name": "fs_write",
+  "tool_input": { "path": "src/index.ts", "content": "..." }
+}
+```
+
+For `postToolUse`, a `tool_response` field is additionally included.
+
+<Warning>
+  Global hooks (`~/.kiro/hooks/`) are not currently supported. Hooks are workspace-scoped only. There is an open feature request to add global hook support with the same merge/override logic as steering files.[^16]
+</Warning>
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Kiro platform.
+
+### Configuration File Paths
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    - **CLI settings**: `~/.kiro/settings/cli.json`
+    - **User MCP config**: `~/.kiro/settings/mcp.json`
+    - **User steering**: `~/.kiro/steering/*.md`
+    - **User agents (IDE)**: `~/.kiro/agents/*.md`
+    - **User agents (CLI)**: `~/.kiro/agents/*.json`
+    - **User skills**: `~/.kiro/skills/<name>/SKILL.md`
+    - **Project MCP config**: `<project>/.kiro/settings/mcp.json`
+    - **Project steering**: `<project>/.kiro/steering/*.md`
+    - **Project hooks**: `<project>/.kiro/hooks/*.kiro.hook`
+    - **Project agents (IDE)**: `<project>/.kiro/agents/*.md`
+    - **Project agents (CLI)**: `<project>/.kiro/agents/*.json`
+    - **Project skills**: `<project>/.kiro/skills/<name>/SKILL.md`
+  </Tab>
+</Tabs>
+
+### Installing MCP Server Extensions
+
+To programmatically register an MCP server, merge the server definition into the appropriate `mcp.json` file:
+
+<Tabs>
+  <Tab title="User Scope">
+    Write or merge into `~/.kiro/settings/mcp.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "${API_KEY}"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Project Scope">
+    Write or merge into `<project>/.kiro/settings/mcp.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "package-server": {
+          "command": "npx",
+          "args": ["-y", "@scope/mcp-server-package"],
+          "env": {
+            "API_KEY": "${API_KEY}"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Installing Skills
+
+To install a skill, create the skill directory and `SKILL.md` file:
+
+<Steps>
+  <Step title="Create skill directory">
+    Create the directory at either the project or global scope:
+    - **Project**: `.kiro/skills/<skill-name>/`
+    - **Global**: `~/.kiro/skills/<skill-name>/`
+  </Step>
+  <Step title="Write SKILL.md">
+    Create `SKILL.md` with the required frontmatter (`name` and `description`) and instruction content in markdown.
+  </Step>
+  <Step title="Add supporting files (optional)">
+    Add any scripts to `scripts/`, reference docs to `references/`, or templates to `assets/` within the skill directory.
+  </Step>
+</Steps>
+
+### Installing Steering Files
+
+To install project-level instructions, write a markdown file to `<project>/.kiro/steering/`. Set the `inclusion` frontmatter to control when the file is loaded. If no frontmatter is provided, the file defaults to `always` inclusion.[^8]
+
+### Installing Hooks (IDE)
+
+To install a hook, write a `.kiro.hook` JSON file to `<project>/.kiro/hooks/`. The file must include `when` (trigger type and patterns) and `then` (action type and prompt or command) blocks.[^14]
+
+### Key Considerations
+
+- MCP config files use standard JSON with a top-level `mcpServers` object; merge carefully to avoid overwriting existing server entries
+- Environment variables use `${VAR}` syntax in MCP config and are expanded at runtime[^10]
+- Workspace-scoped settings always override global settings when both exist[^10]
+- Skills follow the open `agentskills.io` standard and are portable across tools that support this format[^5]
+- The CLI uses JSON for agent definitions while the IDE uses Markdown; installers should target the appropriate format
+- Hooks are workspace-scoped only (no global hooks directory support)[^16]
+
+---
+
+## Footnotes
+
+[^1]: https://kiro.dev/
+[^2]: https://www.infoq.com/news/2025/08/aws-kiro-spec-driven-agent/
+[^3]: https://kiro.dev/docs/hooks/
+[^4]: https://kiro.dev/docs/hooks/types/
+[^5]: https://kiro.dev/docs/skills/
+[^6]: https://kiro.dev/docs/cli/reference/settings/
+[^7]: https://kiro.dev/docs/cli/mcp/configuration/
+[^8]: https://kiro.dev/docs/steering/
+[^9]: https://kiro.dev/docs/cli/steering/
+[^10]: https://kiro.dev/docs/mcp/configuration/
+[^11]: https://kiro.dev/docs/chat/subagents/
+[^12]: https://kiro.dev/docs/cli/custom-agents/configuration-reference/
+[^13]: https://kiro.dev/docs/cli/hooks/
+[^14]: https://github.com/awsdataarchitect/kiro-best-practices/blob/main/.kiro/hooks/lint-and-format-on-save.kiro.hook
+[^15]: https://kiro.dev/blog/automate-your-development-workflow-with-agent-hooks/
+[^16]: https://github.com/kirodotdev/Kiro/issues/5440
