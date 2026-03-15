@@ -1,0 +1,361 @@
+---
+title: 'Command Code'
+description: 'Platform specification for Command Code, an AI coding agent'
+icon: 'terminal'
+---
+
+[Command Code](https://commandcode.ai/) is a terminal-based AI coding agent developed by **Langbase** (rebranded as CommandCodeAI) that continuously learns individual coding preferences using `taste-1`, a meta neuro-symbolic AI model with continuous reinforcement learning.[^1][^2]
+
+---
+
+## Configuration
+
+### File Locations
+
+Command Code uses a `.commandcode/` directory structure for project-level and user-level configuration. There is no single settings JSON file documented; configuration is managed through the taste system, skills directories, MCP config files, and the `AGENTS.md` custom instructions file.[^3][^4]
+
+| File / Directory | Path | Purpose |
+|---|---|---|
+| Project custom instructions | `./AGENTS.md` or `./.commandcode/AGENTS.md` | Team-shared project instructions (commit to Git) |
+| User custom instructions | `~/.commandcode/AGENTS.md` | Personal preferences for all projects |
+| Project taste | `.commandcode/taste/` | Learned coding preferences for the project |
+| Global taste | `~/.commandcode/taste/` | Personal taste packages across all projects |
+| Project skills | `.commandcode/skills/` | Project-specific skill definitions |
+| Global skills | `~/.commandcode/skills/` | User-level skill definitions |
+| MCP (local scope) | `~/.commandcode/projects/<slug>/mcp.json` | Private per-project MCP config |
+| MCP (project scope) | `.mcp.json` (project root) | Shared, version-controlled MCP config |
+| MCP (user scope) | `~/.commandcode/mcp.json` | Private cross-project MCP config |
+
+<Note>
+  When duplicate MCP server names exist across scopes, `local` overrides `project`, which overrides `user`.[^5]
+</Note>
+
+---
+
+## Custom Instructions (AGENTS.md)
+
+Command Code uses an `AGENTS.md` file as its custom instructions mechanism. This file contains instructions that customize Command Code's behavior for a specific project or globally.[^4]
+
+<Tabs>
+  <Tab title="Project-level">
+    Place `AGENTS.md` in the project root or inside `.commandcode/`:
+    - `./AGENTS.md`
+    - `./.commandcode/AGENTS.md`
+
+    These are intended to be committed to Git and shared with the team.
+  </Tab>
+  <Tab title="User-level">
+    Place `AGENTS.md` in the global config directory:
+    - `~/.commandcode/AGENTS.md`
+
+    These apply personal preferences across all projects.
+  </Tab>
+</Tabs>
+
+### Initialization
+
+Use the `/init` slash command to create an `AGENTS.md` file with a starter template. The default template includes sections for project overview, code style guidelines, architecture notes, and common workflows.[^4]
+
+Use the `/memory` slash command to open a selector for editing existing memory files (project or user).[^4]
+
+---
+
+## Taste System
+
+Taste is Command Code's proprietary continuous learning system. It observes how you interact with suggestions -- every accept, reject, and edit becomes a signal that shapes a personalized taste profile. Learnings are stored with confidence scores, and rules decay over time but compound with usage.[^3][^6]
+
+### Taste File Structure
+
+Learnings are automatically stored in `.commandcode/taste/taste.md` with confidence scores. As the profile grows, learnings automatically split into multiple files and folders by category (e.g., `cli/`, `typescript/`, `architecture/`).[^2]
+
+### Taste CLI Commands
+
+<CodeGroup>
+
+```bash Push taste
+# Push entire project taste to remote
+npx taste push --all
+
+# Push a single package
+npx taste push cli
+
+# Save a package to global storage
+npx taste push cli -g
+```
+
+```bash Pull taste
+# Pull project taste from remote
+npx taste pull username/project-name
+
+# Pull a package from global storage
+npx taste pull cli -g
+```
+
+```bash Management
+# List all available packages
+npx taste list
+
+# Validate package format and structure
+npx taste lint
+
+# Open packages in default editor
+npx taste open
+```
+
+</CodeGroup>
+
+<Note>
+  `cmd taste` and `npx taste` are equivalent when Command Code is installed globally. The `-g` flag operates on global packages at `~/.commandcode/taste/`. Remote storage is at `commandcode.ai/username/taste`.[^7]
+</Note>
+
+---
+
+## MCP Servers
+
+Command Code implements the Model Context Protocol (MCP) to connect with external tools and services. It supports both stdio (local) and HTTP (remote) transports.[^5][^8]
+
+### Adding MCP Servers
+
+<Tabs>
+  <Tab title="HTTP (Remote)">
+    ```bash
+    cmd mcp add --transport http <name> <url>
+    ```
+
+    Example with Notion:
+    ```bash
+    cmd mcp add --transport http notion https://mcp.notion.com/mcp
+    ```
+  </Tab>
+  <Tab title="Stdio (Local)">
+    Use `--` to separate the server name from the command:
+    ```bash
+    cmd mcp add <name> -- <command> [args...]
+    ```
+
+    Example with Playwright:
+    ```bash
+    cmd mcp add playwright -- npx -y @playwright/mcp@latest
+    ```
+  </Tab>
+  <Tab title="JSON Configuration">
+    For complex setups, use `add-json` with support for environment variable resolution:
+    ```bash
+    cmd mcp add-json <name> '<json>'
+    ```
+
+    The JSON format accepts `type` as an alias for `transport`.
+  </Tab>
+</Tabs>
+
+### CLI Flags
+
+| Flag | Description | Default |
+|---|---|---|
+| `-t, --transport` | Transport type: `stdio` or `http` | `stdio` |
+| `-s, --scope` | Storage location: `local`, `project`, or `user` | `local` |
+| `-e, --env` | Environment variables (repeatable) | -- |
+| `-H, --header` | HTTP headers (repeatable, http only) | -- |
+
+<Warning>
+  All flags must precede the server name. The `--` separator is required for stdio commands.[^5]
+</Warning>
+
+### MCP Management Commands
+
+```bash
+# List all configured servers
+cmd mcp list
+
+# Show details for a specific server
+cmd mcp get <name>
+
+# Remove a server
+cmd mcp remove <name>
+
+# Authenticate via OAuth
+cmd mcp auth <server>
+
+# Check authentication status
+cmd mcp auth --status <server>
+
+# List servers with stored tokens
+cmd mcp auth --list
+
+# Clear stored tokens
+cmd mcp auth --clear <server>
+
+# Import from Claude Desktop
+cmd mcp add-from-claude-desktop
+```
+
+### Interactive Management
+
+Type `/mcp` within a Command Code session to access the interactive MCP manager, which displays connection status, authentication state, tool counts, and available actions.[^8]
+
+### Tool Naming Convention
+
+Connected MCP tools follow the naming convention `mcp__<server>__<tool>`. Command Code automatically discovers and invokes tools based on natural language descriptions.[^5]
+
+---
+
+## Skills
+
+Skills are customizable, reusable workflows that teach Command Code specialized knowledge about how to perform specific tasks. Skills encode *what* to do; taste teaches *how you* do it.[^9][^10]
+
+### Skill Directory Structure
+
+```
+skill-name/
+├── SKILL.md          # Required: Instructions and metadata
+├── scripts/          # Optional: Executable code
+├── references/       # Optional: Additional documentation
+└── assets/           # Optional: Static resources
+```
+
+### SKILL.md Format
+
+Each skill requires a `SKILL.md` file with YAML frontmatter followed by markdown instructions:[^9]
+
+```yaml
+---
+name: code-review
+description: Perform thorough code reviews checking for bugs, security issues, and best practices
+---
+
+# Code Review
+
+## When to use this skill
+- When reviewing pull requests
+- When auditing code quality
+
+## Instructions
+1. Check for common bug patterns
+2. Verify security best practices
+3. Review error handling
+...
+```
+
+### Frontmatter Fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Max 64 characters, lowercase with hyphens only, no leading/trailing hyphens |
+| `description` | Yes | Max 1024 characters, explains purpose and activation triggers |
+| `license` | No | License name or reference file |
+| `compatibility` | No | Max 500 characters, describes dependencies (packages, tools, network access) |
+| `metadata` | No | Key-value pairs (author, version, etc.) |
+| `allowed-tools` | No | Space-delimited list of pre-approved tools the skill may use |
+
+<Note>
+  Keep the main `SKILL.md` under 500 lines. Move detailed reference material to separate files in the `references/` directory.[^9]
+</Note>
+
+### Skill Locations
+
+<Tabs>
+  <Tab title="Project-level">
+    ```
+    .commandcode/skills/[skill-name]/SKILL.md
+    ```
+    Scoped to the specific project.
+  </Tab>
+  <Tab title="User-level (Global)">
+    ```
+    ~/.commandcode/skills/[skill-name]/SKILL.md
+    ```
+    Available across all projects.
+  </Tab>
+</Tabs>
+
+### Progressive Disclosure
+
+Skills use a three-phase loading strategy to manage context efficiently:[^9]
+
+<Steps>
+  <Step title="Discovery">
+    At startup, only the skill `name` and `description` are loaded (~100 tokens per skill).
+  </Step>
+  <Step title="Activation">
+    When a task matches a skill's description, the full `SKILL.md` is read into context.
+  </Step>
+  <Step title="Execution">
+    The agent follows the instructions and optionally loads referenced files from `scripts/`, `references/`, or `assets/`.
+  </Step>
+</Steps>
+
+### Skill Management
+
+Use the `/skills` slash command to browse, create, edit, and organize available skills. Command Code automatically detects and activates relevant skills based on the current task.[^9][^10]
+
+<Note>
+  Command Code fully implements the Agent Skills open standard, making skills portable across compatible agents.[^9]
+</Note>
+
+---
+
+## Hooks / Lifecycle Events
+
+No hooks or lifecycle event system has been documented for Command Code as of March 2026. The checkpoint system provides automatic file state snapshots before modifications, accessible via the `/rewind` command or pressing Esc twice, but this is a rollback mechanism rather than a programmable hook system.[^11]
+
+---
+
+## Installation Provider Notes
+
+<Steps>
+  <Step title="Install Command Code globally">
+    ```bash
+    npm i -g command-code
+    ```
+    The CLI is invoked as `cmd`. The npm package name is `command-code` (also aliased as `cmd`).[^1][^2]
+  </Step>
+  <Step title="Install skills to project or global path">
+    Skills are installed by creating the appropriate directory structure:
+
+    **Project path:**
+    ```bash
+    mkdir -p .commandcode/skills/<skill-name>
+    # Place SKILL.md in the directory
+    ```
+
+    **Global path:**
+    ```bash
+    mkdir -p ~/.commandcode/skills/<skill-name>
+    # Place SKILL.md in the directory
+    ```
+
+    No package manager integration or `cmd install` command is documented for skill installation. Skills are file-based and detected automatically.[^9][^10]
+  </Step>
+  <Step title="Configure MCP servers programmatically">
+    MCP servers can be added non-interactively via the CLI:
+    ```bash
+    cmd mcp add --scope project --transport http <name> <url>
+    cmd mcp add --scope project <name> -- <command> [args...]
+    ```
+
+    Alternatively, edit the relevant `mcp.json` file directly at the appropriate scope path.[^5][^8]
+  </Step>
+  <Step title="Set up custom instructions">
+    Create an `AGENTS.md` file in the project root or use the `/init` command within a session to generate a starter template.[^4]
+  </Step>
+</Steps>
+
+<Warning>
+  Command Code is currently in beta. Some features may change, and the documentation notes to expect rough edges and occasional bugs.[^2]
+</Warning>
+
+---
+
+## Footnotes
+
+[^1]: https://commandcode.ai/
+[^2]: https://github.com/CommandCodeAI/command-code
+[^3]: https://commandcode.ai/docs
+[^4]: https://commandcode.ai/docs/core-concepts/memory
+[^5]: https://commandcode.ai/docs/mcp
+[^6]: https://commandcode.ai/docs/taste
+[^7]: https://commandcode.ai/docs/taste/commands
+[^8]: https://commandcode.ai/docs/mcp/quickstart
+[^9]: https://commandcode.ai/docs/skills
+[^10]: https://github.com/CommandCodeAI/agent-skills
+[^11]: https://commandcode.ai/docs/core-concepts/checkpoints
