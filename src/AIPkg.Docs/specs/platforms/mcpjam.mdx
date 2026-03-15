@@ -1,0 +1,209 @@
+---
+title: 'MCPJam'
+description: 'Platform specification for MCPJam, an MCP-focused AI coding platform'
+icon: 'plug'
+---
+
+## Overview
+
+[MCPJam](https://www.mcpjam.com/) is an open-source MCP server testing, debugging, and development platform by **MCPJam Inc.**, originally forked from the official `@modelcontextprotocol/inspector`.[^1] It provides a local inspector with an LLM playground, OAuth debugger, ChatGPT Apps SDK support, and a skills viewer for pairing agent skills with MCP servers.[^2]
+
+---
+
+## Configuration
+
+### File Locations
+
+MCPJam uses a JSON configuration file for MCP server definitions, passed via CLI flag. Skills are discovered from conventional directory paths.
+
+| File | Path | Purpose |
+|---|---|---|
+| MCP server config | User-specified via `--config path/to/config.json` | Multi-server connection definitions [^3] |
+| Project skills | `.mcpjam/skills/<name>/SKILL.md` | Project-scoped skill definitions [^4] |
+| Global skills | `~/.mcpjam/skills/<name>/SKILL.md` | User-scoped skill definitions [^4] |
+
+<Note>
+  MCPJam also discovers skills from other platforms' directories, including `~/.claude/skills/`, `~/.agents/skills/`, `./.claude/skills/`, and `./.agents/skills/`.[^4]
+</Note>
+
+### MCP Server Configuration Schema
+
+Server connections are defined in a JSON configuration file under the `mcpServers` key. The file is loaded with the `--config` CLI flag.[^3]
+
+<CodeGroup>
+
+```json STDIO Server
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-everything"],
+      "env": {
+        "HELLO": "Hello MCP!"
+      }
+    }
+  }
+}
+```
+
+```json HTTP Server with OAuth
+{
+  "mcpServers": {
+    "remote-server": {
+      "url": "https://mcp.example.com/sse",
+      "headers": {
+        "X-Custom-Header": "value"
+      },
+      "useOAuth": true,
+      "oauthScopes": ["read", "write"]
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+Each server entry supports the following fields:[^3]
+
+| Field | Type | Description |
+|---|---|---|
+| `command` | `string` | Command to execute (STDIO servers) |
+| `args` | `string[]` | Command arguments |
+| `env` | `Record<string, string>` | Environment variables |
+| `url` | `string` | Server URL (HTTP/SSE servers) |
+| `headers` | `Record<string, string>` | Custom HTTP headers |
+| `useOAuth` | `boolean` | Enable OAuth authentication flow |
+| `oauthScopes` | `string[]` | OAuth scopes to request |
+
+### CLI Options
+
+| Option | Description |
+|---|---|
+| `--port [number]` | Set custom port (default: 6274) |
+| `--config [path]` | Load MCP server configuration file |
+| `--server [name]` | Specify which server from config to launch |
+| `--ollama [model]` | Launch with Ollama model integration |
+| `--verbose` / `-v` | Enable HTTP request logging |
+
+### Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `OAUTH_CLIENT_NAME` | OAuth client display name |
+| `OAUTH_REDIRECT_URI` | OAuth redirect URI |
+| `MCP_CONNECTION_TIMEOUT` | Connection timeout override |
+
+<Note>
+  MCPJam supports three MCP transport protocols: STDIO, SSE, and Streamable HTTP.[^3]
+</Note>
+
+---
+
+## MCP Server Instructions
+
+MCPJam supports the MCP specification's `instructions` field, which allows servers to provide contextual guidance to LLMs during the initialization handshake.[^5] These instructions are loaded when the client first connects to a server and typically get injected into the LLM context as system-level prompts.
+
+Server instructions should include:[^5]
+- What the server does (brief overview)
+- Key capabilities and main tools
+- Important constraints or limitations
+- Usage patterns for tool/resource interdependencies
+- Performance characteristics and behavior expectations
+
+---
+
+## Skills
+
+Skills are markdown-based workflow definitions stored as folders containing a `SKILL.md` file.[^4][^6] They provide contextual instructions to the agent, complementing MCP servers which provide tools.
+
+### Skills + MCP Pairing
+
+MCPJam promotes using skills alongside MCP servers -- skills teach the agent _how_ to use MCP tools effectively.[^4] For example, a Figma skill teaches the agent how to use the Figma MCP connector to apply design system rules.
+
+### Skills Discovery
+
+MCPJam discovers skills from multiple directory conventions:[^4]
+
+<Tabs>
+  <Tab title="Project-scoped">
+    - `.mcpjam/skills/<name>/SKILL.md`
+    - `.claude/skills/<name>/SKILL.md`
+    - `.agents/skills/<name>/SKILL.md`
+  </Tab>
+  <Tab title="Global">
+    - `~/.mcpjam/skills/<name>/SKILL.md`
+    - `~/.claude/skills/<name>/SKILL.md`
+    - `~/.agents/skills/<name>/SKILL.md`
+  </Tab>
+</Tabs>
+
+### Skill Structure
+
+A skill uses progressive disclosure to load resources dynamically rather than pre-loading everything into the context window.[^6] A typical skill folder contains:
+
+| File | Purpose |
+|---|---|
+| `SKILL.md` | Main instructions and metadata |
+| `FORMS.md`, `REFERENCE.md` | Additional detailed guidance (optional) |
+| `scripts/` | Executable tools referenced by the skill (optional) |
+
+### Testing Skills
+
+MCPJam's LLM playground allows testing skills paired with MCP servers. Skills can be contextually fetched (auto-loaded into chat) or deterministically injected via a `/` slash command.[^4]
+
+---
+
+## Workspaces
+
+Workspaces act as organizational containers for grouping MCP server connections by function, team, or custom preference.[^7] A default workspace is created automatically on first launch. Workspaces can be shared with team members, though sensitive information such as access tokens and environment variables are excluded from shared data.[^7]
+
+---
+
+## Custom Instructions
+
+<Warning>
+  MCPJam does not appear to have a dedicated custom instructions or rules file system (such as a `RULES.md` or `.mcpjam/instructions` file). Instructions are delivered through MCP server instructions at the protocol level and through skills at the application level.[^4][^5]
+</Warning>
+
+---
+
+## Hooks
+
+<Warning>
+  No public documentation was found describing a hooks or lifecycle events system in MCPJam. MCPJam's extensibility is currently centered on MCP server configuration, skills, and workspaces rather than lifecycle hooks.[^1][^2]
+</Warning>
+
+---
+
+## Installation Provider Notes
+
+<Steps>
+  <Step title="Identify install paths">
+    Skills should be installed to:
+    - **Project path:** `.mcpjam/skills/`
+    - **Global path:** `~/.mcpjam/skills/`
+
+    Each skill is a folder containing at minimum a `SKILL.md` file.[^4]
+  </Step>
+  <Step title="MCP server registration">
+    MCPJam does not use a persistent global MCP config file like other platforms. Instead, server definitions are passed via a JSON config file using `--config`.[^3] Programmatic registration would involve writing or modifying this JSON file and restarting the inspector with the updated path.
+  </Step>
+  <Step title="Config file format">
+    The config file uses the `mcpServers` key with named server entries. The schema is compatible with the standard MCP client configuration format used across the ecosystem.[^3]
+  </Step>
+  <Step title="Limitations">
+    MCPJam is primarily an inspector and testing tool rather than a persistent coding agent. It does not maintain a long-lived global configuration directory in the way that Claude Code or Cursor do. Skill installation is file-based, and MCP server configuration is session-based via CLI flags.[^1][^3]
+  </Step>
+</Steps>
+
+---
+
+## Footnotes
+
+[^1]: https://github.com/MCPJam/inspector
+[^2]: https://www.mcpjam.com/
+[^3]: https://docs.mcpjam.com/installation
+[^4]: https://www.mcpjam.com/blog/skills
+[^5]: https://www.mcpjam.com/blog/server-instructions
+[^6]: https://www.mcpjam.com/blog/claude-agent-skills
+[^7]: https://www.mcpjam.com/blog/workspaces
