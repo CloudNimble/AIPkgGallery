@@ -4,8 +4,6 @@ description: Platform specification for OpenCode, the open-source terminal-nativ
 icon: terminal
 ---
 
-## Overview
-
 [OpenCode](https://opencode.ai/) is an open-source, terminal-native AI coding agent developed by **Anomaly** that provides a rich TUI, web interface, and IDE extension. It is extensible through custom agents, MCP servers (local and remote), plugins, AGENTS.md instruction files, and JSON-based configuration.
 
 ---
@@ -60,32 +58,12 @@ Settings are resolved in the following order (earliest to latest, with later sou
 ```json Basic Configuration
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "anthropic/claude-sonnet-4-5",
-  "small_model": "anthropic/claude-haiku-3-5",
   "default_agent": "build",
   "autoCompact": true,
-  "share": "manual",
   "instructions": [
     "docs/guidelines.md",
     "packages/*/AGENTS.md"
   ]
-}
-```
-
-```json Provider Configuration
-{
-  "provider": {
-    "anthropic": {
-      "apiKey": "{env:ANTHROPIC_API_KEY}",
-      "disabled": false
-    },
-    "openai": {
-      "apiKey": "{env:OPENAI_API_KEY}",
-      "disabled": false
-    }
-  },
-  "disabled_providers": ["groq"],
-  "enabled_providers": ["anthropic", "openai"]
 }
 ```
 
@@ -413,16 +391,6 @@ Alternatively, use the `instructions` field in `opencode.json` to reference addi
   OpenCode supports `CLAUDE.md` as a fallback for `AGENTS.md`. If the project already has a `CLAUDE.md` file, OpenCode will use it. However, `AGENTS.md` takes precedence when both exist.
 </Note>
 
-### API Key Management
-
-API keys can be configured via:
-
-- **Environment variables** (e.g., `ANTHROPIC_API_KEY`) -- recommended for CI/CD and programmatic use
-- **`opencode.json` config** using `{env:VAR_NAME}` substitution syntax
-- **Interactive login** via `opencode auth login`
-
-An installer should prefer setting environment variables or using the `{env:VAR_NAME}` syntax in config files rather than embedding raw keys.
-
 ### Config File Format
 
 OpenCode uses JSON/JSONC for configuration. The installer must:
@@ -431,7 +399,7 @@ OpenCode uses JSON/JSONC for configuration. The installer must:
 2. Deep-merge new configuration (particularly the `mcp` map) into the existing structure
 3. Write the result back, preserving existing entries
 
-The `mcp` key is the primary integration point for MCP server packages. Provider settings go under the `provider` key. The `$schema` field (`"https://opencode.ai/config.json"`) should be preserved or added for IDE validation support.
+The `mcp` key is the primary integration point for MCP server packages. The `$schema` field (`"https://opencode.ai/config.json"`) should be preserved or added for IDE validation support.
 
 ### Tool Permissions
 

@@ -4,9 +4,7 @@ description: Platform specification for Codex CLI, OpenAI's open-source terminal
 icon: terminal
 ---
 
-## Overview
-
-[Codex CLI](https://github.com/openai/codex) is an open-source terminal coding agent developed by **OpenAI**, built in Rust under the Apache 2.0 license. It is extensible through AGENTS.md instruction files, MCP server integration (both as client and server), TOML-based layered configuration with named profiles, and support for custom model providers.
+[Codex CLI](https://github.com/openai/codex) is an open-source terminal coding agent developed by **OpenAI**, built in Rust under the Apache 2.0 license. It is extensible through AGENTS.md instruction files, MCP server integration (both as client and server), and TOML-based layered configuration with named profiles.
 
 ---
 
@@ -54,40 +52,10 @@ Settings are resolved in the following order (highest to lowest):
 
 <CodeGroup>
 
-```toml Basic Configuration
-# Model selection
-model = "gpt-5.4"
-model_reasoning_effort = "medium"   # "low" | "medium" | "high"
-
-# Approval and sandbox
-approval_policy = "on-request"      # "untrusted" | "on-request" | "never"
-sandbox_mode = "workspace-write"    # "read-only" | "workspace-write" | "danger-full-access"
-
-# Communication style
-personality = "pragmatic"           # "friendly" | "pragmatic" | "none"
-
-# Web search
-web_search = "cached"               # "cached" | "live" | "disabled"
-
-# AGENTS.md tuning
+```toml AGENTS.md Tuning
 project_doc_max_bytes = 65536
 project_doc_fallback_filenames = ["TEAM_GUIDE.md", ".agents.md"]
 project_root_markers = [".git", ".hg", ".sl"]
-```
-
-```toml Profiles
-# Named profiles for switching configurations
-[profiles.fast]
-model = "gpt-5-codex-mini"
-model_reasoning_effort = "low"
-
-[profiles.thorough]
-model = "gpt-5.4"
-model_reasoning_effort = "high"
-
-[profiles.local]
-model = "gpt-oss:20b"
-model_provider = "oss"
 ```
 
 ```toml MCP Servers
@@ -103,37 +71,9 @@ url = "https://mcp.example.com/stream"
 timeout = 30
 ```
 
-```toml Model Providers
-# Custom provider (e.g., Ollama)
-[model_providers.ollama]
-base_url = "http://localhost:11434/v1"
-
-# Azure OpenAI
-[model_providers.azure]
-base_url = "https://my-resource.openai.azure.com"
-
-# Default OSS provider for --oss flag
-oss_provider = "ollama"
-```
-
 ```toml Shell Environment Policy
 [shell_environment_policy]
 include_only = ["PATH", "HOME", "USER", "LANG", "TERM"]
-```
-
-```toml Features and UI
-[features]
-multi_agent = true
-shell_snapshot = false
-
-[tui]
-animations = true
-
-[history]
-persistence = "full"
-
-# File opener for clickable citations
-file_opener = "vscode"   # "vscode" | "cursor" | "windsurf"
 ```
 
 </CodeGroup>
