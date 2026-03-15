@@ -1,0 +1,411 @@
+---
+title: 'Replit'
+description: 'Platform specification for Replit, the cloud-based AI coding and deployment platform'
+icon: 'cloud'
+---
+
+## Overview
+
+[Replit](https://replit.com/) is a cloud-based AI coding and deployment platform by **Replit, Inc.** (formerly Repl.it, founded 2016) that provides a browser-based IDE, AI Agent for natural-language app building, and integrated hosting.[^1] Extensibility is through `.replit` and `replit.nix` configuration files (TOML/Nix), `replit.md` custom instructions, MCP server integrations, Agent Skills (`.agents/skills/`), Workflows, and Extensions.
+
+---
+
+## Configuration
+
+### File Locations
+
+Replit is a cloud-hosted platform; all configuration lives within individual Replit projects (called "Repls"). There is no local filesystem or OS-level global config path.
+
+| File | Path | Purpose |
+|---|---|---|
+| `.replit` | Project root | Primary app configuration (TOML): run commands, build steps, environment, ports, workflows[^2] |
+| `replit.nix` | Project root | Nix package dependencies for system-level packages[^3] |
+| `replit.md` | Project root | Custom instructions for Agent (Markdown)[^4] |
+| `.agents/skills/` | Project root | Agent Skills directory (project-scoped)[^5] |
+| `extension.json` | Extension project root | Extension manifest for Replit Extensions[^6] |
+
+<Note>
+  The `.replit` and `replit.nix` files are hidden by default. Show them by selecting "Show hidden files" from the filetree menu.[^2]
+</Note>
+
+### `.replit` Configuration (TOML)
+
+The `.replit` file is the primary configuration file and uses TOML format. Replit provides LSP-powered autocompletion for this file via Taplo, backed by a JSON Schema generated from their internal Go structs.[^7]
+
+<CodeGroup>
+
+```toml Core Properties
+# Main file displayed when editor opens
+entrypoint = "main.py"
+
+# Command executed on Run button click (string or array)
+run = "python main.py"
+# or: run = ["python", "main.py"]
+
+# Command executed before run (compilation step)
+build = "tsc app.ts"
+
+# Command executed when the Repl boots up
+onBoot = "echo 'Environment ready'"
+
+# Language modules with version pinning
+modules = ["python-3.10:v18-20230807-322e88b"]
+```
+
+```toml Environment & Ports
+# Environment variables for run
+[run.env]
+NAME = "Replit"
+
+# Port mapping
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+# Hide files from filetree
+hidden = [".config", "package-lock.json"]
+
+# Enable system audio
+audio = true
+```
+
+```toml Deployment
+[deployment]
+run = ["python3", "main.py"]
+build = "pip install -r requirements.txt"
+deploymentTarget = "cloudrun"
+ignorePorts = false
+```
+
+```toml Packager
+[packager]
+language = "python3"
+afterInstall = "echo 'Packages installed'"
+
+[packager.features]
+guessImports = true
+packageSearch = true
+enabledForHosting = false
+```
+
+```toml Nix Channel
+[nix]
+channel = "stable-23_05"
+```
+
+</CodeGroup>
+
+### `replit.nix` Configuration
+
+The `replit.nix` file specifies system-level dependencies using the Nix package manager, giving access to over 30,000 OS packages.[^3] Replit pre-builds a 1TB shared Nix store mounted at `/nix` in every Repl, so packages are available instantly without downloading.[^8]
+
+```nix replit.nix
+{ pkgs }: {
+  deps = [
+    pkgs.nodejs-19_x
+    pkgs.nodePackages.typescript-language-server
+    pkgs.yarn
+    pkgs.replitPackages.jest
+  ];
+}
+```
+
+<Note>
+  The runner user does not have root privileges and cannot use traditional package managers like APT. All system packages must be installed through `replit.nix`.[^3]
+</Note>
+
+---
+
+## Custom Instructions
+
+### `replit.md`
+
+The `replit.md` file in the project root provides custom instructions to Replit Agent. Agent automatically creates this file when you start a new project and includes its contents in context to understand preferences, project structure, and coding style.[^4]
+
+<CodeGroup>
+
+```markdown replit.md (Example)
+# Project Context
+This is a social media app for book lovers where users can
+create reading lists, share book recommendations, and review books.
+
+## Tech Stack
+- Frontend: React with TypeScript, Tailwind CSS
+- Backend: Express.js with TypeScript
+- Database: Neon PostgreSQL with Drizzle ORM
+- Package Manager: npm
+
+## Coding Style
+- Use TypeScript for all new JavaScript files
+- Prefer functional components with hooks over class components
+- Use Tailwind CSS for styling, avoid inline styles
+- Always include TypeScript types for function parameters and return values
+- Use descriptive variable and function names
+
+## Communication Preferences
+- Explain your approach before making changes
+- Provide code comments for complex logic
+- Ask questions if requirements are ambiguous
+
+## Current Development Phase
+Priority: User authentication and profile management
+Recently changed: Migrated from SQLite to PostgreSQL
+```
+
+</CodeGroup>
+
+The file supports Markdown formatting with sections for coding style, API error handling, communication preferences, project context, development phases, external resources, and research guidelines.[^4]
+
+<Warning>
+  Agent may update `replit.md` as it learns about your project. Community users have reported that Agent sometimes overwrites user-defined instructions in this file.[^9]
+</Warning>
+
+<Note>
+  Replit does not currently have a dedicated `.rules` file system like Cursor's `.cursorrules` or Windsurf's `.windsurfrules`. The `replit.md` file serves as the sole mechanism for custom Agent instructions. This has been a frequent community feature request.[^10]
+</Note>
+
+---
+
+## MCP Servers
+
+Replit Agent supports the Model Context Protocol (MCP) for connecting to external tools and data sources. MCP servers are configured through the Replit web UI (Integrations Page), not through local config files.[^11]
+
+### Setup
+
+<Steps>
+  <Step title="Open Integrations">
+    Navigate to the **Integrations Page** and scroll to **MCP Servers for Replit Agent**.
+  </Step>
+  <Step title="Add Server">
+    Click **Add MCP server**, assign a display name, and enter the server URL.
+  </Step>
+  <Step title="Authenticate">
+    Configure authentication (OAuth DCR or custom headers) and select **Test & Save** to verify connectivity.
+  </Step>
+  <Step title="Use in Chat">
+    Once connected, Agent automatically fetches the server's tool list and makes capabilities available in chat across all your projects.
+  </Step>
+</Steps>
+
+### Authentication Options
+
+| Method | Description |
+|---|---|
+| **OAuth DCR** | If the server supports OAuth Dynamic Client Registration, Replit automatically detects and registers the client[^11] |
+| **Custom Headers** | Define header name-value pairs (e.g., `X-API-Key`) included in every MCP request[^11] |
+
+### Security
+
+All custom MCP traffic passes through Replit's security scanner, which evaluates tool definitions and planned executions. Suspicious or unsafe tools are blocked before they run, and Agent notifies the user when a tool is rejected.[^11]
+
+<Warning>
+  MCP server configuration in Replit is managed entirely through the web UI, not through project-level config files. There is no `.replit`-based or JSON-based MCP configuration file that can be committed to version control.[^11]
+</Warning>
+
+---
+
+## Agent Skills
+
+Replit Agent supports the Agent Skills specification for sharing preferences, patterns, and expertise with Agent across sessions.[^5]
+
+### Directory Structure
+
+Skills are stored in the `/.agents/skills/` directory within the project. Agent reads all skills in this directory automatically and considers them when working on tasks.[^5]
+
+### Skill Scoping
+
+| Scope | Location | Status |
+|---|---|---|
+| **Project-level** | `<project>/.agents/skills/` | Supported -- versioned with your code[^5] |
+| **User-level** | Personal toolkit across projects | Documented as a concept; cross-project mechanism still evolving[^12] |
+| **Enterprise** | Company-wide standards | Coming soon[^5] |
+
+### Creating Skills
+
+<Tabs>
+  <Tab title="Conversational">
+    After solving a problem with Agent, ask it to capture what it learned as a skill. The skill writes itself from shared context.[^5]
+
+    Example prompt: *"Create a skill for my design system using these color palettes"*
+  </Tab>
+  <Tab title="CLI Install">
+    Install community skills using the skills CLI:[^5]
+
+    ```bash
+    npx skills <skill-name> -a replit
+    ```
+
+    This installs the skill to `/.agents/skills/` in the current project.
+  </Tab>
+  <Tab title="Manual">
+    Write custom skills following the [Agent Skills specification](https://agentskills.io/specification) for complete control over Agent behavior.[^5]
+  </Tab>
+</Tabs>
+
+<Note>
+  Skills follow the open Agent Skills specification at [agentskills.io/specification](https://agentskills.io/specification). Cross-tool compatibility is supported via `npx rulesync` for syncing rules across different AI coding tools.[^5]
+</Note>
+
+---
+
+## Workflows
+
+Workflows allow you to save development processes as a sequence of Tasks, stored in the `.replit` file in TOML format.[^13]
+
+### Task Types
+
+| Task Type | Description |
+|---|---|
+| **Execute Shell Command** | Runs a shell command using the same environment as the Shell pane[^13] |
+| **Install Packages** | Uses Replit's built-in dependency management to detect and install project dependencies[^13] |
+| **Run Workflow** | Runs another workflow, enabling reuse and composition (with depth limits for nesting)[^13] |
+
+### Execution Modes
+
+Workflows support two execution modes:[^13]
+
+- **Sequential**: Runs tasks in order, stopping if any task fails
+- **Parallel**: Runs all tasks independently; one failure does not stop others
+
+### Run Button Integration
+
+A workflow can be assigned to the Run button to replace the default `run` command behavior defined in `.replit`.[^13] Agent uses Workflows internally to define procedures for running projects and debugging issues.[^14]
+
+---
+
+## Extensions
+
+Replit Extensions provide a plugin system for adding custom tools, file handlers, and commands to the workspace. Extensions run as web apps and can make network requests to external services.[^6]
+
+### Extension Manifest (`extension.json`)
+
+The `extension.json` manifest defines three feature types:[^6]
+
+| Feature | Description |
+|---|---|
+| **Tools** | Custom UI panes that integrate into the workspace |
+| **File Handlers** | Custom editors for specific file types |
+| **Commands** | Actions available in the command palette |
+
+Extensions are built by forking the official Extension Template (React or vanilla JS) and can be published to the Extensions Store.[^15] The React Extensions API Client (`@replit/extensions-react`) provides hooks and components for development.[^16]
+
+---
+
+## Lifecycle Hooks
+
+The `.replit` file supports the following lifecycle hooks:[^2]
+
+| Hook | Trigger | Format |
+|---|---|---|
+| `onBoot` | When the Repl environment boots up | Shell command string |
+| `run` | When the Run button is clicked | String, array, or multiple commands joined with `&` |
+| `build` | Before the `run` command executes | Shell command string |
+| `[deployment].run` | When a deployment container starts | String or array |
+| `[deployment].build` | Before running a deployment | Shell command string |
+| `packager.afterInstall` | After package installation completes | Shell command string |
+
+---
+
+## Installation Provider Notes
+
+This section covers what an AIPkg installer needs to know to programmatically install and configure packages for the Replit platform.
+
+### Key Differences from Local Editors
+
+Replit is a cloud-hosted platform. There are no local filesystem paths, no OS-level global config directories, and no CLI to invoke outside the browser. All configuration is within the Repl project container.
+
+### Configuration File Paths
+
+| File | Path | Format | Purpose |
+|---|---|---|---|
+| `.replit` | Project root | TOML | App configuration, lifecycle hooks, workflows |
+| `replit.nix` | Project root | Nix | System-level package dependencies |
+| `replit.md` | Project root | Markdown | Custom Agent instructions |
+| Skills | `<project>/.agents/skills/` | Agent Skills spec | Project-scoped Agent skills |
+
+### Installing System Packages
+
+To programmatically add system packages, modify `replit.nix` by adding entries to the `deps` array:
+
+```nix
+{ pkgs }: {
+  deps = [
+    pkgs.existing-package
+    pkgs.new-package-to-add
+  ];
+}
+```
+
+The shell automatically syncs changes after the file is saved.[^3]
+
+### Installing Agent Skills
+
+Skills follow the open Agent Skills specification and install to `<project>/.agents/skills/`:
+
+```bash
+npx skills <skill-name> -a replit
+```
+
+**Key considerations:**
+
+- Create the `.agents/skills/` directory if it does not exist
+- Project-level skills are the primary supported scope; user-level (global) skills are documented but the cross-project mechanism is still evolving[^12]
+- The Vercel Skills project defines install paths as `.agents/skills/` (project) and `~/.config/agents/skills/` (global), but Replit's cloud environment does not have a persistent home directory across projects
+- Always review third-party skills before installation[^5]
+
+### Installing Custom Instructions
+
+To install project-level instructions, create or append to `replit.md` in the project root:
+
+```markdown
+# Package-Specific Guidelines
+
+When using [package-name], follow these conventions:
+- Preferred import style
+- Configuration patterns
+- Error handling approach
+```
+
+**Key considerations:**
+
+- Agent may overwrite or modify `replit.md` content during conversations[^9]
+- There is only one instructions file (`replit.md`); there is no directory-based rules system
+- Append new sections rather than replacing the entire file, as it may contain Agent-generated project context
+
+### MCP Server Configuration
+
+MCP servers cannot be configured programmatically via config files. They are managed exclusively through the Replit web UI Integrations Page.[^11] An installer cannot automate MCP server registration without access to the Replit API.
+
+### Nix Package Format
+
+When adding packages to `replit.nix`:
+
+- All packages are prefixed with `pkgs.` (e.g., `pkgs.nodejs-19_x`)
+- Replit-specific packages use `pkgs.replitPackages.` prefix
+- Node packages use `pkgs.nodePackages.` prefix
+- The Nix store is pre-mounted at `/nix` -- packages are available instantly without network downloads[^8]
+
+<Note>
+  Unlike local editors (Cursor, VS Code, etc.), Replit does not support file-based MCP server configuration. The only programmatic path for MCP setup would be through Replit's API, if one becomes available. Skills and `replit.md` are the primary file-based extensibility mechanisms accessible to an installer.
+</Note>
+
+---
+
+## Footnotes
+
+[^1]: https://replit.com/
+[^2]: https://docs.replit.com/replit-app/configuration
+[^3]: https://docs.replit.com/programming-ide/nix-on-replit
+[^4]: https://docs.replit.com/replitai/replit-dot-md
+[^5]: https://docs.replit.com/replitai/skills
+[^6]: https://docs.replit.com/extensions/api/manifest
+[^7]: https://blog.replit.com/replitfile
+[^8]: https://blog.replit.com/nix
+[^9]: https://replit.discourse.group/t/replit-md-fundamental-issue/5924
+[^10]: https://replit.discourse.group/t/a-rules-file-to-keep-the-replit-agent-from-going-rogue/2635
+[^11]: https://docs.replit.com/replitai/mcp/overview
+[^12]: https://replit.discourse.group/t/global-skills-2fa-on-core-plan/8855
+[^13]: https://docs.replit.com/replit-workspace/workflows
+[^14]: https://blog.replit.com/introducing-workflows
+[^15]: https://docs.replit.com/extensions/
+[^16]: https://github.com/replit/extensions
